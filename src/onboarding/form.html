@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MailX — Onboarding</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+      :root {
+        --bg: #000000;
+        --surface: #0a0e18;
+        --surface-2: #0f1520;
+        --border: #1a2236;
+        --border-light: #222e45;
+        --accent: #004de8;
+        --accent-light: #3b82f6;
+        --accent-glow: rgba(0, 77, 232, 0.25);
+        --accent-subtle: rgba(0, 77, 232, 0.08);
+        --text: #e8ecf4;
+        --text-dim: #6b7a99;
+        --text-muted: #3d4f6f;
+        --success: #00d68f;
+        --danger: #ff4d6a;
+        --radius: 14px;
+        --radius-sm: 8px;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        font-family: 'Inter', -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        padding: 2rem 1rem;
+      }
+
+      .container { width: 100%; max-width: 720px; }
+
+      .header {
+        text-align: center;
+        margin-bottom: 2.5rem;
+      }
+
+      .header-logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .header-logo img {
+        height: 36px;
+        width: auto;
+        object-fit: contain;
+      }
+
+      .header-logo span {
+        font-size: 1.3rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        background: linear-gradient(135deg, #fff, var(--accent-light));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .header h1 {
+        font-size: 1.75rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        background: linear-gradient(135deg, var(--accent), var(--accent-light));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+      }
+
+      .header p {
+        color: var(--text-dim);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      /* Sections */
+      .section {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+        margin-bottom: 1.25rem;
+        transition: border-color 0.3s;
+      }
+
+      .section:hover { border-color: var(--border-light); }
+
+      .section-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--accent-light);
+        margin-bottom: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .section-title::before {
+        content: '';
+        width: 3px;
+        height: 14px;
+        background: var(--accent);
+        border-radius: 2px;
+      }
+
+      /* Fields */
+      .field { margin-bottom: 1rem; }
+      .field:last-child { margin-bottom: 0; }
+
+      label {
+        display: block;
+        font-size: 0.82rem;
+        font-weight: 600;
+        margin-bottom: 0.4rem;
+        color: var(--text);
+      }
+
+      label .required { color: var(--danger); }
+
+      .hint {
+        font-size: 0.72rem;
+        color: var(--text-dim);
+        margin-top: 0.25rem;
+        line-height: 1.5;
+      }
+
+      input, select, textarea {
+        width: 100%;
+        padding: 0.7rem 0.9rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-size: 0.88rem;
+        font-family: inherit;
+        transition: all 0.2s;
+      }
+
+      input:focus, select:focus, textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+      }
+
+      input::placeholder, textarea::placeholder {
+        color: var(--text-muted);
+      }
+
+      select {
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.9rem center;
+        padding-right: 2.5rem;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+
+      /* Kit Groups */
+      .kit-group {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        position: relative;
+      }
+
+      .kit-group .kit-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+      }
+
+      .kit-group .kit-number {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--accent-light);
+      }
+
+      .btn-remove-kit {
+        background: none;
+        border: none;
+        color: var(--danger);
+        cursor: pointer;
+        font-size: 0.78rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        transition: background 0.2s;
+      }
+
+      .btn-remove-kit:hover { background: rgba(255, 77, 106, 0.1); }
+
+      .btn-add-kit {
+        width: 100%;
+        padding: 0.7rem;
+        background: transparent;
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--accent-light);
+        font-size: 0.82rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-add-kit:hover {
+        border-color: var(--accent);
+        background: var(--accent-subtle);
+      }
+
+      /* Checkboxes */
+      .checkbox-field {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .checkbox-field input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+
+      .checkbox-field label { margin-bottom: 0; cursor: pointer; }
+
+      /* Submit Button */
+      .submit-btn {
+        width: 100%;
+        padding: 0.9rem 2rem;
+        background: linear-gradient(135deg, var(--accent), #0038b0);
+        border: none;
+        border-radius: var(--radius-sm);
+        color: white;
+        font-size: 1rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.3s;
+        letter-spacing: 0.01em;
+      }
+
+      .submit-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 28px var(--accent-glow);
+      }
+
+      .submit-btn:active { transform: translateY(0); }
+
+      @media (max-width: 600px) {
+        .row { grid-template-columns: 1fr; }
+        .header h1 { font-size: 1.3rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">
+          <img src="/public/assets/logo.png" alt="MailX">
+          <span>MailX</span>
+        </div>
+        <h1>Onboarding</h1>
+        <p>Preencha os dados abaixo para iniciarmos a configuração do seu funil de email marketing.</p>
+      </div>
+
+      <form action="/onboarding" method="POST" id="onboardingForm">
+        <!-- DADOS DA EMPRESA -->
+        <div class="section">
+          <div class="section-title">Dados da Empresa</div>
+          <div class="row">
+            <div class="field">
+              <label>Nome da empresa <span class="required">*</span></label>
+              <input type="text" name="company_name" required placeholder="Acme Ltda" />
+            </div>
+            <div class="field">
+              <label>CNPJ</label>
+              <input type="text" name="cnpj" placeholder="00.000.000/0000-00" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Site principal</label>
+            <input type="url" name="website" placeholder="https://suaempresa.com" />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>Email de contato <span class="required">*</span></label>
+              <input type="email" name="contact_email" required placeholder="contato@empresa.com" />
+            </div>
+            <div class="field">
+              <label>WhatsApp</label>
+              <input type="tel" name="contact_whatsapp" placeholder="+55 11 99999-9999" />
+            </div>
+          </div>
+        </div>
+
+        <!-- CARTPANDA -->
+        <div class="section">
+          <div class="section-title">CartPanda</div>
+          <div class="field">
+            <label>URL da loja <span class="required">*</span></label>
+            <input type="url" name="cartpanda_store_url" required placeholder="https://sualore.cartpanda.com" />
+            <div class="hint">A URL completa da sua loja na CartPanda</div>
+          </div>
+          <div class="field">
+            <label>API Token (Bearer) <span class="required">*</span></label>
+            <input type="password" name="cartpanda_api_token" required placeholder="cp_live_xxxxxxxxxxxxx" />
+            <div class="hint">CartPanda → Configurações → Integrações → API → Copiar token</div>
+          </div>
+        </div>
+
+        <!-- KITS / PRODUTOS -->
+        <div class="section">
+          <div class="section-title">Kits / Produtos</div>
+          <div id="kitsContainer">
+            <div class="kit-group" data-kit-index="0">
+              <div class="kit-header">
+                <span class="kit-number">Kit 1</span>
+              </div>
+              <div class="row">
+                <div class="field">
+                  <label>Nome do kit <span class="required">*</span></label>
+                  <input type="text" name="kits[0][name]" required placeholder="Kit Emagrecedor" />
+                </div>
+                <div class="field">
+                  <label>Preço (R$)</label>
+                  <input type="number" name="kits[0][price]" step="0.01" placeholder="99.90" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="btn-add-kit" onclick="addKit()">+ Adicionar outro kit</button>
+        </div>
+
+        <!-- ACTIVECAMPAIGN -->
+        <div class="section">
+          <div class="section-title">ActiveCampaign</div>
+          <div class="field">
+            <label>API URL <span class="required">*</span></label>
+            <input type="url" name="ac_api_url" required placeholder="https://suaconta.api-us1.com" />
+            <div class="hint">AC → Settings (⚙️) → Developer → Copiar URL</div>
+          </div>
+          <div class="field">
+            <label>API Key <span class="required">*</span></label>
+            <input type="password" name="ac_api_key" required placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+            <div class="hint">AC → Settings (⚙️) → Developer → Copiar Key</div>
+          </div>
+          <div class="field">
+            <label>Plano contratado</label>
+            <select name="ac_plan">
+              <option value="">Selecionar...</option>
+              <option value="lite">Lite</option>
+              <option value="plus">Plus</option>
+              <option value="professional">Professional</option>
+              <option value="enterprise">Enterprise</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- DNS / DOMÍNIO -->
+        <div class="section">
+          <div class="section-title">Domínio de Envio</div>
+          <div class="field">
+            <label>Registrador DNS</label>
+            <select name="dns_registrar">
+              <option value="">Selecionar...</option>
+              <option value="cloudflare">Cloudflare</option>
+              <option value="godaddy">GoDaddy</option>
+              <option value="namecheap">Namecheap</option>
+              <option value="registro.br">Registro.br</option>
+              <option value="hostgator">HostGator</option>
+              <option value="outro">Outro</option>
+            </select>
+          </div>
+          <div class="checkbox-field">
+            <input type="checkbox" name="dns_manages_own" id="dnsManagesOwn" value="true" />
+            <label for="dnsManagesOwn">Eu mesmo adiciono os DNS records (DKIM/SPF/DMARC)</label>
+          </div>
+          <div id="dnsCredentials">
+            <div class="row">
+              <div class="field">
+                <label>Login do painel DNS</label>
+                <input type="text" name="dns_login" placeholder="usuario@email.com" />
+              </div>
+              <div class="field">
+                <label>Senha do painel DNS</label>
+                <input type="password" name="dns_password" placeholder="••••••••" />
+              </div>
+            </div>
+            <div class="hint" style="margin-top: -0.5rem; margin-bottom: 0.5rem">
+              🔒 Credenciais armazenadas com criptografia. Usadas apenas para configurar DKIM/SPF/DMARC.
+            </div>
+          </div>
+        </div>
+
+        <!-- GOOGLE -->
+        <div class="section">
+          <div class="section-title">Google</div>
+          <div class="checkbox-field">
+            <input type="checkbox" name="google_postmaster_access" id="gPostmaster" value="true" />
+            <label for="gPostmaster">Já tenho acesso ao Google Postmaster Tools</label>
+          </div>
+          <div class="field">
+            <label>Google Drive — URL da pasta</label>
+            <input type="url" name="google_drive_folder_url" placeholder="https://drive.google.com/drive/folders/..." />
+            <div class="hint">Opcional — se já tiver uma pasta para organizar os arquivos do projeto</div>
+          </div>
+        </div>
+
+        <!-- BRANDING -->
+        <div class="section">
+          <div class="section-title">Identidade Visual</div>
+          <div class="field">
+            <label>Logo da marca (URL)</label>
+            <input type="url" name="logo_url" placeholder="https://seusite.com/logo.png" />
+            <div class="hint">URL direta da imagem do logotipo (PNG ou SVG)</div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>Cor primária</label>
+              <input type="color" name="brand_color_primary" value="#004de8" />
+            </div>
+            <div class="field">
+              <label>Cor secundária</label>
+              <input type="color" name="brand_color_secondary" value="#00d68f" />
+            </div>
+          </div>
+          <div class="field">
+            <label>Tom de voz dos emails</label>
+            <select name="tone_of_voice">
+              <option value="amigavel">Amigável</option>
+              <option value="casual">Casual</option>
+              <option value="formal">Formal</option>
+              <option value="profissional">Profissional</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn">
+          <i class="fas fa-paper-plane" style="margin-right:8px"></i> Enviar dados para início do projeto
+        </button>
+      </form>
+    </div>
+
+    <script>
+      let kitCount = 1;
+
+      function addKit() {
+        const container = document.getElementById('kitsContainer');
+        const index = kitCount;
+        kitCount++;
+
+        const kitHtml = `
+        <div class="kit-group" data-kit-index="${index}">
+          <div class="kit-header">
+            <span class="kit-number">Kit ${kitCount}</span>
+            <button type="button" class="btn-remove-kit" onclick="removeKit(this)">Remover</button>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>Nome do kit <span class="required">*</span></label>
+              <input type="text" name="kits[${index}][name]" required placeholder="Kit Exemplo">
+            </div>
+            <div class="field">
+              <label>Preço (R$)</label>
+              <input type="number" name="kits[${index}][price]" step="0.01" placeholder="99.90">
+            </div>
+          </div>
+        </div>
+        `;
+        container.insertAdjacentHTML('beforeend', kitHtml);
+      }
+
+      function removeKit(btn) {
+        btn.closest('.kit-group').remove();
+        document.querySelectorAll('.kit-group').forEach((group, i) => {
+          group.querySelector('.kit-number').textContent = `Kit ${i + 1}`;
+        });
+      }
+
+      document.getElementById('dnsManagesOwn').addEventListener('change', function () {
+        document.getElementById('dnsCredentials').style.display = this.checked ? 'none' : 'block';
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MailX — Onboarding Completo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root {
+      --bg: #000000;
+      --surface: #0a0e18;
+      --surface-2: #0f1520;
+      --border: #1a2236;
+      --accent: #004de8;
+      --accent-light: #3b82f6;
+      --accent-glow: rgba(0, 77, 232, 0.25);
+      --accent-subtle: rgba(0, 77, 232, 0.08);
+      --text: #e8ecf4;
+      --text-dim: #6b7a99;
+      --success: #00d68f;
+      --success-bg: rgba(0, 214, 143, 0.08);
+      --radius: 14px;
+      --radius-sm: 8px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 3rem;
+      text-align: center;
+      max-width: 520px;
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent), var(--success), var(--accent-light));
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .logo img { height: 28px; width: auto; }
+
+    .logo span {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text-dim);
+    }
+
+    .success-icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: var(--success-bg);
+      border: 2px solid rgba(0, 214, 143, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.25rem;
+      animation: scaleIn 0.5s ease;
+    }
+
+    .success-icon i {
+      font-size: 1.8rem;
+      color: var(--success);
+    }
+
+    @keyframes scaleIn {
+      from { transform: scale(0); opacity: 0; }
+      50% { transform: scale(1.15); }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--success), var(--accent-light));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+
+    .steps {
+      text-align: left;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1.25rem;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.65rem 0;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+
+    .step:not(:last-child) { border-bottom: 1px solid var(--border); }
+
+    .step-num {
+      background: var(--accent);
+      color: white;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.68rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .cta-row {
+      margin-top: 1.5rem;
+    }
+
+    .cta-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.5rem;
+      background: linear-gradient(135deg, var(--accent), #0038b0);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: white;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s;
+    }
+
+    .cta-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px var(--accent-glow);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <img src="/public/assets/logo.png" alt="MailX">
+      <span>MailX</span>
+    </div>
+
+    <div class="success-icon">
+      <i class="fas fa-check"></i>
+    </div>
+
+    <h1>Dados recebidos com sucesso!</h1>
+    <p class="subtitle">Obrigado! Sua equipe MailX já recebeu os dados e vai iniciar a configuração do seu funil.</p>
+
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <span>Vamos configurar suas listas e tags no ActiveCampaign</span>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <span>Autenticar o domínio de envio (DKIM/SPF/DMARC)</span>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <span>Conectar webhooks da CartPanda ao nosso servidor</span>
+      </div>
+      <div class="step">
+        <span class="step-num">4</span>
+        <span>Criar templates de email e ativar automações</span>
+      </div>
+    </div>
+
+    <div class="cta-row">
+      <a href="/admin" class="cta-btn">
+        <i class="fas fa-chart-pie"></i> Ir ao Dashboard
+      </a>
+    </div>
+  </div>
+</body>
+</html>

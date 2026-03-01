@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailX — Integrar Nova Loja</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg: #000000;
+            --surface: #0a0e18;
+            --surface-2: #0f1520;
+            --surface-3: #141c2b;
+            --border: #1a2236;
+            --border-light: #222e45;
+            --accent: #004de8;
+            --accent-light: #3b82f6;
+            --accent-glow: rgba(0, 77, 232, 0.25);
+            --accent-subtle: rgba(0, 77, 232, 0.08);
+            --text: #e8ecf4;
+            --text-dim: #6b7a99;
+            --text-muted: #3d4f6f;
+            --success: #00d68f;
+            --success-bg: rgba(0, 214, 143, 0.08);
+            --danger: #ff4d6a;
+            --radius: 14px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+
+        .container { width: 100%; max-width: 780px; }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent-light);
+        }
+
+        .page-header-text h1 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #fff, var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .page-header-text p {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        /* Stepper */
+        .stepper {
+            display: flex;
+            gap: 0;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .stepper::before {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            right: 30px;
+            height: 2px;
+            background: var(--border);
+            z-index: 0;
+        }
+
+        .step-indicator {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .step-circle {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--text-dim);
+            transition: all 0.3s;
+        }
+
+        .step-indicator.active .step-circle {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .step-indicator.done .step-circle {
+            background: var(--success);
+            border-color: var(--success);
+            color: #fff;
+        }
+
+        .step-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-align: center;
+            max-width: 100px;
+        }
+
+        .step-indicator.active .step-label { color: var(--accent-light); }
+        .step-indicator.done .step-label { color: var(--success); }
+
+        /* Step Content */
+        .step-content {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2rem;
+            display: none;
+            animation: fadeUp 0.3s ease;
+        }
+
+        .step-content.active { display: block; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .step-content h2 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .step-content .desc {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Form Fields */
+        .field { margin-bottom: 1.25rem; }
+
+        .field label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 0.4rem;
+            color: var(--text);
+        }
+
+        .field label .req { color: var(--danger); }
+
+        .field input, .field select {
+            width: 100%;
+            padding: 0.7rem 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font-size: 0.9rem;
+            font-family: inherit;
+            transition: border-color 0.2s;
+        }
+
+        .field input:focus, .field select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .field input::placeholder { color: var(--text-muted); }
+
+        .field .hint {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            margin-top: 0.35rem;
+            line-height: 1.5;
+        }
+
+        /* Copy Box */
+        .copy-box {
+            display: flex;
+            align-items: center;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.5rem 0.5rem 0.5rem 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .copy-box code {
+            flex: 1;
+            font-size: 0.82rem;
+            color: var(--accent-light);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .copy-btn {
+            padding: 0.4rem 0.8rem;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .copy-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent-light);
+        }
+
+        /* Info Box */
+        .info-box {
+            background: var(--accent-subtle);
+            border: 1px solid rgba(0, 77, 232, 0.15);
+            border-radius: var(--radius-sm);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .info-box h4 {
+            font-size: 0.8rem;
+            color: var(--accent-light);
+            margin-bottom: 0.4rem;
+        }
+
+        .info-box p {
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        .info-box ol {
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            line-height: 1.8;
+            padding-left: 1.2rem;
+        }
+
+        /* Checkbox items */
+        .event-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .event-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .event-item:hover { border-color: var(--border-light); }
+
+        .event-item input[type="checkbox"] {
+            accent-color: var(--accent);
+            width: 16px;
+            height: 16px;
+        }
+
+        .event-item label {
+            font-size: 0.78rem;
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        /* Success Card */
+        .success-card {
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+
+        .success-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: var(--success-bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+            font-size: 1.5rem;
+            border: 2px solid rgba(0, 214, 143, 0.3);
+        }
+
+        .success-card h2 { color: var(--success); }
+
+        /* Buttons */
+        .btn-row {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 0.7rem 1.5rem;
+            border-radius: var(--radius-sm);
+            border: none;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #0038b0);
+            color: #fff;
+        }
+
+        .btn-primary:hover { box-shadow: 0 4px 20px var(--accent-glow); }
+
+        .btn-secondary {
+            background: var(--surface-2);
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover { border-color: var(--border-light); color: var(--text); }
+
+        /* Status indicator */
+        .test-result {
+            display: none;
+            padding: 1rem;
+            border-radius: var(--radius-sm);
+            margin-top: 1rem;
+            font-size: 0.85rem;
+        }
+
+        .test-result.success {
+            background: var(--success-bg);
+            border: 1px solid rgba(0, 214, 143, 0.2);
+            color: var(--success);
+            display: block;
+        }
+
+        .test-result.error {
+            background: rgba(255, 77, 106, 0.08);
+            border: 1px solid rgba(255, 77, 106, 0.2);
+            color: var(--danger);
+            display: block;
+        }
+
+        @media (max-width: 600px) {
+            .event-grid { grid-template-columns: 1fr; }
+            .stepper { gap: 0; }
+            .step-label { font-size: 0.6rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="page-header">
+            <a href="/admin" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="page-header-text">
+                <h1>Integrar Nova Loja</h1>
+                <p>Configure webhooks e conecte uma loja CartPanda</p>
+            </div>
+        </div>
+
+        <!-- Stepper -->
+        <div class="stepper">
+            <div class="step-indicator active" data-step="1">
+                <div class="step-circle">1</div>
+                <div class="step-label">Shop Slug</div>
+            </div>
+            <div class="step-indicator" data-step="2">
+                <div class="step-circle">2</div>
+                <div class="step-label">Webhook URL</div>
+            </div>
+            <div class="step-indicator" data-step="3">
+                <div class="step-circle">3</div>
+                <div class="step-label">Cadastrar na CartPanda</div>
+            </div>
+            <div class="step-indicator" data-step="4">
+                <div class="step-circle">4</div>
+                <div class="step-label">Testar Conexão</div>
+            </div>
+        </div>
+
+        <!-- Step 1: Shop Slug -->
+        <div class="step-content active" data-step="1">
+            <h2>Identificação da Loja</h2>
+            <p class="desc">Informe o slug da loja na CartPanda. É o subdomínio da URL da loja (ex: <strong>minhaloja</strong>.cartpanda.com)</p>
+
+            <div class="field">
+                <label>Shop Slug <span class="req">*</span></label>
+                <input type="text" id="shopSlug" placeholder="minhaloja" oninput="updatePreview()">
+                <div class="hint">Apenas o slug, sem o domínio completo</div>
+            </div>
+
+            <div class="field">
+                <label>API Token CartPanda <span class="req">*</span></label>
+                <input type="password" id="apiToken" placeholder="cp_live_xxxxxxxxxxxxx">
+                <div class="hint">CartPanda → Configurações → Integrações → API → Copiar token</div>
+            </div>
+
+            <div class="info-box" id="urlPreview" style="display:none">
+                <h4>URL da loja</h4>
+                <p id="previewUrl"></p>
+            </div>
+
+            <div class="btn-row">
+                <button class="btn btn-primary" onclick="goToStep(2)">Continuar <i class="fas fa-arrow-right" style="margin-left:6px"></i></button>
+            </div>
+        </div>
+
+        <!-- Step 2: Webhook URL -->
+        <div class="step-content" data-step="2">
+            <h2>URL do Webhook</h2>
+            <p class="desc">Abaixo está a URL do webhook que receberá eventos desta loja. Copie ela para usar no próximo passo.</p>
+
+            <div class="field">
+                <label>Webhook — Compra Aprovada</label>
+                <div class="copy-box">
+                    <code id="webhookOrderUrl"></code>
+                    <button class="copy-btn" onclick="copyText('webhookOrderUrl')"><i class="fas fa-copy"></i> Copiar</button>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Webhook — Carrinho Abandonado</label>
+                <div class="copy-box">
+                    <code id="webhookCartUrl"></code>
+                    <button class="copy-btn" onclick="copyText('webhookCartUrl')"><i class="fas fa-copy"></i> Copiar</button>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Selecione os eventos a monitorar</label>
+                <div class="event-grid">
+                    <div class="event-item">
+                        <input type="checkbox" id="evt_order_paid" checked>
+                        <label for="evt_order_paid">order.paid</label>
+                    </div>
+                    <div class="event-item">
+                        <input type="checkbox" id="evt_abandoned" checked>
+                        <label for="evt_abandoned">checkout.abandoned</label>
+                    </div>
+                    <div class="event-item">
+                        <input type="checkbox" id="evt_refund">
+                        <label for="evt_refund">order.refunded</label>
+                    </div>
+                    <div class="event-item">
+                        <input type="checkbox" id="evt_created">
+                        <label for="evt_created">order.created</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="btn-row">
+                <button class="btn btn-secondary" onclick="goToStep(1)"><i class="fas fa-arrow-left" style="margin-right:6px"></i> Voltar</button>
+                <button class="btn btn-primary" onclick="goToStep(3)">Continuar <i class="fas fa-arrow-right" style="margin-left:6px"></i></button>
+            </div>
+        </div>
+
+        <!-- Step 3: Register on CartPanda -->
+        <div class="step-content" data-step="3">
+            <h2>Cadastrar Webhook na CartPanda</h2>
+            <p class="desc">Siga os passos abaixo para registrar o webhook na página da API da CartPanda:</p>
+
+            <div class="info-box">
+                <h4><i class="fas fa-list-ol" style="margin-right:6px"></i> Passo a passo</h4>
+                <ol>
+                    <li>Acesse o painel da CartPanda → <strong>Configurações</strong> → <strong>Integrações</strong> → <strong>API</strong></li>
+                    <li>Na seção <strong>Webhooks</strong>, clique em <strong>Adicionar Webhook</strong></li>
+                    <li>Cole a <strong>URL do webhook</strong> copiada no passo anterior</li>
+                    <li>Insira o <strong>Shop Slug</strong>: <code id="step3Slug" style="color:var(--accent-light)"></code></li>
+                    <li>Use o <strong>Token ativo</strong> para autenticação</li>
+                    <li>Selecione os <strong>eventos</strong>: <code>order.paid</code>, <code>checkout.abandoned</code></li>
+                    <li>Clique em <strong>Salvar</strong></li>
+                </ol>
+            </div>
+
+            <div class="btn-row">
+                <button class="btn btn-secondary" onclick="goToStep(2)"><i class="fas fa-arrow-left" style="margin-right:6px"></i> Voltar</button>
+                <button class="btn btn-primary" onclick="goToStep(4)">Já cadastrei! <i class="fas fa-check" style="margin-left:6px"></i></button>
+            </div>
+        </div>
+
+        <!-- Step 4: Test Connection -->
+        <div class="step-content" data-step="4">
+            <div id="testView">
+                <h2>Testar Conexão</h2>
+                <p class="desc">Vamos verificar se o webhook está funcionando corretamente.</p>
+
+                <button class="btn btn-primary" onclick="testConnection()" id="testBtn" style="width:100%">
+                    <i class="fas fa-satellite-dish" style="margin-right:6px"></i> Testar Webhook
+                </button>
+
+                <div class="test-result" id="testResult"></div>
+
+                <div class="btn-row" style="margin-top:1.5rem">
+                    <button class="btn btn-secondary" onclick="goToStep(3)"><i class="fas fa-arrow-left" style="margin-right:6px"></i> Voltar</button>
+                    <button class="btn btn-primary" onclick="saveIntegration()"><i class="fas fa-save" style="margin-right:6px"></i> Salvar Integração</button>
+                </div>
+            </div>
+
+            <div id="successView" style="display:none">
+                <div class="success-card">
+                    <div class="success-icon"><i class="fas fa-check"></i></div>
+                    <h2>Integração Concluída!</h2>
+                    <p class="desc" style="margin-top:0.5rem">A loja foi integrada com sucesso. Os webhooks estão prontos para receber eventos.</p>
+                    <div class="btn-row" style="justify-content:center">
+                        <a href="/admin" class="btn btn-primary" style="max-width:200px; text-align:center; text-decoration:none">Ir ao Dashboard</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_DOMAIN = window.location.origin;
+        let currentStep = 1;
+
+        function updatePreview() {
+            const slug = document.getElementById('shopSlug').value.trim();
+            const preview = document.getElementById('urlPreview');
+            if (slug) {
+                preview.style.display = 'block';
+                document.getElementById('previewUrl').textContent = `https://${slug}.cartpanda.com`;
+                document.getElementById('webhookOrderUrl').textContent = `${API_DOMAIN}/webhook/cartpanda/order-paid`;
+                document.getElementById('webhookCartUrl').textContent = `${API_DOMAIN}/webhook/cartpanda/abandoned-cart`;
+            } else {
+                preview.style.display = 'none';
+            }
+        }
+
+        function goToStep(step) {
+            if (step === 2) {
+                const slug = document.getElementById('shopSlug').value.trim();
+                const token = document.getElementById('apiToken').value.trim();
+                if (!slug || !token) {
+                    alert('Preencha o Shop Slug e o API Token para continuar.');
+                    return;
+                }
+                document.getElementById('webhookOrderUrl').textContent = `${API_DOMAIN}/webhook/cartpanda/order-paid`;
+                document.getElementById('webhookCartUrl').textContent = `${API_DOMAIN}/webhook/cartpanda/abandoned-cart`;
+                document.getElementById('step3Slug').textContent = slug;
+            }
+
+            // Update stepper
+            document.querySelectorAll('.step-indicator').forEach(s => {
+                const sNum = parseInt(s.dataset.step);
+                s.classList.remove('active', 'done');
+                if (sNum < step) s.classList.add('done');
+                if (sNum === step) s.classList.add('active');
+            });
+
+            document.querySelectorAll('.step-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`.step-content[data-step="${step}"]`).classList.add('active');
+            currentStep = step;
+        }
+
+        function copyText(id) {
+            const text = document.getElementById(id).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById(id).nextElementSibling;
+                btn.innerHTML = '<i class="fas fa-check"></i> Copiado!';
+                btn.style.color = 'var(--success)';
+                setTimeout(() => {
+                    btn.innerHTML = '<i class="fas fa-copy"></i> Copiar';
+                    btn.style.color = '';
+                }, 2000);
+            });
+        }
+
+        async function testConnection() {
+            const btn = document.getElementById('testBtn');
+            const result = document.getElementById('testResult');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+
+            try {
+                const res = await fetch('/webhook/health');
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    result.className = 'test-result success';
+                    result.innerHTML = '<i class="fas fa-check-circle"></i> Webhook endpoint está funcionando! Conexão estabelecida com sucesso.';
+                } else {
+                    throw new Error('Resposta inesperada');
+                }
+            } catch (e) {
+                result.className = 'test-result error';
+                result.innerHTML = '<i class="fas fa-times-circle"></i> Falha na conexão: ' + e.message;
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-satellite-dish" style="margin-right:6px"></i> Testar Novamente';
+        }
+
+        async function saveIntegration() {
+            const slug = document.getElementById('shopSlug').value.trim();
+            const token = document.getElementById('apiToken').value.trim();
+
+            try {
+                const res = await fetch('/admin/integration/store', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shop_slug: slug,
+                        api_token: token,
+                        events: {
+                            order_paid: document.getElementById('evt_order_paid').checked,
+                            checkout_abandoned: document.getElementById('evt_abandoned').checked,
+                            order_refunded: document.getElementById('evt_refund').checked,
+                            order_created: document.getElementById('evt_created').checked,
+                        }
+                    })
+                });
+
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('testView').style.display = 'none';
+                    document.getElementById('successView').style.display = 'block';
+                    // Mark step 4 as done
+                    document.querySelectorAll('.step-indicator').forEach(s => s.classList.add('done'));
+                } else {
+                    alert('Erro ao salvar: ' + (data.error || 'Erro desconhecido'));
+                }
+            } catch (e) {
+                alert('Erro: ' + e.message);
+            }
+        }
+    </script>
+</body>
+</html>

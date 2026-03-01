@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailX — Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #000000;
+            --bg-subtle: #060810;
+            --surface: #0a0e18;
+            --surface-2: #0f1520;
+            --surface-3: #141c2b;
+            --border: #1a2236;
+            --border-light: #222e45;
+            --accent: #004de8;
+            --accent-light: #3b82f6;
+            --accent-glow: rgba(0, 77, 232, 0.25);
+            --accent-subtle: rgba(0, 77, 232, 0.08);
+            --text: #e8ecf4;
+            --text-dim: #6b7a99;
+            --text-muted: #3d4f6f;
+            --success: #00d68f;
+            --success-bg: rgba(0, 214, 143, 0.08);
+            --warning: #ffb020;
+            --warning-bg: rgba(255, 176, 32, 0.08);
+            --danger: #ff4d6a;
+            --danger-bg: rgba(255, 77, 106, 0.08);
+            --purple: #8b5cf6;
+            --radius: 14px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+        /* ── Layout ── */
+        .layout { display: flex; min-height: 100vh; }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: 260px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0; left: 0; bottom: 0;
+            z-index: 100;
+        }
+
+        .sidebar-logo {
+            padding: 1.5rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .sidebar-logo img {
+            height: 32px;
+            width: auto;
+            object-fit: contain;
+        }
+
+        .sidebar-logo span {
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #fff, var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .sidebar-nav { flex: 1; padding: 1rem 0.75rem; }
+
+        .nav-section { margin-bottom: 1.5rem; }
+
+        .nav-section-title {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-muted);
+            padding: 0 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.65rem 0.75rem;
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            margin-bottom: 2px;
+        }
+
+        .nav-item:hover {
+            background: var(--accent-subtle);
+            color: var(--text);
+        }
+
+        .nav-item.active {
+            background: linear-gradient(135deg, var(--accent-subtle), rgba(0, 77, 232, 0.15));
+            color: var(--accent-light);
+            border: 1px solid rgba(0, 77, 232, 0.2);
+        }
+
+        .nav-item i { width: 18px; text-align: center; font-size: 0.9rem; }
+
+        .sidebar-footer {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .system-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* ── Main Content ── */
+        .main { flex: 1; margin-left: 260px; }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .topbar-left h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .topbar-left p {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .topbar-right { display: flex; gap: 0.75rem; align-items: center; }
+
+        .topbar-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+        }
+
+        .topbar-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent-light);
+        }
+
+        .topbar-btn.primary {
+            background: linear-gradient(135deg, var(--accent), #0038b0);
+            border: none;
+            color: #fff;
+        }
+
+        .topbar-btn.primary:hover {
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+
+        .content { padding: 1.5rem 2rem 3rem; }
+
+        /* ── Tabs ── */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 4px;
+            margin-bottom: 1.5rem;
+            width: fit-content;
+            border: 1px solid var(--border);
+        }
+
+        .tab-btn {
+            padding: 0.6rem 1.25rem;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn.active {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 2px 12px var(--accent-glow);
+        }
+
+        .tab-btn:not(.active):hover {
+            color: var(--text);
+            background: var(--surface-2);
+        }
+
+        .tab-content { display: none; animation: fadeUp 0.4s ease; }
+        .tab-content.active { display: block; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── KPI Cards ── */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .kpi-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem 1.25rem 1rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .kpi-card:hover {
+            border-color: var(--border-light);
+            transform: translateY(-2px);
+        }
+
+        .kpi-card:hover::before { opacity: 1; }
+
+        .kpi-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .kpi-icon.blue { background: var(--accent-subtle); color: var(--accent-light); }
+        .kpi-icon.green { background: var(--success-bg); color: var(--success); }
+        .kpi-icon.orange { background: var(--warning-bg); color: var(--warning); }
+        .kpi-icon.red { background: var(--danger-bg); color: var(--danger); }
+        .kpi-icon.purple { background: rgba(139, 92, 246, 0.08); color: var(--purple); }
+
+        .kpi-label {
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+            margin-bottom: 0.4rem;
+        }
+
+        .kpi-value {
+            font-size: 1.6rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: #fff;
+            line-height: 1.1;
+        }
+
+        .kpi-change {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-top: 0.4rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .kpi-change.up { background: var(--success-bg); color: var(--success); }
+        .kpi-change.down { background: var(--danger-bg); color: var(--danger); }
+
+        /* ── Chart Containers ── */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .charts-row.equal {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .chart-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.25rem;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .chart-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .chart-subtitle {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .chart-badge {
+            font-size: 0.7rem;
+            padding: 3px 8px;
+            border-radius: 6px;
+            background: var(--accent-subtle);
+            color: var(--accent-light);
+            font-weight: 600;
+        }
+
+        .chart-wrap {
+            position: relative;
+            height: 280px;
+        }
+
+        .chart-wrap.sm { height: 220px; }
+
+        /* ── Pipeline Section ── */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+
+        .pipeline {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .pipeline-col {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .pipeline-col-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-dim);
+        }
+
+        .pipeline-count {
+            background: var(--accent-subtle);
+            color: var(--accent-light);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+
+        .pipeline-list { padding: 0.5rem; max-height: 400px; overflow-y: auto; }
+
+        .client-card {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .client-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent-glow);
+        }
+
+        .client-name {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #fff;
+            margin-bottom: 2px;
+        }
+
+        .client-email {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+        }
+
+        .client-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 0.5rem; }
+
+        .tag {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        .tag.blue { background: var(--accent-subtle); color: var(--accent-light); }
+        .tag.green { background: var(--success-bg); color: var(--success); }
+
+        .client-actions { display: flex; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+
+        .btn {
+            flex: 1;
+            padding: 5px 8px;
+            border-radius: 6px;
+            border: none;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn:hover { opacity: 0.85; }
+        .btn-accent { background: var(--accent); color: #fff; }
+        .btn-outline { background: var(--surface-3); color: var(--text-dim); border: 1px solid var(--border); }
+        .btn-success { background: var(--success); color: #000; }
+        .btn-danger-ghost { background: var(--danger-bg); color: var(--danger); }
+
+        /* ── Webhook Feed ── */
+        .feed-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .feed-table th {
+            text-align: left;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .feed-table td {
+            padding: 0.65rem 0.75rem;
+            font-size: 0.82rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+
+        .feed-table tr:hover td {
+            background: var(--surface-2);
+            color: var(--text);
+        }
+
+        .feed-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+
+        .feed-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+        }
+
+        .feed-dot.processed { background: var(--success); box-shadow: 0 0 6px rgba(0, 214, 143, 0.4); }
+        .feed-dot.processing { background: var(--warning); }
+        .feed-dot.failed { background: var(--danger); box-shadow: 0 0 6px rgba(255, 77, 106, 0.4); }
+
+        /* ── Modal ── */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2rem;
+            width: 450px;
+            max-width: 90%;
+            animation: fadeUp 0.3s ease;
+        }
+
+        .modal h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+        .modal p { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; }
+        .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+        .modal-actions .btn { flex: 1; padding: 0.6rem; font-size: 0.85rem; }
+
+        /* ── Responsive ── */
+        @media (max-width: 1100px) {
+            .pipeline { grid-template-columns: repeat(2, 1fr); }
+            .charts-row { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 768px) {
+            .sidebar { display: none; }
+            .main { margin-left: 0; }
+            .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+            .pipeline { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <!-- ── Sidebar ── -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <img src="/public/assets/logo.png" alt="MailX">
+                <span>MailX</span>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Principal</div>
+                    <a href="/admin" class="nav-item active">
+                        <i class="fas fa-chart-pie"></i> Dashboard
+                    </a>
+                    <a href="/admin/clientes" class="nav-item">
+                        <i class="fas fa-users"></i> Clientes
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Operações</div>
+                    <a href="/admin/integration" class="nav-item">
+                        <i class="fas fa-plug"></i> Integrar Loja
+                    </a>
+                    <a href="#" class="nav-item" onclick="switchTab('webhooks-tab')">
+                        <i class="fas fa-satellite-dish"></i> Webhooks
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Outros</div>
+                    <a href="/onboarding" class="nav-item">
+                        <i class="fas fa-rocket"></i> Onboarding
+                    </a>
+                    <a href="/health" class="nav-item">
+                        <i class="fas fa-heart-pulse"></i> Health
+                    </a>
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="system-status">
+                    <span class="status-dot"></span>
+                    <span>Sistema Online</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ── Main ── -->
+        <main class="main">
+            <div class="topbar">
+                <div class="topbar-left">
+                    <h1>Dashboard</h1>
+                    <p id="topbar-date"></p>
+                </div>
+                <div class="topbar-right">
+                    <a href="/admin/integration" class="topbar-btn primary">
+                        <i class="fas fa-plus"></i> Integrar Loja
+                    </a>
+                    <button class="topbar-btn" onclick="refreshAll()">
+                        <i class="fas fa-arrows-rotate"></i> Atualizar
+                    </button>
+                </div>
+            </div>
+
+            <div class="content">
+                <!-- Tabs -->
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('overview')">Visão Geral</button>
+                    <button class="tab-btn" onclick="switchTab('history')">Histórico Importado</button>
+                    <button class="tab-btn" onclick="switchTab('pipeline')">Pipeline</button>
+                    <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
+                </div>
+
+                <!-- ═══════════ TAB: Visão Geral ═══════════ -->
+                <div class="tab-content active" id="tab-overview">
+                    <div class="kpi-grid" id="overview-kpis"></div>
+
+                    <div class="charts-row">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Faturamento x Tempo</div>
+                                    <div class="chart-subtitle">Automações e Campanhas por Email</div>
+                                </div>
+                                <span class="chart-badge">Últimos 30 dias</span>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartRevenue"></canvas></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Vendas por Hora</div>
+                                    <div class="chart-subtitle">Distribuição nas últimas 24h</div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartHourly"></canvas></div>
+                        </div>
+                    </div>
+
+                    <div class="charts-row equal">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div class="chart-title">Top 5 Produtos</div>
+                            </div>
+                            <div class="chart-wrap sm"><canvas id="chartProducts"></canvas></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div class="chart-title">Top 5 Tags de Email</div>
+                            </div>
+                            <div class="chart-wrap sm"><canvas id="chartTags"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══════════ TAB: Histórico Importado ═══════════ -->
+                <div class="tab-content" id="tab-history">
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; font-weight:600">KPIs de Vendas</h3>
+                    <div class="kpi-grid" id="history-sales-kpis"></div>
+
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; margin-top:0.5rem; font-weight:600">KPIs de Email</h3>
+                    <div class="kpi-grid" id="history-email-kpis"></div>
+
+                    <div class="charts-row" style="margin-top:1rem">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Performance de Email ao Longo do Tempo</div>
+                                    <div class="chart-subtitle">Taxa de Abertura vs CTR</div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartEmailPerf"></canvas></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div class="chart-title">Entrada de Contatos</div>
+                                <div class="chart-subtitle">Últimos 12 meses</div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartContacts"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══════════ TAB: Pipeline ═══════════ -->
+                <div class="tab-content" id="tab-pipeline">
+                    <div class="pipeline" id="pipeline-grid">
+                        <div class="pipeline-col" id="col-pending">
+                            <div class="pipeline-col-header">Pendente <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-configuring">
+                            <div class="pipeline-col-header">Configurando AC <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-dns">
+                            <div class="pipeline-col-header">Aguardando DNS <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-active">
+                            <div class="pipeline-col-header">Ativo <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══════════ TAB: Webhooks ═══════════ -->
+                <div class="tab-content" id="tab-webhooks-tab">
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <div class="chart-title">Últimos Webhooks</div>
+                            <span class="chart-badge" id="webhook-count">0 registros</span>
+                        </div>
+                        <table class="feed-table">
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Evento</th>
+                                    <th>Origem</th>
+                                    <th>Data</th>
+                                </tr>
+                            </thead>
+                            <tbody id="webhook-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <h3 id="modal-title">Processando...</h3>
+            <p id="modal-body">Por favor, aguarde.</p>
+            <div class="modal-actions">
+                <button class="btn btn-accent" onclick="closeModal()">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/admin';
+
+        // ── Date header ──
+        document.getElementById('topbar-date').textContent =
+            new Date().toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+        // ── Tab System ──
+        function switchTab(id) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            const targetTab = document.getElementById('tab-' + id);
+            if (targetTab) targetTab.classList.add('active');
+
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                const tabName = b.textContent.trim();
+                const map = { 'Visão Geral': 'overview', 'Histórico Importado': 'history', 'Pipeline': 'pipeline', 'Webhooks': 'webhooks-tab' };
+                if (map[tabName] === id) b.classList.add('active');
+            });
+        }
+
+        // ── Chart.js defaults ──
+        Chart.defaults.color = '#6b7a99';
+        Chart.defaults.borderColor = '#1a2236';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.font.size = 11;
+        Chart.defaults.plugins.legend.labels.usePointStyle = true;
+        Chart.defaults.plugins.legend.labels.pointStyleWidth = 8;
+
+        // ── KPI Renderers ──
+        function renderKPI(containerId, kpis) {
+            const el = document.getElementById(containerId);
+            el.innerHTML = kpis.map(k => `
+                <div class="kpi-card">
+                    <div class="kpi-icon ${k.color}"><i class="fas fa-${k.icon}"></i></div>
+                    <div class="kpi-label">${k.label}</div>
+                    <div class="kpi-value">${k.value}</div>
+                    ${k.change ? `<span class="kpi-change ${k.changeDir}">${k.changeDir === 'up' ? '↑' : '↓'} ${k.change}</span>` : ''}
+                </div>
+            `).join('');
+        }
+
+        // ── Load Overview Data ──
+        async function loadOverview() {
+            try {
+                const res = await fetch(`${API}/dashboard/overview`);
+                const data = await res.json();
+
+                renderKPI('overview-kpis', [
+                    { label: 'Faturamento Aprovado', value: data.kpis.faturamento_aprovado, icon: 'dollar-sign', color: 'green', change: data.kpis.faturamento_change, changeDir: 'up' },
+                    { label: 'Vendas Totais', value: data.kpis.vendas_totais, icon: 'shopping-cart', color: 'blue', change: data.kpis.vendas_change, changeDir: 'up' },
+                    { label: 'Ticket Médio', value: data.kpis.ticket_medio, icon: 'receipt', color: 'purple' },
+                    { label: 'Taxa de Reembolso', value: data.kpis.taxa_reembolso, icon: 'rotate-left', color: 'red' },
+                    { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue', change: data.kpis.faturamento_mailx_change, changeDir: 'up' },
+                    { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green', change: data.kpis.vendas_mailx_change, changeDir: 'up' },
+                ]);
+
+                // Revenue Chart
+                new Chart(document.getElementById('chartRevenue'), {
+                    type: 'line',
+                    data: {
+                        labels: data.charts.revenue.labels,
+                        datasets: [
+                            {
+                                label: 'Automações',
+                                data: data.charts.revenue.automacoes,
+                                borderColor: '#004de8',
+                                backgroundColor: 'rgba(0, 77, 232, 0.08)',
+                                fill: true,
+                                tension: 0.35,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 5,
+                            },
+                            {
+                                label: 'Campanhas',
+                                data: data.charts.revenue.campanhas,
+                                borderColor: '#00d68f',
+                                backgroundColor: 'rgba(0, 214, 143, 0.05)',
+                                fill: true,
+                                tension: 0.35,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 5,
+                            },
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => 'R$ ' + (v/1000).toFixed(0) + 'k' } },
+                            x: { grid: { display: false } }
+                        },
+                    }
+                });
+
+                // Hourly Sales
+                new Chart(document.getElementById('chartHourly'), {
+                    type: 'bar',
+                    data: {
+                        labels: data.charts.hourly.labels,
+                        datasets: [{
+                            label: 'Vendas',
+                            data: data.charts.hourly.values,
+                            backgroundColor: data.charts.hourly.values.map((v, i) =>
+                                i >= 9 && i <= 14 ? 'rgba(0, 77, 232, 0.7)' : 'rgba(0, 77, 232, 0.2)'
+                            ),
+                            borderRadius: 4,
+                            borderSkipped: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            x: { grid: { display: false } }
+                        },
+                    }
+                });
+
+                // Top Products
+                new Chart(document.getElementById('chartProducts'), {
+                    type: 'bar',
+                    data: {
+                        labels: data.charts.top_products.labels,
+                        datasets: [{
+                            label: 'Vendas',
+                            data: data.charts.top_products.values,
+                            backgroundColor: ['rgba(0,77,232,0.8)', 'rgba(0,77,232,0.65)', 'rgba(0,77,232,0.5)', 'rgba(0,77,232,0.35)', 'rgba(0,77,232,0.2)'],
+                            borderRadius: 6,
+                            borderSkipped: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            y: { grid: { display: false } }
+                        },
+                    }
+                });
+
+                // Top Tags
+                new Chart(document.getElementById('chartTags'), {
+                    type: 'bar',
+                    data: {
+                        labels: data.charts.top_tags.labels,
+                        datasets: [{
+                            label: 'Contatos',
+                            data: data.charts.top_tags.values,
+                            backgroundColor: ['rgba(0,214,143,0.8)', 'rgba(0,214,143,0.65)', 'rgba(0,214,143,0.5)', 'rgba(0,214,143,0.35)', 'rgba(0,214,143,0.2)'],
+                            borderRadius: 6,
+                            borderSkipped: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            y: { grid: { display: false } }
+                        },
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to load overview:', e);
+            }
+        }
+
+        // ── Load History Data ──
+        async function loadHistory() {
+            try {
+                const res = await fetch(`${API}/dashboard/history`);
+                const data = await res.json();
+
+                renderKPI('history-sales-kpis', [
+                    { label: 'Faturamento', value: data.sales.faturamento, icon: 'sack-dollar', color: 'green', change: data.sales.faturamento_change, changeDir: 'up' },
+                    { label: 'Comissões MailX', value: data.sales.comissoes_mailx, icon: 'hand-holding-dollar', color: 'blue' },
+                    { label: 'Vendas', value: data.sales.vendas, icon: 'bag-shopping', color: 'purple' },
+                    { label: 'Ticket Médio', value: data.sales.ticket_medio, icon: 'receipt', color: 'orange' },
+                ]);
+
+                renderKPI('history-email-kpis', [
+                    { label: 'Entrada de Contatos', value: data.email.entrada_contatos, icon: 'user-plus', color: 'blue', change: data.email.contatos_change, changeDir: 'up' },
+                    { label: 'CTR', value: data.email.ctr, icon: 'mouse-pointer', color: 'green' },
+                    { label: 'Taxa de Abertura', value: data.email.taxa_abertura, icon: 'envelope-open', color: 'purple' },
+                    { label: 'CTOR', value: data.email.ctor, icon: 'bullseye', color: 'orange' },
+                    { label: 'RPM', value: data.email.rpm, icon: 'chart-line', color: 'blue' },
+                    { label: 'EPC', value: data.email.epc, icon: 'coins', color: 'green' },
+                ]);
+
+                // Email Performance Chart
+                new Chart(document.getElementById('chartEmailPerf'), {
+                    type: 'line',
+                    data: {
+                        labels: data.charts.email_perf.labels,
+                        datasets: [
+                            {
+                                label: 'Taxa de Abertura',
+                                data: data.charts.email_perf.open_rate,
+                                borderColor: '#8b5cf6',
+                                backgroundColor: 'rgba(139, 92, 246, 0.05)',
+                                fill: true,
+                                tension: 0.35,
+                                borderWidth: 2,
+                                pointRadius: 3,
+                                pointBackgroundColor: '#8b5cf6',
+                            },
+                            {
+                                label: 'CTR',
+                                data: data.charts.email_perf.ctr,
+                                borderColor: '#004de8',
+                                backgroundColor: 'rgba(0, 77, 232, 0.05)',
+                                fill: true,
+                                tension: 0.35,
+                                borderWidth: 2,
+                                pointRadius: 3,
+                                pointBackgroundColor: '#004de8',
+                            },
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => v + '%' } },
+                            x: { grid: { display: false } }
+                        },
+                    }
+                });
+
+                // Contacts Chart
+                new Chart(document.getElementById('chartContacts'), {
+                    type: 'bar',
+                    data: {
+                        labels: data.charts.contacts.labels,
+                        datasets: [{
+                            label: 'Novos Contatos',
+                            data: data.charts.contacts.values,
+                            backgroundColor: 'rgba(0, 77, 232, 0.5)',
+                            borderColor: '#004de8',
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            borderSkipped: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            x: { grid: { display: false } }
+                        },
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to load history:', e);
+            }
+        }
+
+        // ── Pipeline ──
+        async function loadClients() {
+            try {
+                const res = await fetch(`${API}/clientes`);
+                const { clients } = await res.json();
+
+                ['pending', 'configuring', 'dns_pending', 'active'].forEach(status => {
+                    const col = document.getElementById(`col-${status === 'dns_pending' ? 'dns' : status}`);
+                    if (col) {
+                        col.querySelector('.pipeline-list').innerHTML = '';
+                        col.querySelector('.pipeline-count').innerText = '0';
+                    }
+                });
+
+                clients.forEach(c => {
+                    const statusMap = { 'dns_pending': 'dns' };
+                    const colId = `col-${statusMap[c.status] || c.status}`;
+                    const col = document.getElementById(colId);
+                    if (!col) return;
+
+                    const list = col.querySelector('.pipeline-list');
+                    const count = col.querySelector('.pipeline-count');
+
+                    const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${k.name}</span>`).join('');
+                    const acBadge = c.ac_api_key ? `<span class="tag green">AC ✓</span>` : '';
+
+                    let buttons = '';
+                    if (c.status === 'pending') buttons = `<button class="btn btn-accent" onclick="runBootstrap(${c.id})">⚡ Configurar AC</button>`;
+                    else if (c.status === 'configuring') buttons = `<button class="btn btn-outline" onclick="updateStatus(${c.id}, 'dns_pending')">➡ Pedir DNS</button>`;
+                    else if (c.status === 'dns_pending') buttons = `<button class="btn btn-success" onclick="updateStatus(${c.id}, 'active')">✅ Ativar</button>`;
+                    else if (c.status === 'active') buttons = `<button class="btn btn-danger-ghost" onclick="updateStatus(${c.id}, 'paused')">⏸ Pausar</button>`;
+
+                    const card = document.createElement('div');
+                    card.className = 'client-card';
+                    card.style.cursor = 'pointer';
+                    card.onclick = () => window.location.href = `/admin/client-detail?id=${c.id}`;
+                    card.innerHTML = `
+                        <div class="client-name">${c.company_name}</div>
+                        <div class="client-email">${c.contact_email}</div>
+                        <div class="client-tags">${kitsHtml} ${acBadge}</div>
+                        <div class="client-actions">
+                            ${buttons}
+                            <a href="/admin/client-detail?id=${c.id}" class="btn btn-outline" onclick="event.stopPropagation()"><i class="fas fa-eye"></i> Detalhes</a>
+                        </div>
+                    `;
+                    list.appendChild(card);
+                    count.innerText = parseInt(count.innerText) + 1;
+                });
+            } catch (e) {
+                console.error('Failed to load clients:', e);
+            }
+        }
+
+        // ── Webhooks ──
+        async function loadWebhooks() {
+            try {
+                const res = await fetch(`${API}/webhooks?limit=15`);
+                const { logs, count } = await res.json();
+
+                document.getElementById('webhook-count').textContent = `${count || logs.length} registros`;
+
+                document.getElementById('webhook-list').innerHTML = logs.map(log => {
+                    const date = new Date(log.created_at).toLocaleString('pt-BR');
+                    return `
+                        <tr>
+                            <td><span class="feed-status"><span class="feed-dot ${log.status}"></span>${log.status}</span></td>
+                            <td style="color:#fff; font-weight:500">${log.event_type}</td>
+                            <td>${log.source}</td>
+                            <td style="font-family:monospace; font-size:0.75rem">${date}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('Failed to load webhooks:', e);
+            }
+        }
+
+        // ── Actions ──
+        async function runBootstrap(id) {
+            showModal('Configurando...', 'Iniciando bootstrap do ActiveCampaign. Isso pode levar alguns segundos.');
+            try {
+                const res = await fetch(`${API}/clientes/${id}/bootstrap`, { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    showModal('✅ Sucesso!', 'Listas e tags criadas no ActiveCampaign.');
+                    loadClients();
+                } else {
+                    showModal('❌ Erro', `Falha: ${(data.errors || []).join('<br>')}`);
+                }
+            } catch (e) {
+                showModal('Erro Crítico', e.message);
+            }
+        }
+
+        async function updateStatus(id, status) {
+            if (!confirm(`Mudar status para ${status}?`)) return;
+            await fetch(`${API}/clientes/${id}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+            loadClients();
+        }
+
+        function showModal(title, body) {
+            document.getElementById('modal-title').innerHTML = title;
+            document.getElementById('modal-body').innerHTML = body;
+            document.getElementById('modal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('show');
+        }
+
+        function refreshAll() {
+            loadOverview();
+            loadHistory();
+            loadClients();
+            loadWebhooks();
+        }
+
+        // ── Init ──
+        loadOverview();
+        loadHistory();
+        loadClients();
+        loadWebhooks();
+        setInterval(loadWebhooks, 10000);
+    </script>
+</body>
+</html>

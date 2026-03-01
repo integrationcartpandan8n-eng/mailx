@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailX — Detalhes do Cliente</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg: #000000;
+            --surface: #0a0e18;
+            --surface-2: #0f1520;
+            --surface-3: #141c2b;
+            --border: #1a2236;
+            --border-light: #222e45;
+            --accent: #004de8;
+            --accent-light: #3b82f6;
+            --accent-glow: rgba(0, 77, 232, 0.25);
+            --accent-subtle: rgba(0, 77, 232, 0.08);
+            --text: #e8ecf4;
+            --text-dim: #6b7a99;
+            --text-muted: #3d4f6f;
+            --success: #00d68f;
+            --success-bg: rgba(0, 214, 143, 0.08);
+            --warning: #ffb020;
+            --warning-bg: rgba(255, 176, 32, 0.08);
+            --danger: #ff4d6a;
+            --danger-bg: rgba(255, 77, 106, 0.08);
+            --purple: #8b5cf6;
+            --radius: 14px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+
+        .container { width: 100%; max-width: 900px; }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .back-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-sm);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .back-btn:hover { border-color: var(--accent); color: var(--accent-light); }
+
+        .page-header-text { flex: 1; }
+
+        .page-header-text h1 {
+            font-size: 1.4rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+        }
+
+        .page-header-text p {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .status-badge {
+            padding: 0.35rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .status-pending { background: var(--warning-bg); color: var(--warning); }
+        .status-configuring { background: var(--accent-subtle); color: var(--accent-light); }
+        .status-dns_pending { background: rgba(139,92,246,0.1); color: var(--purple); }
+        .status-active { background: var(--success-bg); color: var(--success); }
+        .status-paused { background: var(--danger-bg); color: var(--danger); }
+
+        /* Cards */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 1.25rem;
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 0.82rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-title i { color: var(--accent-light); font-size: 0.85rem; }
+
+        .card-body { padding: 1.25rem; }
+
+        /* Info Grid */
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .info-item label {
+            display: block;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+
+        .info-item span {
+            font-size: 0.85rem;
+            color: var(--text);
+        }
+
+        .info-item span.mono {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-light);
+            font-size: 0.78rem;
+        }
+
+        /* Products / Kits Table */
+        .kit-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .kit-table th {
+            text-align: left;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .kit-table td {
+            padding: 0.65rem 0.75rem;
+            font-size: 0.82rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .kit-table tr:hover td { background: var(--surface-2); }
+
+        .kit-table .tag {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            background: var(--accent-subtle);
+            color: var(--accent-light);
+        }
+
+        .kit-table .tag.green { background: var(--success-bg); color: var(--success); }
+
+        .kit-actions-cell { display: flex; gap: 0.5rem; }
+
+        /* Stores Table */
+        .store-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .store-table th {
+            text-align: left;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .store-table td {
+            padding: 0.65rem 0.75rem;
+            font-size: 0.82rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .store-table tr:hover td { background: var(--surface-2); }
+
+        /* Buttons */
+        .btn {
+            padding: 0.45rem 0.85rem;
+            border-radius: 6px;
+            border: none;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            text-decoration: none;
+        }
+
+        .btn:hover { opacity: 0.85; }
+        .btn-accent { background: var(--accent); color: #fff; }
+        .btn-accent:hover { box-shadow: 0 2px 12px var(--accent-glow); }
+        .btn-outline { background: var(--surface-3); color: var(--text-dim); border: 1px solid var(--border); }
+        .btn-success { background: var(--success); color: #000; }
+        .btn-danger-sm { background: none; color: var(--danger); padding: 0.3rem 0.5rem; font-size: 0.72rem; }
+        .btn-danger-sm:hover { background: var(--danger-bg); }
+
+        /* Inline Form */
+        .inline-form {
+            display: none;
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--border);
+            background: var(--surface-2);
+            animation: fadeUp 0.2s ease;
+        }
+
+        .inline-form.show { display: block; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .inline-form .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 0.75rem;
+            align-items: end;
+        }
+
+        .inline-form .form-row.three {
+            grid-template-columns: 1fr 1fr 1fr auto;
+        }
+
+        .inline-form label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            margin-bottom: 0.3rem;
+        }
+
+        .inline-form input, .inline-form select {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.82rem;
+            font-family: inherit;
+        }
+
+        .inline-form input:focus, .inline-form select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+
+        .empty-state i {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        /* Webhook URLs */
+        .webhook-urls {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .webhook-url-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+        }
+
+        .webhook-url-item .label {
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            white-space: nowrap;
+            min-width: 80px;
+        }
+
+        .webhook-url-item code {
+            flex: 1;
+            font-size: 0.75rem;
+            color: var(--accent-light);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .copy-btn {
+            padding: 0.3rem 0.6rem;
+            background: var(--surface-3);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            font-size: 0.68rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .copy-btn:hover { border-color: var(--accent); color: var(--accent-light); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2rem;
+            width: 450px;
+            max-width: 90%;
+            animation: fadeUp 0.3s ease;
+        }
+
+        .modal h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+        .modal p { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; }
+        .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+        .modal-actions .btn { flex: 1; padding: 0.6rem; font-size: 0.85rem; }
+
+        @media (max-width: 700px) {
+            .info-grid { grid-template-columns: 1fr; }
+            .inline-form .form-row { grid-template-columns: 1fr; }
+            .inline-form .form-row.three { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="page-header">
+            <a href="/admin" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="page-header-text">
+                <h1 id="clientName">Carregando...</h1>
+                <p id="clientEmail"></p>
+            </div>
+            <span class="status-badge" id="clientStatus"></span>
+        </div>
+
+        <!-- Client Info -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-building"></i> Informações do Cliente</div>
+            </div>
+            <div class="card-body">
+                <div class="info-grid" id="clientInfo">
+                    <div class="info-item"><label>Carregando...</label><span>—</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Kits / Products -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-box-open"></i> Produtos / Kits</div>
+                <button class="btn btn-accent" onclick="toggleForm('kitForm')"><i class="fas fa-plus"></i> Novo Produto</button>
+            </div>
+            <div class="inline-form" id="kitForm">
+                <div class="form-row">
+                    <div>
+                        <label>Nome do Kit *</label>
+                        <input type="text" id="newKitName" placeholder="Kit Emagrecedor Plus">
+                    </div>
+                    <div>
+                        <label>Preço (R$)</label>
+                        <input type="number" id="newKitPrice" step="0.01" placeholder="99.90">
+                    </div>
+                    <button class="btn btn-accent" onclick="addKit()" style="height:36px">Adicionar</button>
+                </div>
+            </div>
+            <div class="card-body" style="padding:0">
+                <table class="kit-table">
+                    <thead>
+                        <tr>
+                            <th>Nome</th>
+                            <th>Slug</th>
+                            <th>Preço</th>
+                            <th>AC Lista</th>
+                            <th>Tags AC</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="kitsTableBody">
+                        <tr><td colspan="6" class="empty-state"><i class="fas fa-box-open"></i>Nenhum kit cadastrado</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Stores / Integrations -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-store"></i> Lojas Integradas</div>
+                <button class="btn btn-accent" onclick="toggleForm('storeForm')"><i class="fas fa-plug"></i> Nova Loja</button>
+            </div>
+            <div class="inline-form" id="storeForm">
+                <div class="form-row three">
+                    <div>
+                        <label>Shop Slug *</label>
+                        <input type="text" id="newStoreSlug" placeholder="minhaloja">
+                    </div>
+                    <div>
+                        <label>API Token *</label>
+                        <input type="password" id="newStoreToken" placeholder="cp_live_xxx...">
+                    </div>
+                    <div>
+                        <label>Eventos</label>
+                        <select id="newStoreEvents">
+                            <option value="all">Todos</option>
+                            <option value="order_paid">Apenas order.paid</option>
+                            <option value="abandoned">Apenas abandoned</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-accent" onclick="addStore()" style="height:36px">Integrar</button>
+                </div>
+            </div>
+            <div class="card-body" style="padding:0">
+                <table class="store-table">
+                    <thead>
+                        <tr>
+                            <th>Shop Slug</th>
+                            <th>URL da Loja</th>
+                            <th>Eventos</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="storesTableBody">
+                        <tr><td colspan="5" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Webhook URLs -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-satellite-dish"></i> URLs dos Webhooks</div>
+            </div>
+            <div class="card-body">
+                <p style="font-size:0.78rem; color:var(--text-dim); margin-bottom:0.75rem">
+                    Use estas URLs ao cadastrar webhooks na página da API da CartPanda:
+                </p>
+                <div class="webhook-urls">
+                    <div class="webhook-url-item">
+                        <span class="label">order.paid</span>
+                        <code id="urlOrderPaid"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlOrderPaid')"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="webhook-url-item">
+                        <span class="label">abandoned</span>
+                        <code id="urlAbandoned"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlAbandoned')"><i class="fas fa-copy"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-bolt"></i> Ações</div>
+            </div>
+            <div class="card-body" style="display:flex; gap:0.75rem; flex-wrap:wrap">
+                <button class="btn btn-accent" onclick="runBootstrap()" id="btnBootstrap">
+                    <i class="fas fa-bolt"></i> Rodar Bootstrap AC
+                </button>
+                <button class="btn btn-outline" onclick="changeStatus('dns_pending')">
+                    <i class="fas fa-globe"></i> Pedir DNS
+                </button>
+                <button class="btn btn-success" onclick="changeStatus('active')">
+                    <i class="fas fa-check"></i> Ativar
+                </button>
+                <button class="btn btn-danger-sm" onclick="changeStatus('paused')">
+                    <i class="fas fa-pause"></i> Pausar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <h3 id="modal-title"></h3>
+            <p id="modal-body"></p>
+            <div class="modal-actions">
+                <button class="btn btn-accent" onclick="closeModal()">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/admin';
+        const clientId = new URLSearchParams(window.location.search).get('id');
+        const BASE_URL = window.location.origin;
+
+        if (!clientId) {
+            window.location.href = '/admin';
+        }
+
+        // Set webhook URLs
+        document.getElementById('urlOrderPaid').textContent = `${BASE_URL}/webhook/cartpanda/order-paid`;
+        document.getElementById('urlAbandoned').textContent = `${BASE_URL}/webhook/cartpanda/abandoned-cart`;
+
+        function copyUrl(id) {
+            const text = document.getElementById(id).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById(id).nextElementSibling;
+                btn.innerHTML = '<i class="fas fa-check"></i>';
+                setTimeout(() => btn.innerHTML = '<i class="fas fa-copy"></i>', 1500);
+            });
+        }
+
+        function toggleForm(formId) {
+            const form = document.getElementById(formId);
+            form.classList.toggle('show');
+        }
+
+        // ── Load client data ──
+        async function loadClient() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}`);
+                if (!res.ok) throw new Error('Client not found');
+                const client = await res.json();
+
+                document.getElementById('clientName').textContent = client.company_name;
+                document.getElementById('clientEmail').textContent = client.contact_email;
+
+                const statusEl = document.getElementById('clientStatus');
+                statusEl.textContent = client.status.toUpperCase().replace('_', ' ');
+                statusEl.className = `status-badge status-${client.status}`;
+
+                document.title = `MailX — ${client.company_name}`;
+
+                document.getElementById('clientInfo').innerHTML = `
+                    <div class="info-item"><label>Empresa</label><span>${client.company_name}</span></div>
+                    <div class="info-item"><label>Email</label><span>${client.contact_email}</span></div>
+                    <div class="info-item"><label>WhatsApp</label><span>${client.contact_whatsapp || '—'}</span></div>
+                    <div class="info-item"><label>CNPJ</label><span>${client.cnpj || '—'}</span></div>
+                    <div class="info-item"><label>Loja CartPanda</label><span class="mono">${client.cartpanda_store_url || '—'}</span></div>
+                    <div class="info-item"><label>ActiveCampaign</label><span class="mono">${client.ac_api_url ? '✅ Conectado' : '❌ Não configurado'}</span></div>
+                    <div class="info-item"><label>DNS Registrar</label><span>${client.dns_registrar || '—'}</span></div>
+                    <div class="info-item"><label>Criado em</label><span>${new Date(client.created_at).toLocaleDateString('pt-BR')}</span></div>
+                `;
+
+                // Render kits
+                renderKits(client.kits || []);
+
+                // Load stores
+                loadStores();
+            } catch (e) {
+                showModal('Erro', 'Cliente não encontrado. Redirecionando...');
+                setTimeout(() => window.location.href = '/admin', 2000);
+            }
+        }
+
+        function renderKits(kits) {
+            const tbody = document.getElementById('kitsTableBody');
+            if (!kits || kits.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><i class="fas fa-box-open"></i>Nenhum kit cadastrado</td></tr>';
+                return;
+            }
+            tbody.innerHTML = kits.map(k => `
+                <tr>
+                    <td style="color:#fff; font-weight:500">${k.name}</td>
+                    <td style="font-family:monospace; color:var(--text-dim); font-size:0.75rem">${k.slug}</td>
+                    <td>${k.price ? 'R$ ' + parseFloat(k.price).toFixed(2) : '—'}</td>
+                    <td>${k.ac_list_id ? `<span class="tag green">ID: ${k.ac_list_id}</span>` : '<span class="tag">Pendente</span>'}</td>
+                    <td>${k.ac_tag_compra_id ? `<span class="tag green">✓</span>` : '<span class="tag">—</span>'}</td>
+                    <td><button class="btn btn-danger-sm" onclick="deleteKit(${k.id})"><i class="fas fa-trash"></i></button></td>
+                </tr>
+            `).join('');
+        }
+
+        // ── Add Kit ──
+        async function addKit() {
+            const name = document.getElementById('newKitName').value.trim();
+            const price = document.getElementById('newKitPrice').value;
+            if (!name) { alert('Nome do kit é obrigatório'); return; }
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/kits`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, price: price || null })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('newKitName').value = '';
+                    document.getElementById('newKitPrice').value = '';
+                    toggleForm('kitForm');
+                    loadClient();
+                    showModal('✅ Kit adicionado!', `"${name}" foi cadastrado. Rode o Bootstrap para criar listas/tags no ActiveCampaign.`);
+                } else {
+                    showModal('Erro', data.error || 'Erro ao adicionar kit');
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        // ── Delete Kit ──
+        async function deleteKit(kitId) {
+            if (!confirm('Remover este kit?')) return;
+            try {
+                await fetch(`${API}/kits/${kitId}`, { method: 'DELETE' });
+                loadClient();
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        // ── Stores ──
+        async function loadStores() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/stores`);
+                const { stores } = await res.json();
+                const tbody = document.getElementById('storesTableBody');
+
+                if (!stores || stores.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = stores.map(s => {
+                    const events = s.events ? Object.entries(JSON.parse(typeof s.events === 'string' ? s.events : JSON.stringify(s.events)))
+                        .filter(([_, v]) => v).map(([k]) => k).join(', ') : 'all';
+                    return `
+                        <tr>
+                            <td style="color:#fff; font-weight:500">${s.shop_slug}</td>
+                            <td style="font-family:monospace; color:var(--accent-light); font-size:0.75rem">${s.shop_slug}.cartpanda.com</td>
+                            <td style="font-size:0.75rem; color:var(--text-dim)">${events}</td>
+                            <td><span class="tag green">${s.status}</span></td>
+                            <td><button class="btn btn-danger-sm" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button></td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (e) {
+                console.error('Failed to load stores:', e);
+            }
+        }
+
+        async function addStore() {
+            const slug = document.getElementById('newStoreSlug').value.trim();
+            const token = document.getElementById('newStoreToken').value.trim();
+            const eventsVal = document.getElementById('newStoreEvents').value;
+
+            if (!slug || !token) { alert('Shop Slug e API Token são obrigatórios'); return; }
+
+            const events = eventsVal === 'all'
+                ? { order_paid: true, checkout_abandoned: true }
+                : eventsVal === 'order_paid'
+                    ? { order_paid: true, checkout_abandoned: false }
+                    : { order_paid: false, checkout_abandoned: true };
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/stores`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ shop_slug: slug, api_token: token, events })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('newStoreSlug').value = '';
+                    document.getElementById('newStoreToken').value = '';
+                    toggleForm('storeForm');
+                    loadStores();
+                    showModal('✅ Loja integrada!', `"${slug}.cartpanda.com" foi conectada.\n\nAgora cadastre os webhooks na página da API da CartPanda usando as URLs acima.`);
+                } else {
+                    showModal('Erro', data.error || 'Erro ao integrar loja');
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        async function deleteStore(storeId) {
+            if (!confirm('Remover esta loja?')) return;
+            try {
+                await fetch(`${API}/stores/${storeId}`, { method: 'DELETE' });
+                loadStores();
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        // ── Actions ──
+        async function runBootstrap() {
+            showModal('Configurando...', 'Criando listas e tags no ActiveCampaign...');
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/bootstrap`, { method: 'POST' });
+                const data = await res.json();
+                if (data.ok) {
+                    showModal('✅ Bootstrap Completo!', `Listas: ${data.result.listsCreated.length} | Tags: ${data.result.tagsCreated.length}`);
+                    loadClient();
+                } else {
+                    showModal('❌ Erro', (data.errors || []).join('<br>'));
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        async function changeStatus(status) {
+            if (!confirm(`Mudar status para ${status}?`)) return;
+            await fetch(`${API}/clientes/${clientId}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status })
+            });
+            loadClient();
+        }
+
+        function showModal(title, body) {
+            document.getElementById('modal-title').innerHTML = title;
+            document.getElementById('modal-body').innerHTML = body;
+            document.getElementById('modal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('show');
+        }
+
+        // Init
+        loadClient();
+    </script>
+</body>
+</html>
