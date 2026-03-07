@@ -71,14 +71,10 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
 
   const ac = new ActiveCampaignClient(ac_api_url, ac_api_key);
 
-  // 3. Create Lists
+  // 3. Create Lists (only 2 fixed lists per client requirement)
   const listsToCreate = [
-    ...kits.map((k) => ({
-      name: `Compradores - ${k.name}`,
-      stringid: `compradores-${k.slug}`,
-    })),
-    { name: 'Carrinho Abandonado', stringid: 'carrinho-abandonado' },
-    { name: 'Newsletter Geral', stringid: 'newsletter-geral' },
+    { name: 'Todos os contatos', stringid: 'todos-os-contatos' },
+    { name: 'Newsletter', stringid: 'newsletter' },
   ];
 
   const listIds: Record<string, string> = {};
@@ -138,15 +134,15 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
     }
   }
 
-  // 5. Update kits in DB with AC IDs
+  // 5. Update kits in DB with AC IDs (list = "Todos os contatos" for all kits)
+  const mainListId = listIds['todos-os-contatos'] || null;
   for (const kit of kits) {
-    const listId = listIds[`compradores-${kit.slug}`] || null;
     const tagCompraId = tagIds[`comprou-kit-${kit.slug}`] || null;
     const tagAbandonoId = tagIds[`carrinho-abandonado-kit-${kit.slug}`] || null;
 
     await query(
       `UPDATE kits SET ac_list_id = $1, ac_tag_compra_id = $2, ac_tag_abandono_id = $3 WHERE id = $4`,
-      [listId, tagCompraId, tagAbandonoId, kit.id]
+      [mainListId, tagCompraId, tagAbandonoId, kit.id]
     );
   }
 

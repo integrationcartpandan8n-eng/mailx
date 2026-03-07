@@ -1,13 +1,105 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { query, isDatabaseReady, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import { runBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
+import { env } from '../config/env';
 
 const CTX = 'Admin';
 
 export const adminRouter = Router();
+
+// ── Session Management (in-memory, httpOnly cookies) ──
+const sessions = new Map<string, { createdAt: number }>();
+const SESSION_COOKIE = 'mailx_session';
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+function isValidSession(token: string | undefined): boolean {
+  if (!token) return false;
+  const session = sessions.get(token);
+  if (!session) return false;
+  if (Date.now() - session.createdAt > SESSION_TTL) {
+    sessions.delete(token);
+    return false;
+  }
+  return true;
+}
+
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(';').forEach((c) => {
+    const [key, ...val] = c.trim().split('=');
+    cookies[key] = val.join('=');
+  });
+  return cookies;
+}
+
+// ── Login Page (GET /admin/login) ──
+adminRouter.get('/login', (_req: Request, res: Response) => {
+  const loginDir = fs.existsSync(path.join(process.cwd(), 'src', 'admin'))
+    ? path.join(process.cwd(), 'src', 'admin')
+    : path.join(__dirname);
+  
+  const loginPath = path.join(loginDir, 'login.html');
+  if (fs.existsSync(loginPath)) {
+    res.sendFile(loginPath);
+  } else {
+    res.send(`<html><body><h1>Login</h1><form method="POST" action="/admin/login"><input name="password" type="password" placeholder="Senha"><button type="submit">Entrar</button></form></body></html>`);
+  }
+});
+
+// ── Login POST (POST /admin/login) ──
+adminRouter.post('/login', (req: Request, res: Response) => {
+  const { password } = req.body;
+  
+  if (password === env.ADMIN_PASSWORD) {
+    const token = crypto.randomBytes(32).toString('hex');
+    sessions.set(token, { createdAt: Date.now() });
+    
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/admin; Max-Age=${SESSION_TTL / 1000}; SameSite=Strict`);
+    res.redirect('/admin');
+    logger.info(CTX, '🔐 Login successful');
+  } else {
+    res.redirect('/admin/login?error=1');
+    logger.warn(CTX, '🔒 Login failed — wrong password');
+  }
+});
+
+// ── Logout (GET /admin/logout) ──
+adminRouter.get('/logout', (req: Request, res: Response) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  if (token) sessions.delete(token);
+  
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/admin; Max-Age=0`);
+  res.redirect('/admin/login');
+});
+
+// ── Auth Middleware (protects everything except /login, /logout) ──
+adminRouter.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/login' || req.path === '/logout') {
+    next();
+    return;
+  }
+  
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  
+  if (!isValidSession(token)) {
+    // API requests get 401, HTML requests get redirected
+    if (req.path.startsWith('/dashboard/') || req.path.startsWith('/clientes') || req.path.startsWith('/integration/') || req.path.startsWith('/bootstrap')) {
+      res.status(401).json({ error: 'Unauthorized' });
+    } else {
+      res.redirect('/admin/login');
+    }
+    return;
+  }
+  
+  next();
+});
 
 // Middleware: check DB before API routes (skip HTML pages)
 adminRouter.use((req: Request, res: Response, next: NextFunction) => {

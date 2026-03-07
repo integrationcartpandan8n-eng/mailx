@@ -20,6 +20,7 @@ export const env = {
   PORT: parseInt(optional('PORT', '3000'), 10),
   NODE_ENV: optional('NODE_ENV', 'development'),
   WEBHOOK_SECRET: optional('WEBHOOK_SECRET', ''),
+  ADMIN_PASSWORD: optional('ADMIN_PASSWORD', 'mailx2026'),
 
   // PostgreSQL
   DATABASE_URL: required('DATABASE_URL'),
