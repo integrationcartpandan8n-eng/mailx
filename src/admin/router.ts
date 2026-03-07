@@ -68,91 +68,179 @@ adminRouter.get('/client-detail', (_req: Request, res: Response) => {
 
 // ── Dashboard API Endpoints ──
 
-// GET /admin/dashboard/overview - Overview KPIs + chart data
+// GET /admin/dashboard/overview - Overview KPIs + chart data (REAL DATA)
 adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: Response) => {
-  // Get real counts if available
+  // ── Real counts ──
   const clientsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
+  const clientsActive = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients WHERE status = 'active'`);
+  const webhooksTotal = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
   const webhooksToday = await queryOne<{ count: string }>(
     `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
   );
+  const webhooksProcessed = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed'`
+  );
+  const webhooksError = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'error'`
+  );
+  const kitsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM kits`);
+  const storesCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM store_integrations WHERE status = 'active'`);
 
-  const totalClients = parseInt(clientsCount?.count || '0');
-  const totalWebhooks = parseInt(webhooksToday?.count || '0');
+  // ── Webhooks per day (last 30 days) ──
+  const dailyWebhooks = await query<{ day: string, order_paid: string, abandoned: string }>(`
+    SELECT 
+      TO_CHAR(created_at, 'DD/MM') as day,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid') as order_paid,
+      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as abandoned
+    FROM webhook_logs 
+    WHERE created_at >= NOW() - INTERVAL '30 days'
+    GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
+    ORDER BY DATE(created_at)
+  `);
 
-  // Demo data blended with real metrics
-  const last30Days = Array.from({ length: 30 }, (_, i) => {
+  // Fill 30 days with zeros where no data
+  const last30Days: string[] = [];
+  const orderPaidData: number[] = [];
+  const abandonedData: number[] = [];
+  for (let i = 29; i >= 0; i--) {
     const d = new Date();
-    d.setDate(d.getDate() - (29 - i));
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    d.setDate(d.getDate() - i);
+    const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    last30Days.push(label);
+    const match = dailyWebhooks.find(r => r.day === label);
+    orderPaidData.push(match ? parseInt(match.order_paid) : 0);
+    abandonedData.push(match ? parseInt(match.abandoned) : 0);
+  }
+
+  // ── Webhooks by hour (all time) ──
+  const hourlyWebhooks = await query<{ hour: string, count: string }>(`
+    SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
+    FROM webhook_logs
+    GROUP BY EXTRACT(HOUR FROM created_at)
+    ORDER BY EXTRACT(HOUR FROM created_at)
+  `);
+  const hourlyValues = Array.from({ length: 24 }, (_, i) => {
+    const match = hourlyWebhooks.find(r => parseInt(r.hour) === i);
+    return match ? parseInt(match.count) : 0;
   });
+
+  // ── Top kits by webhook mentions ──
+  const topKits = await query<{ name: string, count: string }>(`
+    SELECT k.name, COUNT(w.id) as count
+    FROM kits k
+    LEFT JOIN webhook_logs w ON w.payload::text ILIKE '%' || k.slug || '%'
+    GROUP BY k.name
+    ORDER BY count DESC
+    LIMIT 5
+  `);
+
+  // ── Webhook event distribution ──
+  const eventDist = await query<{ event_type: string, count: string }>(`
+    SELECT event_type, COUNT(*) as count
+    FROM webhook_logs
+    GROUP BY event_type
+    ORDER BY count DESC
+    LIMIT 5
+  `);
+
+  const totalWh = parseInt(webhooksTotal?.count || '0');
+  const totalProc = parseInt(webhooksProcessed?.count || '0');
+  const totalErr = parseInt(webhooksError?.count || '0');
+  const successRate = totalWh > 0 ? ((totalProc / totalWh) * 100).toFixed(1) : '0';
 
   res.json({
     kpis: {
-      faturamento_aprovado: 'R$ 87.450',
-      faturamento_change: '+12.5%',
-      vendas_totais: '1.247',
-      vendas_change: '+8.3%',
-      ticket_medio: 'R$ 70,09',
-      taxa_reembolso: '2.4%',
-      faturamento_mailx: 'R$ 24.890',
-      faturamento_mailx_change: '+18.7%',
-      vendas_mailx: '356',
-      vendas_mailx_change: '+15.2%',
-      total_clients: totalClients,
-      webhooks_today: totalWebhooks,
+      total_clients: parseInt(clientsCount?.count || '0'),
+      active_clients: parseInt(clientsActive?.count || '0'),
+      webhooks_today: parseInt(webhooksToday?.count || '0'),
+      webhooks_total: totalWh,
+      webhooks_processed: totalProc,
+      webhooks_error: totalErr,
+      success_rate: `${successRate}%`,
+      total_kits: parseInt(kitsCount?.count || '0'),
+      active_stores: parseInt(storesCount?.count || '0'),
     },
     charts: {
       revenue: {
         labels: last30Days,
-        automacoes: Array.from({ length: 30 }, () => Math.floor(Math.random() * 4000 + 1000)),
-        campanhas: Array.from({ length: 30 }, () => Math.floor(Math.random() * 3000 + 500)),
+        automacoes: orderPaidData,
+        campanhas: abandonedData,
       },
       hourly: {
         labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
-        values: [2, 1, 0, 0, 1, 3, 8, 15, 22, 35, 42, 38, 45, 40, 32, 28, 25, 18, 12, 8, 5, 4, 3, 2],
+        values: hourlyValues,
       },
       top_products: {
-        labels: ['Kit Emagrecedor Plus', 'Kit Detox Premium', 'Kit Beleza Total', 'Kit Imunidade', 'Kit Energia'],
-        values: [342, 287, 215, 178, 134],
+        labels: topKits.length > 0 ? topKits.map(k => k.name) : ['Nenhum kit'],
+        values: topKits.length > 0 ? topKits.map(k => parseInt(k.count)) : [0],
       },
       top_tags: {
-        labels: ['comprou-kit-emagrecedor', 'lead-engajado', 'carrinho-abandonado', 'newsletter-ativo', 'comprou-kit-detox'],
-        values: [892, 756, 534, 423, 389],
+        labels: eventDist.length > 0 ? eventDist.map(e => e.event_type) : ['Nenhum evento'],
+        values: eventDist.length > 0 ? eventDist.map(e => parseInt(e.count)) : [0],
       },
     },
   });
 }));
 
-// GET /admin/dashboard/history - Historical KPIs
+// GET /admin/dashboard/history - Historical KPIs (REAL DATA)
 adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Response) => {
-  const months = ['Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez', 'Jan', 'Fev'];
+  // ── Monthly webhook activity (last 12 months) ──
+  const monthlyActivity = await query<{ month: string, total: string, order_paid: string, abandoned: string }>(`
+    SELECT 
+      TO_CHAR(created_at, 'Mon') as month,
+      COUNT(*) as total,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid') as order_paid,
+      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as abandoned
+    FROM webhook_logs
+    WHERE created_at >= NOW() - INTERVAL '12 months'
+    GROUP BY TO_CHAR(created_at, 'Mon'), DATE_TRUNC('month', created_at)
+    ORDER BY DATE_TRUNC('month', created_at)
+  `);
+
+  // ── Monthly new clients ──
+  const monthlyClients = await query<{ month: string, count: string }>(`
+    SELECT TO_CHAR(created_at, 'Mon') as month, COUNT(*) as count
+    FROM clients
+    WHERE created_at >= NOW() - INTERVAL '12 months'
+    GROUP BY TO_CHAR(created_at, 'Mon'), DATE_TRUNC('month', created_at)
+    ORDER BY DATE_TRUNC('month', created_at)
+  `);
+
+  // ── Totals ──
+  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
+  const totalOrderPaid = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.paid'`);
+  const totalAbandoned = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart'`);
+  const totalClients = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
+  const totalKits = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM kits`);
+
+  // ── Client status distribution ──
+  const statusDist = await query<{ status: string, count: string }>(`
+    SELECT status, COUNT(*) as count FROM clients GROUP BY status ORDER BY count DESC
+  `);
+
+  const months = monthlyActivity.map(m => m.month);
+  const monthsClients = monthlyClients.map(m => m.month);
 
   res.json({
     sales: {
-      faturamento: 'R$ 342.800',
-      faturamento_change: '+22.1%',
-      comissoes_mailx: 'R$ 51.420',
-      vendas: '4.891',
-      ticket_medio: 'R$ 70,09',
+      webhooks_total: parseInt(totalWebhooks?.count || '0'),
+      order_paid_total: parseInt(totalOrderPaid?.count || '0'),
+      abandoned_total: parseInt(totalAbandoned?.count || '0'),
+      total_clients: parseInt(totalClients?.count || '0'),
+      total_kits: parseInt(totalKits?.count || '0'),
     },
     email: {
-      entrada_contatos: '12.847',
-      contatos_change: '+31.4%',
-      ctr: '4.2%',
-      taxa_abertura: '28.7%',
-      ctor: '14.6%',
-      rpm: 'R$ 18,40',
-      epc: 'R$ 2,35',
+      status_distribution: statusDist.map(s => ({ status: s.status, count: parseInt(s.count) })),
     },
     charts: {
       email_perf: {
-        labels: months,
-        open_rate: [24.1, 25.3, 26.8, 27.2, 28.1, 26.9, 27.5, 28.3, 29.1, 28.7, 29.4, 28.7],
-        ctr: [3.1, 3.4, 3.6, 3.8, 4.0, 3.9, 4.1, 4.3, 4.5, 4.2, 4.4, 4.2],
+        labels: months.length > 0 ? months : ['Sem dados'],
+        open_rate: monthlyActivity.map(m => parseInt(m.order_paid)),
+        ctr: monthlyActivity.map(m => parseInt(m.abandoned)),
       },
       contacts: {
-        labels: months,
-        values: [780, 920, 1050, 1180, 1320, 1100, 1250, 1380, 1420, 1290, 1350, 1307],
+        labels: monthsClients.length > 0 ? monthsClients : ['Sem dados'],
+        values: monthlyClients.length > 0 ? monthlyClients.map(m => parseInt(m.count)) : [0],
       },
     },
   });
