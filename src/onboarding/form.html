@@ -316,18 +316,39 @@
           </div>
         </div>
 
-        <!-- CARTPANDA -->
+        <!-- PLATAFORMA DE VENDAS -->
         <div class="section">
-          <div class="section-title">CartPanda</div>
+          <div class="section-title">Plataforma de Vendas</div>
           <div class="field">
-            <label>URL da loja <span class="required">*</span></label>
-            <input type="url" name="cartpanda_store_url" required placeholder="https://sualore.cartpanda.com" />
-            <div class="hint">A URL completa da sua loja na CartPanda</div>
+            <label>Plataforma <span class="required">*</span></label>
+            <select name="platform" id="platformSelect" required onchange="togglePlatformFields()">
+              <option value="cartpanda">CartPanda</option>
+              <option value="digistore24">Digistore24</option>
+            </select>
           </div>
-          <div class="field">
-            <label>API Token (Bearer) <span class="required">*</span></label>
-            <input type="password" name="cartpanda_api_token" required placeholder="cp_live_xxxxxxxxxxxxx" />
-            <div class="hint">CartPanda → Configurações → Integrações → API → Copiar token</div>
+          <div id="cartpandaFields">
+            <div class="field">
+              <label>URL da loja <span class="required">*</span></label>
+              <input type="url" name="cartpanda_store_url" id="cpUrl" placeholder="https://sualoja.cartpanda.com" />
+              <div class="hint">A URL completa da sua loja na CartPanda</div>
+            </div>
+            <div class="field">
+              <label>API Token (Bearer) <span class="required">*</span></label>
+              <input type="password" name="cartpanda_api_token" id="cpToken" placeholder="cp_live_xxxxxxxxxxxxx" />
+              <div class="hint">CartPanda → Configurações → Integrações → API → Copiar token</div>
+            </div>
+          </div>
+          <div id="digistore24Fields" style="display:none">
+            <div class="field">
+              <label>ID da Conta / Vendor ID <span class="required">*</span></label>
+              <input type="text" name="ds24_vendor_id" id="ds24Vendor" placeholder="seu-vendor-id" />
+              <div class="hint">Digistore24 → Account → Vendor ID</div>
+            </div>
+            <div class="field">
+              <label>IPN Passphrase <span class="required">*</span></label>
+              <input type="password" name="ds24_ipn_passphrase" id="ds24Pass" placeholder="sua-passphrase-ipn" />
+              <div class="hint">Settings → Integrations (IPN) → Passphrase</div>
+            </div>
           </div>
         </div>
 
@@ -415,13 +436,9 @@
           </div>
         </div>
 
-        <!-- GOOGLE -->
+        <!-- GOOGLE DRIVE -->
         <div class="section">
           <div class="section-title">Google</div>
-          <div class="checkbox-field">
-            <input type="checkbox" name="google_postmaster_access" id="gPostmaster" value="true" />
-            <label for="gPostmaster">Já tenho acesso ao Google Postmaster Tools</label>
-          </div>
           <div class="field">
             <label>Google Drive — URL da pasta</label>
             <input type="url" name="google_drive_folder_url" placeholder="https://drive.google.com/drive/folders/..." />
@@ -503,6 +520,32 @@
       document.getElementById('dnsManagesOwn').addEventListener('change', function () {
         document.getElementById('dnsCredentials').style.display = this.checked ? 'none' : 'block';
       });
+
+      function togglePlatformFields() {
+        const platform = document.getElementById('platformSelect').value;
+        const cpFields = document.getElementById('cartpandaFields');
+        const dsFields = document.getElementById('digistore24Fields');
+        const cpUrl = document.getElementById('cpUrl');
+        const cpToken = document.getElementById('cpToken');
+        const ds24Vendor = document.getElementById('ds24Vendor');
+        const ds24Pass = document.getElementById('ds24Pass');
+
+        if (platform === 'cartpanda') {
+          cpFields.style.display = 'block';
+          dsFields.style.display = 'none';
+          cpUrl.required = true;
+          cpToken.required = true;
+          ds24Vendor.required = false;
+          ds24Pass.required = false;
+        } else {
+          cpFields.style.display = 'none';
+          dsFields.style.display = 'block';
+          cpUrl.required = false;
+          cpToken.required = false;
+          ds24Vendor.required = true;
+          ds24Pass.required = true;
+        }
+      }
     </script>
   </body>
 </html>
