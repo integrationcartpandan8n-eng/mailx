@@ -6,6 +6,7 @@
     <title>MailX — Detalhes do Cliente</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg: #000000;
@@ -302,6 +303,85 @@
             font-size: 0.82rem;
         }
 
+        /* KPI Grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .kpi-card {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.85rem;
+            text-align: center;
+        }
+
+        .kpi-card .kpi-value {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -0.03em;
+        }
+
+        .kpi-card .kpi-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .kpi-card .kpi-icon {
+            font-size: 0.85rem;
+            margin-bottom: 0.35rem;
+        }
+
+        .kpi-card .kpi-icon.green { color: var(--success); }
+        .kpi-card .kpi-icon.blue { color: var(--accent-light); }
+        .kpi-card .kpi-icon.purple { color: var(--purple); }
+        .kpi-card .kpi-icon.red { color: var(--danger); }
+        .kpi-card .kpi-icon.orange { color: var(--warning); }
+
+        /* Activity Chart */
+        .chart-wrap-sm {
+            height: 120px;
+            position: relative;
+        }
+
+        /* Recent Webhooks */
+        .wh-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+        }
+
+        .wh-table th {
+            text-align: left;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.6rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .wh-table td {
+            padding: 0.5rem 0.6rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .wh-table tr:hover td { background: var(--surface-2); }
+
+        .wh-status { display:inline-block; padding:2px 6px; border-radius:4px; font-size:0.65rem; font-weight:700; }
+        .wh-status.processed { background: var(--success-bg); color: var(--success); }
+        .wh-status.failed { background: var(--danger-bg); color: var(--danger); }
+        .wh-status.processing { background: var(--warning-bg); color: var(--warning); }
+        .wh-status.received { background: var(--accent-subtle); color: var(--accent-light); }
+
         .empty-state i {
             font-size: 1.5rem;
             margin-bottom: 0.5rem;
@@ -404,6 +484,43 @@
             <span class="status-badge" id="clientStatus"></span>
         </div>
 
+        <!-- ═══ Per-Client KPIs ═══ -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-chart-pie"></i> Métricas do Cliente</div>
+            </div>
+            <div class="card-body">
+                <div class="kpi-grid" id="clientKpis">
+                    <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Activity Chart + Recent Webhooks ═══ -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem" id="activity-row">
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-area"></i> Atividade (7 dias)</div>
+                </div>
+                <div class="card-body">
+                    <div class="chart-wrap-sm"><canvas id="chartActivity"></canvas></div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-satellite-dish"></i> Webhooks Recentes</div>
+                </div>
+                <div class="card-body" style="padding:0; max-height:200px; overflow-y:auto">
+                    <table class="wh-table">
+                        <thead><tr><th>Status</th><th>Evento</th><th>Origem</th><th>Data</th></tr></thead>
+                        <tbody id="recentWebhooks">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -461,9 +578,16 @@
                 <button class="btn btn-accent" onclick="toggleForm('storeForm')"><i class="fas fa-plug"></i> Nova Loja</button>
             </div>
             <div class="inline-form" id="storeForm">
-                <div class="form-row three">
+                <div class="form-row" style="grid-template-columns: auto 1fr 1fr 1fr auto">
                     <div>
-                        <label>Shop Slug *</label>
+                        <label>Plataforma</label>
+                        <select id="newStorePlatform" style="min-width:120px">
+                            <option value="cartpanda">CartPanda</option>
+                            <option value="digistore24">Digistore24</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Shop Slug / ID *</label>
                         <input type="text" id="newStoreSlug" placeholder="minhaloja">
                     </div>
                     <div>
@@ -485,8 +609,8 @@
                 <table class="store-table">
                     <thead>
                         <tr>
+                            <th>Plataforma</th>
                             <th>Shop Slug</th>
-                            <th>URL da Loja</th>
                             <th>Eventos</th>
                             <th>Status</th>
                             <th></th>
@@ -505,10 +629,10 @@
                 <div class="card-title"><i class="fas fa-satellite-dish"></i> URLs dos Webhooks</div>
             </div>
             <div class="card-body">
-                <p style="font-size:0.78rem; color:var(--text-dim); margin-bottom:0.75rem">
-                    Use estas URLs ao cadastrar webhooks na página da API da CartPanda:
+                <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
+                    <i class="fas fa-shopping-cart" style="color:var(--accent-light)"></i> CartPanda
                 </p>
-                <div class="webhook-urls">
+                <div class="webhook-urls" style="margin-bottom:1rem">
                     <div class="webhook-url-item">
                         <span class="label">order.paid</span>
                         <code id="urlOrderPaid"></code>
@@ -518,6 +642,21 @@
                         <span class="label">abandoned</span>
                         <code id="urlAbandoned"></code>
                         <button class="copy-btn" onclick="copyUrl('urlAbandoned')"><i class="fas fa-copy"></i></button>
+                    </div>
+                </div>
+                <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
+                    <i class="fas fa-globe" style="color:var(--success)"></i> Digistore24 (IPN)
+                </p>
+                <div class="webhook-urls">
+                    <div class="webhook-url-item">
+                        <span class="label">payment</span>
+                        <code id="urlDS24Payment"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlDS24Payment')"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="webhook-url-item">
+                        <span class="label">refund</span>
+                        <code id="urlDS24Refund"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlDS24Refund')"><i class="fas fa-copy"></i></button>
                     </div>
                 </div>
             </div>
@@ -568,6 +707,8 @@
         // Set webhook URLs
         document.getElementById('urlOrderPaid').textContent = `${BASE_URL}/webhook/cartpanda/order-paid`;
         document.getElementById('urlAbandoned').textContent = `${BASE_URL}/webhook/cartpanda/abandoned-cart`;
+        document.getElementById('urlDS24Payment').textContent = `${BASE_URL}/webhook/digistore24/payment`;
+        document.getElementById('urlDS24Refund').textContent = `${BASE_URL}/webhook/digistore24/refund`;
 
         function copyUrl(id) {
             const text = document.getElementById(id).textContent;
@@ -609,6 +750,9 @@
                     <div class="info-item"><label>DNS Registrar</label><span>${client.dns_registrar || '—'}</span></div>
                     <div class="info-item"><label>Criado em</label><span>${new Date(client.created_at).toLocaleDateString('pt-BR')}</span></div>
                 `;
+
+                // Load per-client stats
+                loadClientStats();
 
                 // Render kits
                 renderKits(client.kits || []);
@@ -692,10 +836,13 @@
                 tbody.innerHTML = stores.map(s => {
                     const events = s.events ? Object.entries(JSON.parse(typeof s.events === 'string' ? s.events : JSON.stringify(s.events)))
                         .filter(([_, v]) => v).map(([k]) => k).join(', ') : 'all';
+                    const platform = s.platform || 'cartpanda';
+                    const platformIcon = platform === 'digistore24' ? '🌐' : '🛒';
+                    const platformLabel = platform === 'digistore24' ? 'Digistore24' : 'CartPanda';
                     return `
                         <tr>
+                            <td style="font-size:0.78rem">${platformIcon} ${platformLabel}</td>
                             <td style="color:#fff; font-weight:500">${s.shop_slug}</td>
-                            <td style="font-family:monospace; color:var(--accent-light); font-size:0.75rem">${s.shop_slug}.cartpanda.com</td>
                             <td style="font-size:0.75rem; color:var(--text-dim)">${events}</td>
                             <td><span class="tag green">${s.status}</span></td>
                             <td><button class="btn btn-danger-sm" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button></td>
@@ -714,6 +861,7 @@
 
             if (!slug || !token) { alert('Shop Slug e API Token são obrigatórios'); return; }
 
+            const platform = document.getElementById('newStorePlatform').value;
             const events = eventsVal === 'all'
                 ? { order_paid: true, checkout_abandoned: true }
                 : eventsVal === 'order_paid'
@@ -724,7 +872,7 @@
                 const res = await fetch(`${API}/clientes/${clientId}/stores`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ shop_slug: slug, api_token: token, events })
+                    body: JSON.stringify({ shop_slug: slug, api_token: token, events, platform })
                 });
                 const data = await res.json();
                 if (data.ok) {
@@ -786,6 +934,80 @@
 
         function closeModal() {
             document.getElementById('modal').classList.remove('show');
+        }
+
+        // ── Load Per-Client Stats ──
+        async function loadClientStats() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/stats`);
+                const data = await res.json();
+
+                // Render KPIs
+                const kpiGrid = document.getElementById('clientKpis');
+                kpiGrid.innerHTML = [
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento', value: data.kpis.faturamento },
+                    { icon: 'fa-bag-shopping blue', label: 'Vendas', value: data.kpis.vendas },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio', value: data.kpis.ticket_medio },
+                    { icon: 'fa-satellite-dish blue', label: 'Webhooks Total', value: data.kpis.webhooks_total },
+                    { icon: 'fa-bolt orange', label: 'Webhooks Hoje', value: data.kpis.webhooks_hoje },
+                    { icon: 'fa-check-circle green', label: 'Taxa de Sucesso', value: data.kpis.taxa_sucesso },
+                    { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
+                    { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
+
+                // Render activity chart
+                if (data.daily_activity && data.daily_activity.labels.length > 0) {
+                    new Chart(document.getElementById('chartActivity'), {
+                        type: 'line',
+                        data: {
+                            labels: data.daily_activity.labels,
+                            datasets: [{
+                                label: 'Webhooks',
+                                data: data.daily_activity.values,
+                                borderColor: '#004de8',
+                                backgroundColor: 'rgba(0, 77, 232, 0.15)',
+                                fill: true,
+                                tension: 0.4,
+                                borderWidth: 2,
+                                pointRadius: 3,
+                                pointBackgroundColor: '#3b82f6',
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
+                                x: { grid: { display: false } },
+                            },
+                        }
+                    });
+                }
+
+                // Render recent webhooks
+                const tbody = document.getElementById('recentWebhooks');
+                if (!data.recent_webhooks || data.recent_webhooks.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Nenhum webhook recebido</td></tr>';
+                } else {
+                    tbody.innerHTML = data.recent_webhooks.map(w => `
+                        <tr>
+                            <td><span class="wh-status ${w.status}">${w.status}</span></td>
+                            <td style="font-family:monospace; font-size:0.72rem">${w.event_type}</td>
+                            <td>${w.source}</td>
+                            <td style="color:var(--text-dim); font-size:0.72rem">${new Date(w.created_at).toLocaleString('pt-BR')}</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Failed to load client stats:', e);
+            }
         }
 
         // Init

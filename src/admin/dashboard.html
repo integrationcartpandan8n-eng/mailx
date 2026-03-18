@@ -683,7 +683,7 @@
                             <div class="chart-header">
                                 <div>
                                     <div class="chart-title">Faturamento x Tempo</div>
-                                    <div class="chart-subtitle">Automações e Campanhas por Email</div>
+                                    <div class="chart-subtitle">Automações e Campanhas Detalhada por Email</div>
                                 </div>
                                 <span class="chart-badge">Últimos 30 dias</span>
                             </div>
@@ -712,6 +712,27 @@
                                 <div class="chart-title">Top 5 Tags de Email</div>
                             </div>
                             <div class="chart-wrap sm"><canvas id="chartTags"></canvas></div>
+                        </div>
+                    </div>
+
+                    <!-- Conversion Funnel -->
+                    <div class="chart-card" id="funnel-card" style="margin-top:1rem">
+                        <div class="chart-header">
+                            <div class="chart-title">Conversão — Envios por Venda</div>
+                        </div>
+                        <div style="display:flex; gap:2rem; padding:1rem 0; flex-wrap:wrap" id="funnel-data">
+                            <div style="text-align:center; flex:1; min-width:120px">
+                                <div style="font-size:2rem; font-weight:700; color:var(--accent-light)" id="fn-envios">0</div>
+                                <div style="font-size:0.75rem; color:var(--text-dim); margin-top:4px">Total de Envios</div>
+                            </div>
+                            <div style="text-align:center; flex:1; min-width:120px">
+                                <div style="font-size:2rem; font-weight:700; color:var(--success)" id="fn-vendas">0</div>
+                                <div style="font-size:0.75rem; color:var(--text-dim); margin-top:4px">Vendas</div>
+                            </div>
+                            <div style="text-align:center; flex:1; min-width:120px; background:var(--accent-subtle); border-radius:var(--radius); padding:1rem">
+                                <div style="font-size:2rem; font-weight:700; color:#fff" id="fn-ratio">0</div>
+                                <div style="font-size:0.75rem; color:var(--text-dim); margin-top:4px">→ envios para gerar 1 venda</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -851,13 +872,20 @@
                 const data = await res.json();
 
                 renderKPI('overview-kpis', [
-                    { label: 'Clientes Totais', value: data.kpis.total_clients, icon: 'users', color: 'blue' },
-                    { label: 'Clientes Ativos', value: data.kpis.active_clients, icon: 'user-check', color: 'green' },
-                    { label: 'Webhooks Hoje', value: data.kpis.webhooks_today, icon: 'satellite-dish', color: 'purple' },
-                    { label: 'Webhooks Total', value: data.kpis.webhooks_total, icon: 'chart-bar', color: 'blue' },
-                    { label: 'Taxa de Sucesso', value: data.kpis.success_rate, icon: 'check-circle', color: 'green' },
-                    { label: 'Lojas Integradas', value: data.kpis.active_stores, icon: 'store', color: 'purple' },
+                    { label: 'Faturamento Aprovado', value: data.kpis.faturamento_aprovado, icon: 'dollar-sign', color: 'green' },
+                    { label: 'Vendas Totais', value: data.kpis.vendas_totais, icon: 'shopping-cart', color: 'blue' },
+                    { label: 'Ticket Médio', value: data.kpis.ticket_medio, icon: 'receipt', color: 'purple' },
+                    { label: 'Taxa de Reembolso', value: data.kpis.taxa_reembolso, icon: 'rotate-left', color: 'red' },
+                    { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue' },
+                    { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green' },
                 ]);
+
+                // Conversion Funnel
+                if (data.funnel) {
+                    document.getElementById('fn-envios').textContent = data.funnel.total_envios.toLocaleString('pt-BR');
+                    document.getElementById('fn-vendas').textContent = data.funnel.total_vendas.toLocaleString('pt-BR');
+                    document.getElementById('fn-ratio').textContent = data.funnel.envios_por_venda.toLocaleString('pt-BR');
+                }
 
                 // Revenue Chart
                 new Chart(document.getElementById('chartRevenue'), {
@@ -866,7 +894,7 @@
                         labels: data.charts.revenue.labels,
                         datasets: [
                             {
-                                label: 'Compras (order.paid)',
+                                label: 'Automações',
                                 data: data.charts.revenue.automacoes,
                                 borderColor: '#004de8',
                                 backgroundColor: 'rgba(0, 77, 232, 0.08)',
@@ -877,7 +905,7 @@
                                 pointHoverRadius: 5,
                             },
                             {
-                                label: 'Abandonos',
+                                label: 'Campanhas',
                                 data: data.charts.revenue.campanhas,
                                 borderColor: '#00d68f',
                                 backgroundColor: 'rgba(0, 214, 143, 0.05)',
@@ -894,7 +922,7 @@
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
                         scales: {
-                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => 'R$ ' + (v/1000).toFixed(0) + 'k' } },
                             x: { grid: { display: false } }
                         },
                     }
@@ -906,7 +934,7 @@
                     data: {
                         labels: data.charts.hourly.labels,
                         datasets: [{
-                            label: 'Webhooks',
+                            label: 'Vendas',
                             data: data.charts.hourly.values,
                             backgroundColor: data.charts.hourly.values.map((v, i) =>
                                 i >= 9 && i <= 14 ? 'rgba(0, 77, 232, 0.7)' : 'rgba(0, 77, 232, 0.2)'
@@ -987,20 +1015,20 @@
                 const data = await res.json();
 
                 renderKPI('history-sales-kpis', [
-                    { label: 'Webhooks Total', value: data.sales.webhooks_total, icon: 'satellite-dish', color: 'blue' },
-                    { label: 'Compras (order.paid)', value: data.sales.order_paid_total, icon: 'shopping-cart', color: 'green' },
-                    { label: 'Abandonos', value: data.sales.abandoned_total, icon: 'cart-arrow-down', color: 'red' },
-                    { label: 'Kits Cadastrados', value: data.sales.total_kits, icon: 'box-open', color: 'purple' },
+                    { label: 'Faturamento', value: data.sales.faturamento, icon: 'sack-dollar', color: 'green' },
+                    { label: 'Comissões MailX', value: data.sales.comissoes_mailx, icon: 'hand-holding-dollar', color: 'blue' },
+                    { label: 'Vendas', value: data.sales.vendas, icon: 'bag-shopping', color: 'purple' },
+                    { label: 'Ticket Médio', value: data.sales.ticket_medio, icon: 'receipt', color: 'orange' },
                 ]);
 
-                renderKPI('history-email-kpis', 
-                    (data.email.status_distribution || []).map(s => ({
-                        label: s.status.charAt(0).toUpperCase() + s.status.slice(1).replace('_', ' '),
-                        value: s.count,
-                        icon: s.status === 'active' ? 'check-circle' : s.status === 'pending' ? 'clock' : 'cog',
-                        color: s.status === 'active' ? 'green' : s.status === 'pending' ? 'orange' : 'blue',
-                    }))
-                );
+                renderKPI('history-email-kpis', [
+                    { label: 'Entrada de Contatos', value: data.email.entrada_contatos, icon: 'user-plus', color: 'blue' },
+                    { label: 'CTR', value: data.email.ctr, icon: 'mouse-pointer', color: 'green' },
+                    { label: 'Taxa de Abertura', value: data.email.taxa_abertura, icon: 'envelope-open', color: 'purple' },
+                    { label: 'CTOR', value: data.email.ctor, icon: 'bullseye', color: 'orange' },
+                    { label: 'RPM', value: data.email.rpm, icon: 'chart-line', color: 'blue' },
+                    { label: 'EPC', value: data.email.epc, icon: 'coins', color: 'green' },
+                ]);
 
                 // Email Performance Chart
                 new Chart(document.getElementById('chartEmailPerf'), {
@@ -1009,7 +1037,7 @@
                         labels: data.charts.email_perf.labels,
                         datasets: [
                             {
-                                label: 'Compras (order.paid)',
+                                label: 'Taxa de Abertura',
                                 data: data.charts.email_perf.open_rate,
                                 borderColor: '#8b5cf6',
                                 backgroundColor: 'rgba(139, 92, 246, 0.05)',
@@ -1020,7 +1048,7 @@
                                 pointBackgroundColor: '#8b5cf6',
                             },
                             {
-                                label: 'Abandonos',
+                                label: 'CTR',
                                 data: data.charts.email_perf.ctr,
                                 borderColor: '#004de8',
                                 backgroundColor: 'rgba(0, 77, 232, 0.05)',
@@ -1037,7 +1065,7 @@
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
                         scales: {
-                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' } },
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => v + '%' } },
                             x: { grid: { display: false } }
                         },
                     }
@@ -1049,7 +1077,7 @@
                     data: {
                         labels: data.charts.contacts.labels,
                         datasets: [{
-                            label: 'Novos Clientes',
+                            label: 'Novos Contatos',
                             data: data.charts.contacts.values,
                             backgroundColor: 'rgba(0, 77, 232, 0.5)',
                             borderColor: '#004de8',

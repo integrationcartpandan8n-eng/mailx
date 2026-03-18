@@ -59,7 +59,44 @@ Na CartPanda da loja, vá em **Configurações > Webhooks** e crie dois webhooks
 
 ---
 
-## 4. Google Drive (Opcional)
+## 4. Digistore24 (IPN Webhooks)
+
+A Digistore24 usa **IPN (Instant Payment Notification)** para enviar dados de vendas automaticamente.
+
+### Configuração no Painel DS24:
+
+1. Acesse **Settings → Integrations (IPN)**
+2. Clique **Add new connection → Webhook**
+3. Configure:
+
+| Campo | Valor |
+|---|---|
+| **Nome** | MailX Integration |
+| **Webhook URL (Payment)** | `https://api.mailxgroup.com/webhook/digistore24/payment` |
+| **Webhook URL (Refund)** | `https://api.mailxgroup.com/webhook/digistore24/refund` |
+| **Eventos** | `payment`, `refund`, `chargeback` |
+| **Produtos** | Selecionar os produtos desejados |
+
+4. **Copie a IPN Passphrase** (usada para validar a assinatura `sha_sign`)
+5. No `.env` do servidor:
+   ```env
+   DS24_IPN_PASSPHRASE=sua-passphrase-aqui
+   ```
+6. Clique **Test connection** para verificar
+
+### Diferenças vs CartPanda:
+
+| CartPanda | Digistore24 |
+|---|---|
+| JSON body | Form-encoded body + query params |
+| Sem assinatura | `sha_sign` SHA512 |
+| `customer.email` | `email` (root) |
+| `line_items[0].title` | `product_name` |
+| `total_price` | `amount_brutto` |
+
+---
+
+## 5. Google Drive (Opcional)
 
 Se quiser que o sistema crie pastas no Drive automaticamente para cada cliente:
 

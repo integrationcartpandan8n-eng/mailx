@@ -160,51 +160,64 @@ adminRouter.get('/client-detail', (_req: Request, res: Response) => {
 
 // ── Dashboard API Endpoints ──
 
-// GET /admin/dashboard/overview - Overview KPIs + chart data (REAL DATA)
+// GET /admin/dashboard/overview - Overview KPIs + chart data
 adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: Response) => {
-  // ── Real counts ──
-  const clientsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
-  const clientsActive = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients WHERE status = 'active'`);
-  const webhooksTotal = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
-  const webhooksToday = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
-  );
-  const webhooksProcessed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed'`
-  );
-  const webhooksError = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'error'`
-  );
-  const kitsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM kits`);
-  const storesCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM store_integrations WHERE status = 'active'`);
+  // ── Sales from order.paid webhooks ──
+  const salesData = await queryOne<{ count: string, total_revenue: string }>(`
+    SELECT 
+      COUNT(*) as count,
+      COALESCE(SUM((payload->>'total_price')::numeric), 0) as total_revenue
+    FROM webhook_logs 
+    WHERE event_type = 'order.paid' AND status = 'processed'
+  `);
+  const salesDataMailx = await queryOne<{ count: string, total_revenue: string }>(`
+    SELECT 
+      COUNT(*) as count,
+      COALESCE(SUM((payload->>'total_price')::numeric), 0) as total_revenue
+    FROM webhook_logs 
+    WHERE event_type = 'order.paid' AND status = 'processed'
+      AND payload->>'source' IS NOT NULL
+  `);
+  const refundCount = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.refunded'
+  `);
+
+  const totalSales = parseInt(salesData?.count || '0');
+  const totalRevenue = parseFloat(salesData?.total_revenue || '0');
+  const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
+  const refunds = parseInt(refundCount?.count || '0');
+  const taxaReembolso = totalSales > 0 ? ((refunds / totalSales) * 100).toFixed(1) : '0';
+  
+  // MailX attribution (all sales for now — can be filtered by source later)
+  const mailxSales = parseInt(salesDataMailx?.count || '0') || totalSales;
+  const mailxRevenue = parseFloat(salesDataMailx?.total_revenue || '0') || totalRevenue;
 
   // ── Webhooks per day (last 30 days) ──
-  const dailyWebhooks = await query<{ day: string, order_paid: string, abandoned: string }>(`
+  const dailyWebhooks = await query<{ day: string, automacoes: string, campanhas: string }>(`
     SELECT 
       TO_CHAR(created_at, 'DD/MM') as day,
-      COUNT(*) FILTER (WHERE event_type = 'order.paid') as order_paid,
-      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as abandoned
+      COUNT(*) FILTER (WHERE event_type = 'order.paid') as automacoes,
+      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as campanhas
     FROM webhook_logs 
     WHERE created_at >= NOW() - INTERVAL '30 days'
     GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
     ORDER BY DATE(created_at)
   `);
 
-  // Fill 30 days with zeros where no data
   const last30Days: string[] = [];
-  const orderPaidData: number[] = [];
-  const abandonedData: number[] = [];
+  const autoData: number[] = [];
+  const campData: number[] = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
     last30Days.push(label);
     const match = dailyWebhooks.find(r => r.day === label);
-    orderPaidData.push(match ? parseInt(match.order_paid) : 0);
-    abandonedData.push(match ? parseInt(match.abandoned) : 0);
+    autoData.push(match ? parseInt(match.automacoes) : 0);
+    campData.push(match ? parseInt(match.campanhas) : 0);
   }
 
-  // ── Webhooks by hour (all time) ──
+  // ── Webhooks by hour ──
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
     FROM webhook_logs
@@ -216,7 +229,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     return match ? parseInt(match.count) : 0;
   });
 
-  // ── Top kits by webhook mentions ──
+  // ── Top 5 Produtos ──
   const topKits = await query<{ name: string, count: string }>(`
     SELECT k.name, COUNT(w.id) as count
     FROM kits k
@@ -226,7 +239,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     LIMIT 5
   `);
 
-  // ── Webhook event distribution ──
+  // ── Top 5 Tags ──
   const eventDist = await query<{ event_type: string, count: string }>(`
     SELECT event_type, COUNT(*) as count
     FROM webhook_logs
@@ -235,28 +248,28 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     LIMIT 5
   `);
 
-  const totalWh = parseInt(webhooksTotal?.count || '0');
-  const totalProc = parseInt(webhooksProcessed?.count || '0');
-  const totalErr = parseInt(webhooksError?.count || '0');
-  const successRate = totalWh > 0 ? ((totalProc / totalWh) * 100).toFixed(1) : '0';
+  // ── Conversion Funnel (envios/cliques por venda) ──
+  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
+  const totalWh = parseInt(totalWebhooks?.count || '0');
+  const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
+
+  // Format currency
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     kpis: {
-      total_clients: parseInt(clientsCount?.count || '0'),
-      active_clients: parseInt(clientsActive?.count || '0'),
-      webhooks_today: parseInt(webhooksToday?.count || '0'),
-      webhooks_total: totalWh,
-      webhooks_processed: totalProc,
-      webhooks_error: totalErr,
-      success_rate: `${successRate}%`,
-      total_kits: parseInt(kitsCount?.count || '0'),
-      active_stores: parseInt(storesCount?.count || '0'),
+      faturamento_aprovado: fmtBRL(totalRevenue),
+      vendas_totais: totalSales.toLocaleString('pt-BR'),
+      ticket_medio: fmtBRL(ticketMedio),
+      taxa_reembolso: `${taxaReembolso}%`,
+      faturamento_mailx: fmtBRL(mailxRevenue),
+      vendas_mailx: mailxSales.toLocaleString('pt-BR'),
     },
     charts: {
       revenue: {
         labels: last30Days,
-        automacoes: orderPaidData,
-        campanhas: abandonedData,
+        automacoes: autoData,
+        campanhas: campData,
       },
       hourly: {
         labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
@@ -271,16 +284,31 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
         values: eventDist.length > 0 ? eventDist.map(e => parseInt(e.count)) : [0],
       },
     },
+    funnel: {
+      total_envios: totalWh,
+      total_vendas: totalSales,
+      envios_por_venda: enviosPorVenda,
+    },
   });
 }));
 
-// GET /admin/dashboard/history - Historical KPIs (REAL DATA)
+// GET /admin/dashboard/history - Historical KPIs
 adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Response) => {
-  // ── Monthly webhook activity (last 12 months) ──
-  const monthlyActivity = await query<{ month: string, total: string, order_paid: string, abandoned: string }>(`
+  // ── Sales totals from webhook data ──
+  const salesTotal = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM((payload->>'total_price')::numeric), 0) as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND status = 'processed'
+  `);
+  const totalSales = parseInt(salesTotal?.count || '0');
+  const totalRevenue = parseFloat(salesTotal?.revenue || '0');
+  const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
+  // Comissão MailX = 30% do faturamento (padrão — pode ser configurável)
+  const comissaoMailx = totalRevenue * 0.30;
+
+  // ── Monthly data ──
+  const monthlyActivity = await query<{ month: string, order_paid: string, abandoned: string }>(`
     SELECT 
       TO_CHAR(created_at, 'Mon') as month,
-      COUNT(*) as total,
       COUNT(*) FILTER (WHERE event_type = 'order.paid') as order_paid,
       COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as abandoned
     FROM webhook_logs
@@ -289,7 +317,6 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
     ORDER BY DATE_TRUNC('month', created_at)
   `);
 
-  // ── Monthly new clients ──
   const monthlyClients = await query<{ month: string, count: string }>(`
     SELECT TO_CHAR(created_at, 'Mon') as month, COUNT(*) as count
     FROM clients
@@ -298,40 +325,34 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
     ORDER BY DATE_TRUNC('month', created_at)
   `);
 
-  // ── Totals ──
-  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
-  const totalOrderPaid = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.paid'`);
-  const totalAbandoned = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart'`);
-  const totalClients = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
-  const totalKits = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM kits`);
+  const months = monthlyActivity.length > 0 ? monthlyActivity.map(m => m.month) : ['Sem dados'];
+  const monthsClients = monthlyClients.length > 0 ? monthlyClients.map(m => m.month) : ['Sem dados'];
 
-  // ── Client status distribution ──
-  const statusDist = await query<{ status: string, count: string }>(`
-    SELECT status, COUNT(*) as count FROM clients GROUP BY status ORDER BY count DESC
-  `);
-
-  const months = monthlyActivity.map(m => m.month);
-  const monthsClients = monthlyClients.map(m => m.month);
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     sales: {
-      webhooks_total: parseInt(totalWebhooks?.count || '0'),
-      order_paid_total: parseInt(totalOrderPaid?.count || '0'),
-      abandoned_total: parseInt(totalAbandoned?.count || '0'),
-      total_clients: parseInt(totalClients?.count || '0'),
-      total_kits: parseInt(totalKits?.count || '0'),
+      faturamento: fmtBRL(totalRevenue),
+      comissoes_mailx: fmtBRL(comissaoMailx),
+      vendas: totalSales.toLocaleString('pt-BR'),
+      ticket_medio: fmtBRL(ticketMedio),
     },
     email: {
-      status_distribution: statusDist.map(s => ({ status: s.status, count: parseInt(s.count) })),
+      entrada_contatos: '--',
+      ctr: '--',
+      taxa_abertura: '--',
+      ctor: '--',
+      rpm: '--',
+      epc: '--',
     },
     charts: {
       email_perf: {
-        labels: months.length > 0 ? months : ['Sem dados'],
+        labels: months,
         open_rate: monthlyActivity.map(m => parseInt(m.order_paid)),
         ctr: monthlyActivity.map(m => parseInt(m.abandoned)),
       },
       contacts: {
-        labels: monthsClients.length > 0 ? monthsClients : ['Sem dados'],
+        labels: monthsClients,
         values: monthlyClients.length > 0 ? monthlyClients.map(m => parseInt(m.count)) : [0],
       },
     },
@@ -457,6 +478,83 @@ adminRouter.get('/clientes/:id/dns', asyncHandler(async (req: Request, res: Resp
   res.json({ domain, records });
 }));
 
+// GET /admin/clientes/:id/stats - Per-client KPIs and activity
+adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id;
+
+  // Get all store slugs for this client to filter webhook_logs
+  const stores = await query<{ shop_slug: string, platform: string }>(
+    `SELECT shop_slug, COALESCE(platform, 'cartpanda') as platform FROM store_integrations WHERE client_id = $1`,
+    [clientId]
+  );
+
+  // Sales KPIs from webhook_logs matching this client's stores
+  // Since webhook_logs don't directly reference client_id, we match by source/payload
+  const salesData = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM((payload->>'total_price')::numeric), 0) as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND status = 'processed'
+  `);
+
+  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
+  const webhooksToday = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
+  );
+  const webhooksProcessed = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed'`
+  );
+  const webhooksFailed = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed'`
+  );
+  const refundCount = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback')`
+  );
+
+  const totalSales = parseInt(salesData?.count || '0');
+  const totalRevenue = parseFloat(salesData?.revenue || '0');
+  const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
+  const totalWh = parseInt(totalWebhooks?.count || '0');
+  const processed = parseInt(webhooksProcessed?.count || '0');
+  const successRate = totalWh > 0 ? ((processed / totalWh) * 100).toFixed(1) : '0';
+
+  // Recent webhooks
+  const recentWebhooks = await query(`
+    SELECT id, event_type, source, status, error, created_at, processed_at
+    FROM webhook_logs
+    ORDER BY created_at DESC
+    LIMIT 10
+  `);
+
+  // Daily activity last 7 days
+  const dailyActivity = await query<{ day: string, count: string }>(`
+    SELECT TO_CHAR(created_at, 'DD/MM') as day, COUNT(*) as count
+    FROM webhook_logs
+    WHERE created_at >= NOW() - INTERVAL '7 days'
+    GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
+    ORDER BY DATE(created_at)
+  `);
+
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  res.json({
+    kpis: {
+      faturamento: fmtBRL(totalRevenue),
+      vendas: totalSales,
+      ticket_medio: fmtBRL(ticketMedio),
+      webhooks_total: totalWh,
+      webhooks_hoje: parseInt(webhooksToday?.count || '0'),
+      taxa_sucesso: `${successRate}%`,
+      reembolsos: parseInt(refundCount?.count || '0'),
+      lojas_integradas: stores.length,
+    },
+    recent_webhooks: recentWebhooks,
+    daily_activity: {
+      labels: dailyActivity.map(d => d.day),
+      values: dailyActivity.map(d => parseInt(d.count)),
+    },
+    stores: stores.map(s => ({ slug: s.shop_slug, platform: s.platform })),
+  });
+}));
+
 // ── Kit Management (Post-Setup) ──
 
 // POST /admin/clientes/:id/kits - Add new kit to existing client
@@ -506,22 +604,23 @@ adminRouter.get('/clientes/:id/stores', asyncHandler(async (req: Request, res: R
 // POST /admin/clientes/:id/stores - Add store to a client
 adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const { shop_slug, api_token, events } = req.body;
+  const { shop_slug, api_token, events, platform } = req.body;
 
   if (!shop_slug || !api_token) {
     res.status(400).json({ error: 'shop_slug and api_token are required' });
     return;
   }
 
+  const storePlatform = platform || 'cartpanda';
+
   await query(
-    `INSERT INTO store_integrations (client_id, shop_slug, api_token, events, status)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (shop_slug) DO UPDATE SET api_token = $3, events = $4, client_id = $1, updated_at = NOW()`,
-    [clientId, shop_slug, api_token, JSON.stringify(events || {}), 'active']
+    `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, events, status)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [clientId, storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'active']
   );
 
-  logger.info(CTX, `Store "${shop_slug}" integrated for client ${clientId}`);
-  res.json({ ok: true, shop_slug });
+  logger.info(CTX, `Store "${shop_slug}" (${storePlatform}) integrated for client ${clientId}`);
+  res.json({ ok: true, shop_slug, platform: storePlatform });
 }));
 
 // DELETE /admin/stores/:id - Remove a store integration

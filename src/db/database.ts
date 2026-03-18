@@ -99,13 +99,20 @@ export async function initDatabase(): Promise<void> {
         CREATE TABLE IF NOT EXISTS store_integrations (
           id SERIAL PRIMARY KEY,
           client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
-          shop_slug VARCHAR(255) NOT NULL UNIQUE,
+          platform VARCHAR(30) DEFAULT 'cartpanda',
+          shop_slug VARCHAR(255) NOT NULL,
           api_token TEXT NOT NULL,
           events JSONB DEFAULT '{}',
           status VARCHAR(30) DEFAULT 'active',
           created_at TIMESTAMP DEFAULT NOW(),
           updated_at TIMESTAMP DEFAULT NOW()
         );
+
+        -- Add platform column if table already exists without it
+        DO $$ BEGIN
+          ALTER TABLE store_integrations ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'cartpanda';
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
