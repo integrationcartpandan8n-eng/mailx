@@ -617,7 +617,7 @@
                     <a href="/admin" class="nav-item active">
                         <i class="fas fa-chart-pie"></i> Dashboard
                     </a>
-                    <a href="#" class="nav-item" onclick="switchTab('clients')">
+                    <a href="#" class="nav-item" onclick="switchTab('pipeline')">
                         <i class="fas fa-users"></i> Clientes
                     </a>
                 </div>
@@ -670,7 +670,7 @@
                 <div class="tabs">
                     <button class="tab-btn active" onclick="switchTab('overview')">Visão Geral</button>
                     <button class="tab-btn" onclick="switchTab('history')">Histórico Importado</button>
-                    <button class="tab-btn" onclick="switchTab('clients')">Clientes</button>
+                    <button class="tab-btn" onclick="switchTab('pipeline')">Pipeline</button>
                     <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
                 </div>
 
@@ -765,9 +765,26 @@
                     </div>
                 </div>
 
-                <!-- ═══════════ TAB: Clientes ═══════════ -->
-                <div class="tab-content" id="tab-clients">
-                    <div id="clients-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:1rem"></div>
+                <!-- ═══════════ TAB: Pipeline ═══════════ -->
+                <div class="tab-content" id="tab-pipeline">
+                    <div class="pipeline" id="pipeline-grid">
+                        <div class="pipeline-col" id="col-pending">
+                            <div class="pipeline-col-header">Pendente <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-configuring">
+                            <div class="pipeline-col-header">Configurando AC <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-dns">
+                            <div class="pipeline-col-header">Aguardando DNS <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                        <div class="pipeline-col" id="col-active">
+                            <div class="pipeline-col-header">Ativo <span class="pipeline-count">0</span></div>
+                            <div class="pipeline-list"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- ═══════════ TAB: Webhooks ═══════════ -->
@@ -822,7 +839,7 @@
 
             document.querySelectorAll('.tab-btn').forEach(b => {
                 const tabName = b.textContent.trim();
-                const map = { 'Visão Geral': 'overview', 'Histórico Importado': 'history', 'Clientes': 'clients', 'Webhooks': 'webhooks-tab' };
+                const map = { 'Visão Geral': 'overview', 'Histórico Importado': 'history', 'Pipeline': 'pipeline', 'Webhooks': 'webhooks-tab' };
                 if (map[tabName] === id) b.classList.add('active');
             });
         }
@@ -1084,70 +1101,54 @@
             }
         }
 
-        // ── Clients ──
+        // ── Pipeline ──
         async function loadClients() {
             try {
                 const res = await fetch(`${API}/clientes`);
                 const { clients } = await res.json();
-                const grid = document.getElementById('clients-grid');
 
-                if (!clients || clients.length === 0) {
-                    grid.innerHTML = '<div style="text-align:center; padding:3rem; color:var(--text-muted); grid-column:1/-1"><i class="fas fa-users" style="font-size:2rem; margin-bottom:0.75rem; display:block"></i>Nenhum cliente cadastrado</div>';
-                    return;
-                }
+                ['pending', 'configuring', 'dns_pending', 'active'].forEach(status => {
+                    const col = document.getElementById(`col-${status === 'dns_pending' ? 'dns' : status}`);
+                    if (col) {
+                        col.querySelector('.pipeline-list').innerHTML = '';
+                        col.querySelector('.pipeline-count').innerText = '0';
+                    }
+                });
 
-                grid.innerHTML = clients.map(c => {
-                    const statusColors = {
-                        pending: 'var(--warning)', configuring: 'var(--accent-light)',
-                        dns_pending: 'var(--purple)', active: 'var(--success)', paused: 'var(--danger)'
-                    };
-                    const statusLabels = {
-                        pending: 'Pendente', configuring: 'Configurando',
-                        dns_pending: 'Aguardando DNS', active: 'Ativo', paused: 'Pausado'
-                    };
-                    const kitsCount = (c.kits || []).length;
-                    const kitsHtml = (c.kits || []).slice(0, 3).map(k =>
-                        `<span style="font-size:0.65rem; padding:2px 6px; background:var(--accent-subtle); color:var(--accent-light); border-radius:4px; font-weight:600">${k.name}</span>`
-                    ).join(' ');
-                    const acStatus = c.ac_api_key ? '<span style="color:var(--success)">\u2705</span>' : '<span style="color:var(--danger)">\u274c</span>';
+                clients.forEach(c => {
+                    const statusMap = { 'dns_pending': 'dns' };
+                    const colId = `col-${statusMap[c.status] || c.status}`;
+                    const col = document.getElementById(colId);
+                    if (!col) return;
 
-                    return `
-                        <div onclick="window.location.href='/admin/client-detail?id=${c.id}'" style="
-                            background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
-                            padding:1.25rem; cursor:pointer; transition:all 0.2s;
-                        " onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem">
-                                <div>
-                                    <div style="font-size:1rem; font-weight:700; color:#fff">${c.company_name}</div>
-                                    <div style="font-size:0.75rem; color:var(--text-dim); margin-top:2px">${c.contact_email}</div>
-                                </div>
-                                <span style="padding:0.25rem 0.6rem; border-radius:20px; font-size:0.65rem; font-weight:700;
-                                    background:${statusColors[c.status]}15; color:${statusColors[c.status]}; text-transform:uppercase">
-                                    ${statusLabels[c.status] || c.status}
-                                </span>
-                            </div>
-                            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-bottom:0.75rem">
-                                <div style="text-align:center; padding:0.5rem; background:var(--surface-2); border-radius:6px">
-                                    <div style="font-size:1.1rem; font-weight:800; color:#fff">${kitsCount}</div>
-                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600">Kits</div>
-                                </div>
-                                <div style="text-align:center; padding:0.5rem; background:var(--surface-2); border-radius:6px">
-                                    <div style="font-size:1.1rem; font-weight:800; color:#fff">${acStatus}</div>
-                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600">AC</div>
-                                </div>
-                                <div style="text-align:center; padding:0.5rem; background:var(--surface-2); border-radius:6px">
-                                    <div style="font-size:1.1rem; font-weight:800; color:#fff">${c.cartpanda_store_url ? '\u2705' : '\u274c'}</div>
-                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600">Loja</div>
-                                </div>
-                                <div style="text-align:center; padding:0.5rem; background:var(--surface-2); border-radius:6px">
-                                    <div style="font-size:0.85rem; font-weight:800; color:#fff">${new Date(c.created_at).toLocaleDateString('pt-BR', {day:'2-digit',month:'2-digit'})}</div>
-                                    <div style="font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; font-weight:600">Criado</div>
-                                </div>
-                            </div>
-                            <div style="display:flex; gap:0.35rem; flex-wrap:wrap">${kitsHtml}</div>
+                    const list = col.querySelector('.pipeline-list');
+                    const count = col.querySelector('.pipeline-count');
+
+                    const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${k.name}</span>`).join('');
+                    const acBadge = c.ac_api_key ? `<span class="tag green">AC ✓</span>` : '';
+
+                    let buttons = '';
+                    if (c.status === 'pending') buttons = `<button class="btn btn-accent" onclick="event.stopPropagation(); runBootstrap(${c.id})">\u26a1 Configurar AC</button>`;
+                    else if (c.status === 'configuring') buttons = `<button class="btn btn-outline" onclick="event.stopPropagation(); updateStatus(${c.id}, 'dns_pending')">\u27a1 Pedir DNS</button>`;
+                    else if (c.status === 'dns_pending') buttons = `<button class="btn btn-success" onclick="event.stopPropagation(); updateStatus(${c.id}, 'active')">\u2705 Ativar</button>`;
+                    else if (c.status === 'active') buttons = `<button class="btn btn-danger-ghost" onclick="event.stopPropagation(); updateStatus(${c.id}, 'paused')">\u23f8 Pausar</button>`;
+
+                    const card = document.createElement('div');
+                    card.className = 'client-card';
+                    card.style.cursor = 'pointer';
+                    card.onclick = () => window.location.href = `/admin/client-detail?id=${c.id}`;
+                    card.innerHTML = `
+                        <div class="client-name">${c.company_name}</div>
+                        <div class="client-email">${c.contact_email}</div>
+                        <div class="client-tags">${kitsHtml} ${acBadge}</div>
+                        <div class="client-actions">
+                            ${buttons}
+                            <a href="/admin/client-detail?id=${c.id}" class="btn btn-outline" onclick="event.stopPropagation()"><i class="fas fa-eye"></i> Detalhes</a>
                         </div>
                     `;
-                }).join('');
+                    list.appendChild(card);
+                    count.innerText = parseInt(count.innerText) + 1;
+                });
             } catch (e) {
                 console.error('Failed to load clients:', e);
             }
