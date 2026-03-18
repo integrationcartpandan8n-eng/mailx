@@ -626,21 +626,30 @@
         async function testConnection() {
             const btn = document.getElementById('testBtn');
             const result = document.getElementById('testResult');
+            const slug = document.getElementById('shopSlug').value.trim();
             btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verificando loja...';
+            result.className = 'test-result';
+            result.style.display = 'none';
 
             try {
-                const res = await fetch('/webhook/health');
+                const res = await fetch('/admin/integration/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ shop_slug: slug })
+                });
                 const data = await res.json();
-                if (data.status === 'ok') {
+
+                if (data.ok) {
                     result.className = 'test-result success';
-                    result.innerHTML = '<i class="fas fa-check-circle"></i> Webhook endpoint está funcionando! Conexão estabelecida com sucesso.';
+                    result.innerHTML = `<i class="fas fa-check-circle"></i> Loja encontrada! <strong>${data.url}</strong> está acessível.`;
                 } else {
-                    throw new Error('Resposta inesperada');
+                    result.className = 'test-result error';
+                    result.innerHTML = `<i class="fas fa-times-circle"></i> ${data.error}`;
                 }
             } catch (e) {
                 result.className = 'test-result error';
-                result.innerHTML = '<i class="fas fa-times-circle"></i> Falha na conexão: ' + e.message;
+                result.innerHTML = '<i class="fas fa-times-circle"></i> Erro ao testar conexão: ' + e.message;
             }
 
             btn.disabled = false;

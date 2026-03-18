@@ -361,6 +361,39 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
 
 // ── Store Integration Endpoints ──
 
+// POST /admin/integration/test - Test if CartPanda store URL is reachable
+adminRouter.post('/integration/test', asyncHandler(async (req: Request, res: Response) => {
+  const { shop_slug } = req.body;
+
+  if (!shop_slug) {
+    res.status(400).json({ ok: false, error: 'shop_slug é obrigatório' });
+    return;
+  }
+
+  const storeUrl = `https://${shop_slug}.cartpanda.com`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(storeUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+    clearTimeout(timeout);
+
+    if (response.ok || response.status === 301 || response.status === 302 || response.status === 403) {
+      // Store exists (even 403 means the domain resolves to CartPanda)
+      res.json({ ok: true, status: response.status, url: storeUrl });
+    } else {
+      res.json({ ok: false, error: `Loja retornou status ${response.status}`, url: storeUrl });
+    }
+  } catch (e: any) {
+    logger.warn(CTX, `Store test failed for ${shop_slug}: ${e.message}`);
+    res.json({ ok: false, error: 'Não foi possível acessar a loja. Verifique o slug.', url: storeUrl });
+  }
+}));
+
 // POST /admin/integration/store - Save new store integration
 adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Response) => {
   const { shop_slug, api_token, events } = req.body;
@@ -372,12 +405,12 @@ adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Re
 
   logger.info(CTX, `New store integration: ${shop_slug}`, { events });
 
-  // Store the integration in the database
+  // Store the integration in the database with 'pending' status (not yet validated via webhook)
   await query(
     `INSERT INTO store_integrations (shop_slug, api_token, events, status)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (shop_slug) DO UPDATE SET api_token = $2, events = $3, updated_at = NOW()`,
-    [shop_slug, api_token, JSON.stringify(events || {}), 'active']
+    [shop_slug, api_token, JSON.stringify(events || {}), 'pending']
   );
 
   res.json({ ok: true, shop_slug });
