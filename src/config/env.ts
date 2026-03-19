@@ -25,19 +25,15 @@ export const env = {
   // PostgreSQL
   DATABASE_URL: required('DATABASE_URL'),
 
-  // CartPanda
-  CARTPANDA_API_TOKEN: optional('CARTPANDA_API_TOKEN', ''),
-  CARTPANDA_STORE_SLUG: optional('CARTPANDA_STORE_SLUG', ''),
-
-  // ActiveCampaign
+  // ActiveCampaign (global fallback — per-client credentials are in DB)
   AC_API_URL: optional('AC_API_URL', ''),
   AC_API_KEY: optional('AC_API_KEY', ''),
 
-  // ActiveCampaign IDs
+  // ActiveCampaign Automation IDs (global)
   AC_AUTOMATION_COMPRA_APROVADA: optional('AC_AUTOMATION_COMPRA_APROVADA', ''),
   AC_AUTOMATION_CARRINHO_ABANDONADO: optional('AC_AUTOMATION_CARRINHO_ABANDONADO', ''),
 
-  // Digistore24
+  // Digistore24 (global fallback — per-client passphrase is in store_integrations.api_token)
   DS24_IPN_PASSPHRASE: optional('DS24_IPN_PASSPHRASE', ''),
 
   // Google Drive

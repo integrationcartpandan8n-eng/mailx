@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { lookupStore, extractCartPandaSlug } from './store-lookup';
 
 const CTX = 'Webhook:AbandonedCart';
 
@@ -18,22 +19,28 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
   const payload = req.body;
 
   try {
-    // Log webhook to DB (non-critical)
+    // 1. Identify the store
+    const slug = extractCartPandaSlug(payload);
+    const store = await lookupStore('cartpanda', slug);
+
+    // Log webhook to DB
+    let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
-        await query(
-          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4)`,
+        const result = await query(
+          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4) RETURNING id`,
           ['abandoned_cart', 'cartpanda', JSON.stringify(payload), 'processing']
         );
+        logId = result[0]?.id || null;
       } catch (dbErr: any) {
         logger.warn(CTX, 'Failed to log webhook to DB', dbErr.message);
       }
     }
 
+    // 2. Extract data
     const email = payload.email || payload.customer?.email;
     const firstName = payload.first_name || payload.customer?.first_name || '';
     const cartItems = payload.cart_items || payload.line_items || payload.items || [];
-    const checkoutUrl = payload.checkout_url || payload.abandoned_checkout_url || '';
 
     if (!email) {
       logger.warn(CTX, 'No email found in abandoned cart payload');
@@ -44,23 +51,24 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     const productName = cartItems[0]?.title || cartItems[0]?.name || 'produto';
     const productSlug = slugify(productName);
 
-    logger.info(CTX, `Processing abandoned cart for ${email}`, { product: productName });
+    logger.info(CTX, `Processing abandoned cart for ${email}`, {
+      product: productName,
+      client: store.clientId,
+    });
 
-    const acApiUrl = process.env.AC_API_URL;
-    const acApiKey = process.env.AC_API_KEY;
-
-    if (!acApiUrl || !acApiKey) {
-      logger.error(CTX, 'ActiveCampaign credentials not configured');
+    // 3. Get AC credentials (per-client)
+    if (!store.acApiUrl || !store.acApiKey) {
+      logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
       res.status(500).json({ error: 'AC not configured' });
       return;
     }
 
-    const ac = new ActiveCampaignClient(acApiUrl, acApiKey);
+    const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
 
-    // 1. Sync contact
+    // 4. Sync contact
     const contact = await ac.syncContact({ email, firstName });
 
-    // 2. Add abandonment tag
+    // 5. Add abandonment tag
     const tagName = `carrinho-abandonado-kit-${productSlug}`;
     const tag = await ac.findTagByName(tagName);
     if (tag) {
@@ -73,25 +81,24 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
       logger.warn(CTX, `Tag not found: ${tagName}`);
     }
 
-    // 3. Add to abandoned cart list
+    // 6. Add to abandoned cart list
     const list = await ac.findListByName('Carrinho Abandonado');
     if (list) {
       await ac.addContactToList(contact.id, list.id);
     }
 
-    // 4. Trigger abandoned cart automation
+    // 7. Trigger abandoned cart automation
     const automationId = process.env.AC_AUTOMATION_CARRINHO_ABANDONADO;
     if (automationId) {
       await ac.addContactToAutomation(contact.id, automationId);
     }
 
     // Update webhook log
-    if (isDatabaseReady()) {
+    if (isDatabaseReady() && logId) {
       try {
         await query(
-          `UPDATE webhook_logs SET status = $1, processed_at = NOW() 
-           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = $2 ORDER BY created_at DESC LIMIT 1)`,
-          ['processed', 'abandoned_cart']
+          `UPDATE webhook_logs SET status = 'processed', processed_at = NOW() WHERE id = $1`,
+          [logId]
         );
       } catch (dbErr: any) {
         logger.warn(CTX, 'Failed to update webhook log', dbErr.message);
@@ -106,9 +113,9 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     if (isDatabaseReady()) {
       try {
         await query(
-          `UPDATE webhook_logs SET status = $1, error = $2 
-           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = $3 ORDER BY created_at DESC LIMIT 1)`,
-          ['failed', error.message, 'abandoned_cart']
+          `UPDATE webhook_logs SET status = 'failed', error = $1 
+           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'abandoned_cart' ORDER BY created_at DESC LIMIT 1)`,
+          [error.message]
         );
       } catch (_) { /* best-effort */ }
     }

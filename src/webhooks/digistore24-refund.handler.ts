@@ -5,6 +5,8 @@
  * Tags the contact in ActiveCampaign with a refund tag.
  *
  * Endpoint: POST /webhook/digistore24/refund
+ *
+ * Multi-tenant: Uses store_integrations to find per-client credentials.
  */
 
 import { Request, Response, NextFunction } from 'express';
@@ -12,7 +14,7 @@ import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
-import { env } from '../config/env';
+import { lookupStore, extractDS24Identifier } from './store-lookup';
 
 const CTX = 'Webhook:DS24:Refund';
 
@@ -20,16 +22,21 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
   const params = { ...req.body, ...req.query };
 
   try {
-    // 1. Validate signature
-    if (env.DS24_IPN_PASSPHRASE) {
-      if (!validateSignature(params, env.DS24_IPN_PASSPHRASE)) {
+    // 1. Identify the store
+    const identifier = extractDS24Identifier(params);
+    const store = await lookupStore('digistore24', identifier);
+
+    // 2. Validate signature using per-client passphrase
+    const passphrase = store.apiToken || process.env.DS24_IPN_PASSPHRASE || '';
+    if (passphrase) {
+      if (!validateSignature(params, passphrase)) {
         logger.warn(CTX, 'Invalid IPN signature — rejecting');
         res.status(403).json({ error: 'Invalid signature' });
         return;
       }
     }
 
-    // 2. Normalize
+    // 3. Normalize
     const data = normalizePayload(params);
     const eventType = params.event === 'chargeback' ? 'order.chargeback' : 'order.refunded';
 
@@ -38,37 +45,36 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
       return;
     }
 
-    logger.info(CTX, `Processing DS24 ${eventType} for ${data.email}`, { orderId: data.orderId });
+    logger.info(CTX, `Processing DS24 ${eventType} for ${data.email}`, {
+      orderId: data.orderId,
+      client: store.clientId,
+    });
 
-    // 3. Log to DB
+    // 4. Log to DB
+    let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
-        await query(
-          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4)`,
+        const result = await query(
+          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4) RETURNING id`,
           [eventType, 'digistore24', JSON.stringify(data.rawPayload), 'processing']
         );
+        logId = result[0]?.id || null;
       } catch (dbErr: any) {
         logger.warn(CTX, 'Failed to log webhook', dbErr.message);
       }
     }
 
-    // 4. Tag contact in AC
-    const acApiUrl = process.env.AC_API_URL;
-    const acApiKey = process.env.AC_API_KEY;
+    // 5. Tag contact in AC (per-client credentials)
+    if (store.acApiUrl && store.acApiKey) {
+      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
 
-    if (acApiUrl && acApiKey) {
-      const ac = new ActiveCampaignClient(acApiUrl, acApiKey);
-
-      // Sync contact (if exists)
       const contact = await ac.syncContact({ email: data.email });
 
-      // Add refund tag
       const tagName = `reembolso-kit-${data.productSlug}`;
       const tag = await ac.findTagByName(tagName);
       if (tag) {
         await ac.addTagToContact(contact.id, tag.id);
       } else {
-        // Try generic refund tag
         const genericTag = await ac.findTagByName('reembolso');
         if (genericTag) {
           await ac.addTagToContact(contact.id, genericTag.id);
@@ -77,13 +83,12 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
       }
     }
 
-    // 5. Update log
-    if (isDatabaseReady()) {
+    // 6. Update log
+    if (isDatabaseReady() && logId) {
       try {
         await query(
-          `UPDATE webhook_logs SET status = 'processed', processed_at = NOW()
-           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = $1 AND source = 'digistore24' ORDER BY created_at DESC LIMIT 1)`,
-          [eventType]
+          `UPDATE webhook_logs SET status = 'processed', processed_at = NOW() WHERE id = $1`,
+          [logId]
         );
       } catch (_) {}
     }
