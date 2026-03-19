@@ -62,8 +62,11 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
     website,
     contact_email,
     contact_whatsapp,
+    platform,
     cartpanda_store_url,
     cartpanda_api_token,
+    ds24_vendor_id,
+    ds24_ipn_passphrase,
     ac_api_url,
     ac_api_key,
     ac_plan,
@@ -74,7 +77,6 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
     brand_color_primary,
     brand_color_secondary,
     tone_of_voice,
-    google_postmaster_access,
     google_drive_folder_url,
   } = req.body;
 
@@ -90,10 +92,10 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       ac_api_url, ac_api_key, ac_plan,
       dns_registrar, dns_login, dns_manages_own,
       logo_url, brand_color_primary, brand_color_secondary, tone_of_voice,
-      google_postmaster_access, google_drive_folder_url
+      google_drive_folder_url
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-      $11, $12, $13, $14, $15, $16, $17, $18, $19
+      $11, $12, $13, $14, $15, $16, $17, $18
     ) RETURNING id`,
     [
       company_name, cnpj || null, website || null, contact_email, contact_whatsapp || null,
@@ -101,12 +103,13 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       ac_api_url || null, ac_api_key || null, ac_plan || null,
       dns_registrar || null, dns_login || null, dns_manages_own === 'true',
       logo_url || null, brand_color_primary || null, brand_color_secondary || null, tone_of_voice || null,
-      google_postmaster_access === 'true', google_drive_folder_url || null,
+      google_drive_folder_url || null,
     ]
   );
 
   const clientId = result?.id;
 
+  // Insert kits
   const kits = parseKits(req.body);
   for (const kit of kits) {
     const slug = kit.name
@@ -122,8 +125,34 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
     );
   }
 
+  // Create store_integrations entry based on selected platform
+  const selectedPlatform = platform || 'cartpanda';
+
+  if (selectedPlatform === 'cartpanda' && cartpanda_store_url) {
+    // Extract slug from URL: https://minhaloja.cartpanda.com → minhaloja
+    const slugMatch = cartpanda_store_url.match(/https?:\/\/([^.]+)\.cartpanda/);
+    const storeSlug = slugMatch ? slugMatch[1] : cartpanda_store_url;
+
+    await query(
+      `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, status)
+       VALUES ($1, 'cartpanda', $2, $3, 'pending')`,
+      [clientId, storeSlug, cartpanda_api_token || '']
+    );
+    logger.info(CTX, `Store integration created: cartpanda/${storeSlug} for client #${clientId}`);
+  }
+
+  if (selectedPlatform === 'digistore24' && ds24_vendor_id) {
+    await query(
+      `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, status)
+       VALUES ($1, 'digistore24', $2, $3, 'pending')`,
+      [clientId, ds24_vendor_id, ds24_ipn_passphrase || '']
+    );
+    logger.info(CTX, `Store integration created: digistore24/${ds24_vendor_id} for client #${clientId}`);
+  }
+
   logger.info(CTX, `✅ New client onboarded: ${company_name}`, {
     id: clientId,
+    platform: selectedPlatform,
     kits: kits.length,
   });
 

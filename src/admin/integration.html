@@ -639,6 +639,7 @@
                     body: JSON.stringify({ shop_slug: slug })
                 });
                 const data = await res.json();
+                result.style.display = 'block';
 
                 if (data.ok) {
                     result.className = 'test-result success';
@@ -648,6 +649,7 @@
                     result.innerHTML = `<i class="fas fa-times-circle"></i> ${data.error}`;
                 }
             } catch (e) {
+                result.style.display = 'block';
                 result.className = 'test-result error';
                 result.innerHTML = '<i class="fas fa-times-circle"></i> Erro ao testar conexão: ' + e.message;
             }

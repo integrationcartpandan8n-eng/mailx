@@ -396,24 +396,25 @@ adminRouter.post('/integration/test', asyncHandler(async (req: Request, res: Res
 
 // POST /admin/integration/store - Save new store integration
 adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Response) => {
-  const { shop_slug, api_token, events } = req.body;
+  const { shop_slug, api_token, events, platform } = req.body;
 
   if (!shop_slug || !api_token) {
     res.status(400).json({ error: 'shop_slug and api_token are required' });
     return;
   }
 
-  logger.info(CTX, `New store integration: ${shop_slug}`, { events });
+  const storePlatform = platform || 'cartpanda';
+  logger.info(CTX, `New store integration: ${storePlatform}/${shop_slug}`, { events });
 
   // Store the integration in the database with 'pending' status (not yet validated via webhook)
   await query(
-    `INSERT INTO store_integrations (shop_slug, api_token, events, status)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (shop_slug) DO UPDATE SET api_token = $2, events = $3, updated_at = NOW()`,
-    [shop_slug, api_token, JSON.stringify(events || {}), 'pending']
+    `INSERT INTO store_integrations (platform, shop_slug, api_token, events, status)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (shop_slug, platform) DO UPDATE SET api_token = $3, events = $4, updated_at = NOW()`,
+    [storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'pending']
   );
 
-  res.json({ ok: true, shop_slug });
+  res.json({ ok: true, shop_slug, platform: storePlatform });
 }));
 
 // ── Existing API Endpoints ──
@@ -666,7 +667,7 @@ adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: 
   await query(
     `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, events, status)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [clientId, storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'active']
+    [clientId, storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'pending']
   );
 
   logger.info(CTX, `Store "${shop_slug}" (${storePlatform}) integrated for client ${clientId}`);

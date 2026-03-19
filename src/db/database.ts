@@ -113,6 +113,10 @@ export async function initDatabase(): Promise<void> {
           ALTER TABLE store_integrations ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'cartpanda';
         EXCEPTION WHEN duplicate_column THEN NULL;
         END $$;
+
+        -- Ensure unique (shop_slug, platform) combination
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_store_slug_platform
+        ON store_integrations (shop_slug, platform);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
