@@ -533,6 +533,27 @@
             </div>
         </div>
 
+        <!-- ActiveCampaign Credentials -->
+        <div class="card" id="acCredentialsSection">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-envelope-open-text"></i> ActiveCampaign</div>
+                <button class="btn btn-accent" onclick="toggleForm('acForm')"><i class="fas fa-pen"></i> Editar</button>
+            </div>
+            <div class="inline-form" id="acForm">
+                <div class="form-row">
+                    <div>
+                        <label>AC API URL *</label>
+                        <input type="url" id="editAcUrl" placeholder="https://suaconta.api-us1.com">
+                    </div>
+                    <div>
+                        <label>AC API Key *</label>
+                        <input type="password" id="editAcKey" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+                    </div>
+                    <button class="btn btn-accent" onclick="saveAcCredentials()" style="height:36px">Salvar</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Kits / Products -->
         <div class="card">
             <div class="card-header">
@@ -746,10 +767,18 @@
                     <div class="info-item"><label>WhatsApp</label><span>${client.contact_whatsapp || '—'}</span></div>
                     <div class="info-item"><label>CNPJ</label><span>${client.cnpj || '—'}</span></div>
                     <div class="info-item"><label>Loja CartPanda</label><span class="mono">${client.cartpanda_store_url || '—'}</span></div>
-                    <div class="info-item"><label>ActiveCampaign</label><span class="mono">${client.ac_api_url ? '✅ Conectado' : '❌ Não configurado'}</span></div>
+                    <div class="info-item"><label>AC API URL</label><span class="mono" style="font-size:0.72rem">${client.ac_api_url || '<span style="color:var(--danger)">Não configurado</span>'}</span></div>
+                    <div class="info-item"><label>AC API Key</label><span class="mono" style="font-size:0.72rem">${client.ac_api_key ? '••••••••' + client.ac_api_key.slice(-6) : '<span style="color:var(--danger)">Não configurada</span>'}</span></div>
                     <div class="info-item"><label>DNS Registrar</label><span>${client.dns_registrar || '—'}</span></div>
                     <div class="info-item"><label>Criado em</label><span>${new Date(client.created_at).toLocaleDateString('pt-BR')}</span></div>
                 `;
+
+                // Show AC edit section
+                const acSection = document.getElementById('acCredentialsSection');
+                if (acSection) {
+                    document.getElementById('editAcUrl').value = client.ac_api_url || '';
+                    document.getElementById('editAcKey').value = client.ac_api_key || '';
+                }
 
                 // Load per-client stats
                 loadClientStats();
@@ -816,6 +845,35 @@
             try {
                 await fetch(`${API}/kits/${kitId}`, { method: 'DELETE' });
                 loadClient();
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        // ── Save AC Credentials ──
+        async function saveAcCredentials() {
+            const acUrl = document.getElementById('editAcUrl').value.trim();
+            const acKey = document.getElementById('editAcKey').value.trim();
+
+            if (!acUrl || !acKey) {
+                alert('Preencha a AC API URL e AC API Key.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/ac-credentials`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ac_api_url: acUrl, ac_api_key: acKey })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    showModal('✅ Sucesso', 'Credenciais ActiveCampaign salvas com sucesso.');
+                    document.getElementById('acForm').classList.remove('show');
+                    loadClient();
+                } else {
+                    showModal('Erro', data.error || 'Falha ao salvar credenciais.');
+                }
             } catch (e) {
                 showModal('Erro', e.message);
             }

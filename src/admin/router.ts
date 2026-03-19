@@ -479,6 +479,23 @@ adminRouter.patch('/clientes/:id/status', asyncHandler(async (req: Request, res:
   res.json({ ok: true });
 }));
 
+// PATCH /admin/clientes/:id/ac-credentials - Update AC credentials
+adminRouter.patch('/clientes/:id/ac-credentials', asyncHandler(async (req: Request, res: Response) => {
+  const { ac_api_url, ac_api_key } = req.body;
+
+  if (!ac_api_url || !ac_api_key) {
+    res.status(400).json({ error: 'ac_api_url and ac_api_key are required' });
+    return;
+  }
+
+  await query(
+    `UPDATE clients SET ac_api_url = $1, ac_api_key = $2, updated_at = NOW() WHERE id = $3`,
+    [ac_api_url, ac_api_key, req.params.id]
+  );
+  logger.info(CTX, `Client ${req.params.id} AC credentials updated`);
+  res.json({ ok: true });
+}));
+
 // POST /admin/clientes/:id/bootstrap - Run AC setup
 adminRouter.post('/clientes/:id/bootstrap', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
