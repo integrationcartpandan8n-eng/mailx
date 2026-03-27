@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { query, isDatabaseReady, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
-import { runBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
+import { runBootstrap, runKitBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
 import {
   SESSION_COOKIE,
   parseCookies,
@@ -697,6 +697,35 @@ adminRouter.delete('/kits/:id', asyncHandler(async (req: Request, res: Response)
   await query(`DELETE FROM kits WHERE id = $1`, [req.params.id]);
   logger.info(CTX, `Kit ${req.params.id} deleted`);
   res.json({ ok: true });
+}));
+
+// PATCH /admin/clientes/:id/kits/:kitId - Enable/disable a product (runs kit bootstrap when enabling)
+adminRouter.patch('/clientes/:id/kits/:kitId', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const kitId = parseInt(req.params.kitId as string);
+  const { enabled } = req.body;
+
+  if (typeof enabled !== 'boolean') {
+    res.status(400).json({ error: 'enabled must be a boolean' });
+    return;
+  }
+
+  if (enabled) {
+    // Run mini-bootstrap first — creates AC tags for this product
+    const result = await runKitBootstrap(clientId, kitId);
+    if (!result.success) {
+      res.status(400).json({ ok: false, error: result.error });
+      return;
+    }
+    // Only mark enabled after successful bootstrap
+    await query(`UPDATE kits SET enabled = true WHERE id = $1 AND client_id = $2`, [kitId, clientId]);
+    logger.info(CTX, `Kit #${kitId} enabled for client #${clientId}`);
+    res.json({ ok: true, bootstrap: result });
+  } else {
+    await query(`UPDATE kits SET enabled = false WHERE id = $1 AND client_id = $2`, [kitId, clientId]);
+    logger.info(CTX, `Kit #${kitId} disabled for client #${clientId}`);
+    res.json({ ok: true });
+  }
 }));
 
 // ── Per-Client Store Management ──

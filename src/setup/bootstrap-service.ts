@@ -5,7 +5,7 @@
  */
 
 import { ActiveCampaignClient } from '../services/activecampaign';
-import { query } from '../db/database';
+import { query, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 
 const CTX = 'Bootstrap';
@@ -18,10 +18,18 @@ export interface BootstrapResult {
   errors: string[];
 }
 
+export interface KitBootstrapResult {
+  success: boolean;
+  tagsCreated: Array<{ name: string; id: string; existed: boolean }>;
+  listId: string | null;
+  error?: string;
+}
+
 interface Kit {
   id: number;
   name: string;
   slug: string;
+  enabled: boolean;
 }
 
 /**
@@ -56,14 +64,14 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
     return result;
   }
 
-  // 2. Fetch kits
+  // 2. Fetch only enabled kits
   const kits = await query<Kit>(
-    `SELECT id, name, slug FROM kits WHERE client_id = $1`,
+    `SELECT id, name, slug, enabled FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
 
   if (kits.length === 0) {
-    result.errors.push('Nenhum kit cadastrado para este cliente');
+    result.errors.push('Nenhum produto habilitado para este cliente. Habilite ao menos um produto antes de rodar o bootstrap.');
     return result;
   }
 
@@ -166,6 +174,100 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
   result.success = result.errors.length === 0;
   logger.info(CTX, `🏁 Bootstrap ${result.success ? 'completed' : 'finished with errors'} for "${company_name}"`);
 
+  return result;
+}
+
+/**
+ * Run bootstrap for a single kit: creates AC tags and links the list.
+ * Called automatically when admin enables a product.
+ */
+export async function runKitBootstrap(clientId: number, kitId: number): Promise<KitBootstrapResult> {
+  const result: KitBootstrapResult = { success: false, tagsCreated: [], listId: null };
+
+  const clients = await query<any>(
+    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  if (!clients[0]?.ac_api_url || !clients[0]?.ac_api_key) {
+    result.error = 'Credenciais do ActiveCampaign não configuradas para este cliente';
+    return result;
+  }
+
+  const kit = await queryOne<{ id: number; name: string; ac_list_id: string | null }>(
+    `SELECT id, name, ac_list_id FROM kits WHERE id = $1 AND client_id = $2`,
+    [kitId, clientId]
+  );
+  if (!kit) {
+    result.error = 'Produto não encontrado';
+    return result;
+  }
+
+  const ac = new ActiveCampaignClient(clients[0].ac_api_url, clients[0].ac_api_key);
+
+  // Ensure "Todos os contatos" list exists
+  let listId = kit.ac_list_id;
+  if (!listId) {
+    try {
+      const existing = await ac.findListByName('Todos os contatos');
+      if (existing) {
+        listId = existing.id;
+      } else {
+        const created = await ac.createList({ name: 'Todos os contatos', stringid: 'todos-os-contatos' });
+        listId = created.id;
+      }
+    } catch (err: any) {
+      result.error = `Falha ao encontrar lista: ${err.message}`;
+      return result;
+    }
+  }
+
+  // Create the 5 tags for this kit
+  const tagsToCreate = [
+    { tag: `[${kit.name}] Compra Aprovada`,   field: 'ac_tag_compra_id' },
+    { tag: `[${kit.name}] Abandono`,           field: 'ac_tag_abandono_id' },
+    { tag: `[${kit.name}] Cartão Recusado`,    field: 'ac_tag_cartao_recusado_id' },
+    { tag: `[${kit.name}] Reembolso`,          field: 'ac_tag_reembolso_id' },
+    { tag: `[${kit.name}] Chargeback`,         field: 'ac_tag_chargeback_id' },
+  ];
+
+  const tagIds: Record<string, string> = {};
+
+  for (const t of tagsToCreate) {
+    try {
+      const existing = await ac.findTagByName(t.tag);
+      if (existing) {
+        tagIds[t.field] = existing.id;
+        result.tagsCreated.push({ name: t.tag, id: existing.id, existed: true });
+      } else {
+        const created = await ac.createTag({ tag: t.tag });
+        tagIds[t.field] = created.id;
+        result.tagsCreated.push({ name: t.tag, id: created.id, existed: false });
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    } catch (err: any) {
+      result.error = `Falha ao criar tag "${t.tag}": ${err.message}`;
+      return result;
+    }
+  }
+
+  // Save IDs back to kit
+  await query(
+    `UPDATE kits
+     SET ac_list_id = $1,
+         ac_tag_compra_id = $2,
+         ac_tag_abandono_id = $3,
+         ac_tag_cartao_recusado_id = $4,
+         ac_tag_reembolso_id = $5,
+         ac_tag_chargeback_id = $6
+     WHERE id = $7`,
+    [listId, tagIds['ac_tag_compra_id'], tagIds['ac_tag_abandono_id'],
+     tagIds['ac_tag_cartao_recusado_id'], tagIds['ac_tag_reembolso_id'],
+     tagIds['ac_tag_chargeback_id'], kitId]
+  );
+
+  result.listId = listId;
+  result.success = true;
+  logger.info(CTX, `✅ Kit bootstrap done for kit #${kitId} (${kit.name})`);
   return result;
 }
 

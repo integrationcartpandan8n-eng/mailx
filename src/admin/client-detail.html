@@ -192,8 +192,71 @@
         }
 
         .kit-table .tag.green { background: var(--success-bg); color: var(--success); }
+        .kit-table .tag.gray { background: rgba(255,255,255,0.05); color: var(--text-muted); }
 
         .kit-actions-cell { display: flex; gap: 0.5rem; }
+
+        /* Toggle switch */
+        .toggle-wrap {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .toggle {
+            position: relative;
+            width: 38px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+
+        .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: var(--border-light);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .toggle-slider:before {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            left: 3px;
+            top: 3px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle input:checked + .toggle-slider { background: var(--success); }
+        .toggle input:checked + .toggle-slider:before { transform: translateX(18px); }
+        .toggle input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
+
+        .toggle-label {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-dim);
+        }
+
+        .platform-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .platform-badge.cartpanda { background: rgba(59,130,246,0.1); color: var(--accent-light); }
+        .platform-badge.digistore24 { background: rgba(0,214,143,0.1); color: var(--success); }
+        .platform-badge.manual { background: rgba(255,255,255,0.05); color: var(--text-muted); }
 
         /* Stores Table */
         .store-table {
@@ -557,36 +620,23 @@
         <!-- Kits / Products -->
         <div class="card">
             <div class="card-header">
-                <div class="card-title"><i class="fas fa-box-open"></i> Produtos / Kits</div>
-                <button class="btn btn-accent" onclick="toggleForm('kitForm')"><i class="fas fa-plus"></i> Novo Produto</button>
-            </div>
-            <div class="inline-form" id="kitForm">
-                <div class="form-row">
-                    <div>
-                        <label>Nome do Kit *</label>
-                        <input type="text" id="newKitName" placeholder="Kit Emagrecedor Plus">
-                    </div>
-                    <div>
-                        <label>Preço (R$)</label>
-                        <input type="number" id="newKitPrice" step="0.01" placeholder="99.90">
-                    </div>
-                    <button class="btn btn-accent" onclick="addKit()" style="height:36px">Adicionar</button>
-                </div>
+                <div class="card-title"><i class="fas fa-box-open"></i> Produtos</div>
+                <span style="font-size:0.72rem; color:var(--text-muted)">Descobertos via webhook — habilite para enviar emails</span>
             </div>
             <div class="card-body" style="padding:0">
                 <table class="kit-table">
                     <thead>
                         <tr>
-                            <th>Nome</th>
-                            <th>Slug</th>
-                            <th>Preço</th>
-                            <th>AC Lista</th>
+                            <th>Produto</th>
+                            <th>Plataforma</th>
+                            <th>ID Externo</th>
                             <th>Tags AC</th>
+                            <th>Enviar Emails</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody id="kitsTableBody">
-                        <tr><td colspan="6" class="empty-state"><i class="fas fa-box-open"></i>Nenhum kit cadastrado</td></tr>
+                        <tr><td colspan="6" class="empty-state"><i class="fas fa-satellite-dish"></i>Aguardando webhooks com produtos</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -797,51 +847,81 @@
         function renderKits(kits) {
             const tbody = document.getElementById('kitsTableBody');
             if (!kits || kits.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><i class="fas fa-box-open"></i>Nenhum kit cadastrado</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><i class="fas fa-satellite-dish"></i>Aguardando webhooks com produtos</td></tr>';
                 return;
             }
-            tbody.innerHTML = kits.map(k => `
-                <tr>
-                    <td style="color:#fff; font-weight:500">${k.name}</td>
-                    <td style="font-family:monospace; color:var(--text-dim); font-size:0.75rem">${k.slug}</td>
-                    <td>${k.price ? 'R$ ' + parseFloat(k.price).toFixed(2) : '—'}</td>
-                    <td>${k.ac_list_id ? `<span class="tag green">ID: ${k.ac_list_id}</span>` : '<span class="tag">Pendente</span>'}</td>
-                    <td>${k.ac_tag_compra_id ? `<span class="tag green">✓</span>` : '<span class="tag">—</span>'}</td>
+
+            tbody.innerHTML = kits.map(k => {
+                const platform = k.platform || 'manual';
+                const platformLabel = platform === 'cartpanda' ? '🛒 CartPanda'
+                    : platform === 'digistore24' ? '🌐 DS24'
+                    : '✏️ Manual';
+                const platformClass = platform === 'cartpanda' ? 'cartpanda'
+                    : platform === 'digistore24' ? 'digistore24'
+                    : 'manual';
+
+                const tagsOk = k.ac_tag_compra_id && k.ac_tag_abandono_id;
+                const tagsHtml = tagsOk
+                    ? `<span class="tag green">✓ Configuradas</span>`
+                    : k.enabled
+                        ? `<span class="tag" style="color:var(--warning);background:var(--warning-bg)">⏳ Criando...</span>`
+                        : `<span class="tag gray">Pendente</span>`;
+
+                const externalIdHtml = k.external_id
+                    ? `<span style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${k.external_id}</span>`
+                    : `<span style="color:var(--text-muted)">—</span>`;
+
+                return `
+                <tr id="kit-row-${k.id}">
+                    <td style="color:#fff; font-weight:600">${k.name}</td>
+                    <td><span class="platform-badge ${platformClass}">${platformLabel}</span></td>
+                    <td>${externalIdHtml}</td>
+                    <td>${tagsHtml}</td>
+                    <td>
+                        <label class="toggle">
+                            <input type="checkbox" ${k.enabled ? 'checked' : ''} onchange="toggleKit(${k.id}, this)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </td>
                     <td><button class="btn btn-danger-sm" onclick="deleteKit(${k.id})"><i class="fas fa-trash"></i></button></td>
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
         }
 
-        // ── Add Kit ──
-        async function addKit() {
-            const name = document.getElementById('newKitName').value.trim();
-            const price = document.getElementById('newKitPrice').value;
-            if (!name) { alert('Nome do kit é obrigatório'); return; }
+        // ── Toggle Kit enabled/disabled ──
+        async function toggleKit(kitId, checkbox) {
+            const enabled = checkbox.checked;
+            checkbox.disabled = true;
 
             try {
-                const res = await fetch(`${API}/clientes/${clientId}/kits`, {
-                    method: 'POST',
+                const res = await fetch(`${API}/clientes/${clientId}/kits/${kitId}`, {
+                    method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, price: price || null })
+                    body: JSON.stringify({ enabled })
                 });
                 const data = await res.json();
+
                 if (data.ok) {
-                    document.getElementById('newKitName').value = '';
-                    document.getElementById('newKitPrice').value = '';
-                    toggleForm('kitForm');
+                    if (enabled) {
+                        const tags = (data.bootstrap?.tagsCreated || []).length;
+                        showModal('✅ Produto habilitado!', `Tags criadas no ActiveCampaign (${tags}). Emails serão enviados para este produto a partir de agora.`);
+                    }
                     loadClient();
-                    showModal('✅ Kit adicionado!', `"${name}" foi cadastrado. Rode o Bootstrap para criar listas/tags no ActiveCampaign.`);
                 } else {
-                    showModal('Erro', data.error || 'Erro ao adicionar kit');
+                    checkbox.checked = !enabled; // revert
+                    showModal('❌ Erro ao habilitar', data.error || 'Verifique as credenciais do ActiveCampaign.');
                 }
             } catch (e) {
+                checkbox.checked = !enabled;
                 showModal('Erro', e.message);
+            } finally {
+                checkbox.disabled = false;
             }
         }
 
         // ── Delete Kit ──
         async function deleteKit(kitId) {
-            if (!confirm('Remover este kit?')) return;
+            if (!confirm('Remover este produto?')) return;
             try {
                 await fetch(`${API}/kits/${kitId}`, { method: 'DELETE' });
                 loadClient();

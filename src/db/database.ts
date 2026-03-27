@@ -123,6 +123,19 @@ export async function initDatabase(): Promise<void> {
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_reembolso_id VARCHAR(50);
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_chargeback_id VARCHAR(50);
 
+        -- Auto-discovery columns
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS external_id VARCHAR(255);
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'cartpanda';
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT false;
+
+        -- Enable existing manually-created kits (those without external_id)
+        UPDATE kits SET enabled = true WHERE external_id IS NULL AND enabled = false;
+
+        -- Unique index for upsert by (client_id, platform, external_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_kits_client_platform_external
+          ON kits (client_id, platform, external_id)
+          WHERE external_id IS NOT NULL;
+
         -- Add client_id to webhook_logs for per-client aggregation
         ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL;
 

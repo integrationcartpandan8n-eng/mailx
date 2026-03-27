@@ -1,39 +1,22 @@
 import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
-import { query, queryOne, isDatabaseReady } from '../db/database';
+import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
+import { upsertProduct, extractCartPandaProductId } from './product-upsert';
 
 const CTX = 'Webhook:OrderPaid';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
-interface KitRow {
-  id: number;
-  name: string;
-  slug: string;
-  ac_list_id: string | null;
-  ac_tag_compra_id: string | null;
-  created_at: string;
-}
 
 export async function handleOrderPaid(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const payload = req.body;
 
   try {
-    // 1. Identify the store from the payload
+    // 1. Identify the store
     const slug = extractCartPandaSlug(payload);
     const store = await lookupStore('cartpanda', slug);
 
-    // Log webhook to DB with client association
+    // Log webhook to DB
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
@@ -47,7 +30,7 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
       }
     }
 
-    // 2. Extract data from CartPanda payload
+    // 2. Extract data
     const email = payload.email || payload.customer?.email;
     const firstName = payload.first_name || payload.customer?.first_name || '';
     const lastName = payload.last_name || payload.customer?.last_name || '';
@@ -62,91 +45,79 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     }
 
     const productName = lineItems[0]?.title || lineItems[0]?.name || 'produto';
-    const productSlug = slugify(productName);
+    const externalId = extractCartPandaProductId(lineItems[0]);
 
     logger.info(CTX, `Processing order ${orderId} for ${email}`, {
       product: productName,
+      externalId,
       client: store.clientId,
-      resolvedFromDb: store.resolvedFromDb,
     });
 
-    // 3. Get AC credentials (per-client from store lookup)
+    // 3. Validate AC credentials
     if (!store.acApiUrl || !store.acApiKey) {
       logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
       res.status(500).json({ error: 'AC not configured' });
       return;
     }
 
-    // 4. Look up kit in DB to get stored tag/list IDs and creation date
-    const kit = store.clientId ? await queryOne<KitRow>(
-      `SELECT id, name, slug, ac_list_id, ac_tag_compra_id, created_at FROM kits WHERE client_id = $1 AND slug = $2`,
-      [store.clientId, productSlug]
-    ) : null;
+    // 4. Upsert product (auto-discovery)
+    const kit = await upsertProduct(store.clientId, 'cartpanda', externalId, productName);
 
     const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
 
-    // 5. Sync contact
+    // 5. Sync contact (always)
     const contact = await ac.syncContact({ email, firstName, lastName, phone });
 
-    // 6. Add "Compra Aprovada" tag
-    const tagName = `[${kit?.name || productName}] Compra Aprovada`;
-    if (kit?.ac_tag_compra_id) {
-      await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
-    } else {
-      const tag = await ac.findTagByName(tagName);
-      if (tag) {
-        await ac.addTagToContact(contact.id, tag.id);
+    // 6. Tags, list, automation — only if product is enabled by admin
+    if (kit?.enabled) {
+      // Tag: [Product] Compra Aprovada
+      const tagName = `[${kit.name}] Compra Aprovada`;
+      if (kit.ac_tag_compra_id) {
+        await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
       } else {
-        logger.warn(CTX, `Tag not found: ${tagName} — skipping tag assignment`);
+        const tag = await ac.findTagByName(tagName);
+        if (tag) await ac.addTagToContact(contact.id, tag.id);
+        else logger.warn(CTX, `Tag not found: ${tagName}`);
       }
-    }
 
-    // 7. Add to "Todos os contatos" list (not newsletter)
-    const listId = kit?.ac_list_id ?? null;
-    if (listId) {
-      await ac.addContactToList(contact.id, listId);
-    } else {
-      const list = await ac.findListByName('Todos os contatos');
-      if (list) {
-        await ac.addContactToList(contact.id, list.id);
+      // List: Todos os contatos
+      if (kit.ac_list_id) {
+        await ac.addContactToList(contact.id, kit.ac_list_id);
+      } else {
+        const list = await ac.findListByName('Todos os contatos');
+        if (list) await ac.addContactToList(contact.id, list.id);
       }
-    }
 
-    // 8. Trigger automation only if kit is older than 1 week
-    const kitAge = kit ? Date.now() - new Date(kit.created_at).getTime() : Infinity;
-    if (kitAge >= ONE_WEEK_MS) {
-      const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-      if (automationId) {
-        await ac.addContactToAutomation(contact.id, automationId);
+      // Automation: only if kit > 1 week old
+      const kitAge = Date.now() - new Date(kit.created_at).getTime();
+      if (kitAge >= ONE_WEEK_MS) {
+        const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
+        if (automationId) await ac.addContactToAutomation(contact.id, automationId);
+      } else {
+        logger.info(CTX, `Kit "${kit.name}" < 7 days old — automation skipped`);
       }
     } else {
-      logger.info(CTX, `Kit "${kit?.name || productName}" < 7 days old — automation skipped`);
+      logger.info(CTX, `Product "${productName}" not yet enabled by admin — contact synced only`);
     }
 
     // Update webhook log
     if (isDatabaseReady() && logId) {
       try {
-        await query(
-          `UPDATE webhook_logs SET status = 'processed', processed_at = NOW() WHERE id = $1`,
-          [logId]
-        );
-      } catch (dbErr: any) {
-        logger.warn(CTX, 'Failed to update webhook log', dbErr.message);
-      }
+        await query(`UPDATE webhook_logs SET status = 'processed', processed_at = NOW() WHERE id = $1`, [logId]);
+      } catch (_) {}
     }
 
-    // Auto-activate store integration on first successful webhook
+    // Auto-activate store integration
     if (store.storeId && store.resolvedFromDb) {
       try {
         await query(`UPDATE store_integrations SET status = 'active', updated_at = NOW() WHERE id = $1`, [store.storeId]);
       } catch (_) {}
     }
 
-    logger.info(CTX, `✅ Order ${orderId} processed successfully for ${email}`);
+    logger.info(CTX, `✅ Order ${orderId} processed for ${email}`);
     res.status(200).json({ ok: true, contactId: contact.id });
   } catch (error: any) {
     logger.error(CTX, 'Failed to process order', error.message);
-
     if (isDatabaseReady()) {
       try {
         await query(
@@ -154,9 +125,8 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
            WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'order.paid' ORDER BY created_at DESC LIMIT 1)`,
           [error.message]
         );
-      } catch (_) { /* best-effort */ }
+      } catch (_) {}
     }
-
     res.status(500).json({ error: 'Internal processing error' });
   }
 }
