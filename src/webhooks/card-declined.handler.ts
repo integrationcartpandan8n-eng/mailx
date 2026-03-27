@@ -4,8 +4,7 @@ import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 
-const CTX = 'Webhook:OrderPaid';
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const CTX = 'Webhook:CardDeclined';
 
 function slugify(text: string): string {
   return text
@@ -21,11 +20,10 @@ interface KitRow {
   name: string;
   slug: string;
   ac_list_id: string | null;
-  ac_tag_compra_id: string | null;
-  created_at: string;
+  ac_tag_cartao_recusado_id: string | null;
 }
 
-export async function handleOrderPaid(req: Request, res: Response, _next: NextFunction): Promise<void> {
+export async function handleCardDeclined(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const payload = req.body;
 
   try {
@@ -33,13 +31,13 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     const slug = extractCartPandaSlug(payload);
     const store = await lookupStore('cartpanda', slug);
 
-    // Log webhook to DB with client association
+    // Log webhook to DB
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
         const result = await query(
           `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, 'order.paid', 'cartpanda', JSON.stringify(payload), 'processing']
+          [store.clientId, 'card.declined', 'cartpanda', JSON.stringify(payload), 'processing']
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -47,7 +45,7 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
       }
     }
 
-    // 2. Extract data from CartPanda payload
+    // 2. Extract data
     const email = payload.email || payload.customer?.email;
     const firstName = payload.first_name || payload.customer?.first_name || '';
     const lastName = payload.last_name || payload.customer?.last_name || '';
@@ -64,22 +62,21 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     const productName = lineItems[0]?.title || lineItems[0]?.name || 'produto';
     const productSlug = slugify(productName);
 
-    logger.info(CTX, `Processing order ${orderId} for ${email}`, {
+    logger.info(CTX, `Processing card declined for ${email}`, {
       product: productName,
       client: store.clientId,
-      resolvedFromDb: store.resolvedFromDb,
     });
 
-    // 3. Get AC credentials (per-client from store lookup)
+    // 3. Get AC credentials
     if (!store.acApiUrl || !store.acApiKey) {
       logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
       res.status(500).json({ error: 'AC not configured' });
       return;
     }
 
-    // 4. Look up kit in DB to get stored tag/list IDs and creation date
+    // 4. Look up kit in DB
     const kit = store.clientId ? await queryOne<KitRow>(
-      `SELECT id, name, slug, ac_list_id, ac_tag_compra_id, created_at FROM kits WHERE client_id = $1 AND slug = $2`,
+      `SELECT id, name, slug, ac_list_id, ac_tag_cartao_recusado_id FROM kits WHERE client_id = $1 AND slug = $2`,
       [store.clientId, productSlug]
     ) : null;
 
@@ -88,10 +85,10 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     // 5. Sync contact
     const contact = await ac.syncContact({ email, firstName, lastName, phone });
 
-    // 6. Add "Compra Aprovada" tag
-    const tagName = `[${kit?.name || productName}] Compra Aprovada`;
-    if (kit?.ac_tag_compra_id) {
-      await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
+    // 6. Add "Cartão Recusado" tag
+    const tagName = `[${kit?.name || productName}] Cartão Recusado`;
+    if (kit?.ac_tag_cartao_recusado_id) {
+      await ac.addTagToContact(contact.id, kit.ac_tag_cartao_recusado_id);
     } else {
       const tag = await ac.findTagByName(tagName);
       if (tag) {
@@ -112,17 +109,6 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
       }
     }
 
-    // 8. Trigger automation only if kit is older than 1 week
-    const kitAge = kit ? Date.now() - new Date(kit.created_at).getTime() : Infinity;
-    if (kitAge >= ONE_WEEK_MS) {
-      const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-      if (automationId) {
-        await ac.addContactToAutomation(contact.id, automationId);
-      }
-    } else {
-      logger.info(CTX, `Kit "${kit?.name || productName}" < 7 days old — automation skipped`);
-    }
-
     // Update webhook log
     if (isDatabaseReady() && logId) {
       try {
@@ -135,23 +121,16 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
       }
     }
 
-    // Auto-activate store integration on first successful webhook
-    if (store.storeId && store.resolvedFromDb) {
-      try {
-        await query(`UPDATE store_integrations SET status = 'active', updated_at = NOW() WHERE id = $1`, [store.storeId]);
-      } catch (_) {}
-    }
-
-    logger.info(CTX, `✅ Order ${orderId} processed successfully for ${email}`);
+    logger.info(CTX, `✅ Card declined processed for ${email}`);
     res.status(200).json({ ok: true, contactId: contact.id });
   } catch (error: any) {
-    logger.error(CTX, 'Failed to process order', error.message);
+    logger.error(CTX, 'Failed to process card declined', error.message);
 
     if (isDatabaseReady()) {
       try {
         await query(
           `UPDATE webhook_logs SET status = 'failed', error = $1
-           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'order.paid' ORDER BY created_at DESC LIMIT 1)`,
+           WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'card.declined' ORDER BY created_at DESC LIMIT 1)`,
           [error.message]
         );
       } catch (_) { /* best-effort */ }

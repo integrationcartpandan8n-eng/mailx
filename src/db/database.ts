@@ -76,17 +76,21 @@ export async function initDatabase(): Promise<void> {
           name VARCHAR(255) NOT NULL,
           slug VARCHAR(255) NOT NULL,
           price DECIMAL(10,2),
-          
+
           -- ActiveCampaign IDs (populated after bootstrap)
           ac_list_id VARCHAR(50),
           ac_tag_compra_id VARCHAR(50),
           ac_tag_abandono_id VARCHAR(50),
-          
+          ac_tag_cartao_recusado_id VARCHAR(50),
+          ac_tag_reembolso_id VARCHAR(50),
+          ac_tag_chargeback_id VARCHAR(50),
+
           created_at TIMESTAMP DEFAULT NOW()
         );
 
         CREATE TABLE IF NOT EXISTS webhook_logs (
           id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
           event_type VARCHAR(50) NOT NULL,
           source VARCHAR(50) NOT NULL,
           payload JSONB,
@@ -113,6 +117,14 @@ export async function initDatabase(): Promise<void> {
           ALTER TABLE store_integrations ADD COLUMN IF NOT EXISTS platform VARCHAR(30) DEFAULT 'cartpanda';
         EXCEPTION WHEN duplicate_column THEN NULL;
         END $$;
+
+        -- Add new tag columns to kits if they don't exist
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_cartao_recusado_id VARCHAR(50);
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_reembolso_id VARCHAR(50);
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_chargeback_id VARCHAR(50);
+
+        -- Add client_id to webhook_logs for per-client aggregation
+        ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL;
 
         -- Ensure unique (shop_slug, platform) combination
         CREATE UNIQUE INDEX IF NOT EXISTS idx_store_slug_platform

@@ -71,10 +71,9 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
 
   const ac = new ActiveCampaignClient(ac_api_url, ac_api_key);
 
-  // 3. Create Lists (only 2 fixed lists per client requirement)
+  // 3. Create Lists (only the main contacts list — newsletter is not used)
   const listsToCreate = [
     { name: 'Todos os contatos', stringid: 'todos-os-contatos' },
-    { name: 'Newsletter', stringid: 'newsletter' },
   ];
 
   const listIds: Record<string, string> = {};
@@ -100,15 +99,17 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
     }
   }
 
-  // 4. Create Tags
+  // 4. Create Tags — format: [Kit Name] Evento
   const tagsToCreate = [
     ...kits.flatMap((k) => [
-      { tag: `comprou-kit-${k.slug}`, description: `Comprou o ${k.name}` },
-      { tag: `carrinho-abandonado-kit-${k.slug}`, description: `Abandonou carrinho do ${k.name}` },
+      { tag: `[${k.name}] Compra Aprovada`,    description: `Comprou o ${k.name}` },
+      { tag: `[${k.name}] Abandono`,            description: `Abandonou carrinho do ${k.name}` },
+      { tag: `[${k.name}] Cartão Recusado`,     description: `Cartão recusado no checkout do ${k.name}` },
+      { tag: `[${k.name}] Reembolso`,           description: `Reembolso do ${k.name}` },
+      { tag: `[${k.name}] Chargeback`,          description: `Chargeback do ${k.name}` },
     ]),
     { tag: 'lead-engajado', description: 'Abriu/clicou nos últimos 30 dias' },
     { tag: 'lead-frio', description: 'Sem interação em >30 dias' },
-    { tag: 'newsletter-ativo', description: 'Recebe campanhas de newsletter' },
   ];
 
   const tagIds: Record<string, string> = {};
@@ -134,15 +135,25 @@ export async function runBootstrap(clientId: number): Promise<BootstrapResult> {
     }
   }
 
-  // 5. Update kits in DB with AC IDs (list = "Todos os contatos" for all kits)
+  // 5. Update kits in DB with AC IDs
   const mainListId = listIds['todos-os-contatos'] || null;
   for (const kit of kits) {
-    const tagCompraId = tagIds[`comprou-kit-${kit.slug}`] || null;
-    const tagAbandonoId = tagIds[`carrinho-abandonado-kit-${kit.slug}`] || null;
+    const tagCompraId          = tagIds[`[${kit.name}] Compra Aprovada`]    || null;
+    const tagAbandonoId        = tagIds[`[${kit.name}] Abandono`]            || null;
+    const tagCartaoRecusadoId  = tagIds[`[${kit.name}] Cartão Recusado`]     || null;
+    const tagReembolsoId       = tagIds[`[${kit.name}] Reembolso`]           || null;
+    const tagChargebackId      = tagIds[`[${kit.name}] Chargeback`]          || null;
 
     await query(
-      `UPDATE kits SET ac_list_id = $1, ac_tag_compra_id = $2, ac_tag_abandono_id = $3 WHERE id = $4`,
-      [mainListId, tagCompraId, tagAbandonoId, kit.id]
+      `UPDATE kits
+       SET ac_list_id = $1,
+           ac_tag_compra_id = $2,
+           ac_tag_abandono_id = $3,
+           ac_tag_cartao_recusado_id = $4,
+           ac_tag_reembolso_id = $5,
+           ac_tag_chargeback_id = $6
+       WHERE id = $7`,
+      [mainListId, tagCompraId, tagAbandonoId, tagCartaoRecusadoId, tagReembolsoId, tagChargebackId, kit.id]
     );
   }
 

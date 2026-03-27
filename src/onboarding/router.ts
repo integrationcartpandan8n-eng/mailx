@@ -3,10 +3,14 @@ import path from 'path';
 import fs from 'fs';
 import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { requireAuth } from '../middleware/auth';
 
 const CTX = 'Onboarding';
 
 export const onboardingRouter = Router();
+
+// Requer autenticação de admin para todas as rotas de onboarding
+onboardingRouter.use(requireAuth);
 
 // Resolve HTML files directory — works in both dev (tsx) and prod (dist/) mode
 function getHtmlDir(): string {

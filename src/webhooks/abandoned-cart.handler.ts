@@ -1,10 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
-import { query, isDatabaseReady } from '../db/database';
+import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 
 const CTX = 'Webhook:AbandonedCart';
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function slugify(text: string): string {
   return text
@@ -13,6 +14,15 @@ function slugify(text: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+interface KitRow {
+  id: number;
+  name: string;
+  slug: string;
+  ac_list_id: string | null;
+  ac_tag_abandono_id: string | null;
+  created_at: string;
 }
 
 export async function handleAbandonedCart(req: Request, res: Response, _next: NextFunction): Promise<void> {
@@ -28,8 +38,8 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     if (isDatabaseReady()) {
       try {
         const result = await query(
-          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4) RETURNING id`,
-          ['abandoned_cart', 'cartpanda', JSON.stringify(payload), 'processing']
+          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [store.clientId, 'abandoned_cart', 'cartpanda', JSON.stringify(payload), 'processing']
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -63,34 +73,50 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
       return;
     }
 
+    // 4. Look up kit in DB
+    const kit = store.clientId ? await queryOne<KitRow>(
+      `SELECT id, name, slug, ac_list_id, ac_tag_abandono_id, created_at FROM kits WHERE client_id = $1 AND slug = $2`,
+      [store.clientId, productSlug]
+    ) : null;
+
     const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
 
-    // 4. Sync contact
+    // 5. Sync contact
     const contact = await ac.syncContact({ email, firstName });
 
-    // 5. Add abandonment tag
-    const tagName = `carrinho-abandonado-kit-${productSlug}`;
-    const tag = await ac.findTagByName(tagName);
-    if (tag) {
-      await ac.addTagToContact(contact.id, tag.id);
+    // 6. Add "Abandono" tag
+    const tagName = `[${kit?.name || productName}] Abandono`;
+    if (kit?.ac_tag_abandono_id) {
+      await ac.addTagToContact(contact.id, kit.ac_tag_abandono_id);
     } else {
-      const genericTag = await ac.findTagByName('carrinho-abandonado');
-      if (genericTag) {
-        await ac.addTagToContact(contact.id, genericTag.id);
+      const tag = await ac.findTagByName(tagName);
+      if (tag) {
+        await ac.addTagToContact(contact.id, tag.id);
+      } else {
+        logger.warn(CTX, `Tag not found: ${tagName}`);
       }
-      logger.warn(CTX, `Tag not found: ${tagName}`);
     }
 
-    // 6. Add to abandoned cart list
-    const list = await ac.findListByName('Carrinho Abandonado');
-    if (list) {
-      await ac.addContactToList(contact.id, list.id);
+    // 7. Add to "Todos os contatos" list (not newsletter)
+    const listId = kit?.ac_list_id ?? null;
+    if (listId) {
+      await ac.addContactToList(contact.id, listId);
+    } else {
+      const list = await ac.findListByName('Todos os contatos');
+      if (list) {
+        await ac.addContactToList(contact.id, list.id);
+      }
     }
 
-    // 7. Trigger abandoned cart automation
-    const automationId = process.env.AC_AUTOMATION_CARRINHO_ABANDONADO;
-    if (automationId) {
-      await ac.addContactToAutomation(contact.id, automationId);
+    // 8. Trigger automation only if kit is older than 1 week
+    const kitAge = kit ? Date.now() - new Date(kit.created_at).getTime() : Infinity;
+    if (kitAge >= ONE_WEEK_MS) {
+      const automationId = process.env.AC_AUTOMATION_CARRINHO_ABANDONADO;
+      if (automationId) {
+        await ac.addContactToAutomation(contact.id, automationId);
+      }
+    } else {
+      logger.info(CTX, `Kit "${kit?.name || productName}" < 7 days old — automation skipped`);
     }
 
     // Update webhook log
@@ -113,7 +139,7 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     if (isDatabaseReady()) {
       try {
         await query(
-          `UPDATE webhook_logs SET status = 'failed', error = $1 
+          `UPDATE webhook_logs SET status = 'failed', error = $1
            WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'abandoned_cart' ORDER BY created_at DESC LIMIT 1)`,
           [error.message]
         );

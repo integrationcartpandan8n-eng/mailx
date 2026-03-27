@@ -2,7 +2,7 @@
  * Digistore24 Refund/Chargeback Handler
  *
  * Processes IPN notifications for 'refund' and 'chargeback' events.
- * Tags the contact in ActiveCampaign with a refund tag.
+ * Tags the contact in ActiveCampaign: [Product] Reembolso or [Product] Chargeback.
  *
  * Endpoint: POST /webhook/digistore24/refund
  *
@@ -12,11 +12,19 @@
 import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
-import { query, isDatabaseReady } from '../db/database';
+import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractDS24Identifier } from './store-lookup';
 
 const CTX = 'Webhook:DS24:Refund';
+
+interface KitRow {
+  id: number;
+  name: string;
+  slug: string;
+  ac_tag_reembolso_id: string | null;
+  ac_tag_chargeback_id: string | null;
+}
 
 export async function handleDS24Refund(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const params = { ...req.body, ...req.query };
@@ -38,7 +46,8 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
 
     // 3. Normalize
     const data = normalizePayload(params);
-    const eventType = params.event === 'chargeback' ? 'order.chargeback' : 'order.refunded';
+    const isChargeback = params.event === 'chargeback';
+    const eventType = isChargeback ? 'order.chargeback' : 'order.refunded';
 
     if (!data.email) {
       res.status(400).json({ error: 'Missing email' });
@@ -55,8 +64,8 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     if (isDatabaseReady()) {
       try {
         const result = await query(
-          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4) RETURNING id`,
-          [eventType, 'digistore24', JSON.stringify(data.rawPayload), 'processing']
+          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [store.clientId, eventType, 'digistore24', JSON.stringify(data.rawPayload), 'processing']
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -66,20 +75,30 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
 
     // 5. Tag contact in AC (per-client credentials)
     if (store.acApiUrl && store.acApiKey) {
-      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+      // Look up kit in DB
+      const kit = store.clientId ? await queryOne<KitRow>(
+        `SELECT id, name, slug, ac_tag_reembolso_id, ac_tag_chargeback_id FROM kits WHERE client_id = $1 AND slug = $2`,
+        [store.clientId, data.productSlug]
+      ) : null;
 
+      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
       const contact = await ac.syncContact({ email: data.email });
 
-      const tagName = `reembolso-kit-${data.productSlug}`;
-      const tag = await ac.findTagByName(tagName);
-      if (tag) {
-        await ac.addTagToContact(contact.id, tag.id);
+      const tagName = isChargeback
+        ? `[${kit?.name || data.productName}] Chargeback`
+        : `[${kit?.name || data.productName}] Reembolso`;
+
+      const storedTagId = isChargeback ? kit?.ac_tag_chargeback_id : kit?.ac_tag_reembolso_id;
+
+      if (storedTagId) {
+        await ac.addTagToContact(contact.id, storedTagId);
       } else {
-        const genericTag = await ac.findTagByName('reembolso');
-        if (genericTag) {
-          await ac.addTagToContact(contact.id, genericTag.id);
+        const tag = await ac.findTagByName(tagName);
+        if (tag) {
+          await ac.addTagToContact(contact.id, tag.id);
+        } else {
+          logger.warn(CTX, `Tag not found: ${tagName}`);
         }
-        logger.warn(CTX, `Tag not found: ${tagName}`);
       }
     }
 

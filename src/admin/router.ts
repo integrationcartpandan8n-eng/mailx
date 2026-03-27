@@ -1,48 +1,30 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
-import crypto from 'crypto';
 import { query, isDatabaseReady, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import { runBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
-import { env } from '../config/env';
+import {
+  SESSION_COOKIE,
+  parseCookies,
+  isValidSession,
+  createSession,
+  destroySession,
+  sessionCookieHeader,
+  clearCookieHeader,
+  verifyAdminPassword,
+} from '../middleware/auth';
 
 const CTX = 'Admin';
 
 export const adminRouter = Router();
-
-// ── Session Management (in-memory, httpOnly cookies) ──
-const sessions = new Map<string, { createdAt: number }>();
-const SESSION_COOKIE = 'mailx_session';
-const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
-function isValidSession(token: string | undefined): boolean {
-  if (!token) return false;
-  const session = sessions.get(token);
-  if (!session) return false;
-  if (Date.now() - session.createdAt > SESSION_TTL) {
-    sessions.delete(token);
-    return false;
-  }
-  return true;
-}
-
-function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const cookies: Record<string, string> = {};
-  if (!cookieHeader) return cookies;
-  cookieHeader.split(';').forEach((c) => {
-    const [key, ...val] = c.trim().split('=');
-    cookies[key] = val.join('=');
-  });
-  return cookies;
-}
 
 // ── Login Page (GET /admin/login) ──
 adminRouter.get('/login', (_req: Request, res: Response) => {
   const loginDir = fs.existsSync(path.join(process.cwd(), 'src', 'admin'))
     ? path.join(process.cwd(), 'src', 'admin')
     : path.join(__dirname);
-  
+
   const loginPath = path.join(loginDir, 'login.html');
   if (fs.existsSync(loginPath)) {
     res.sendFile(loginPath);
@@ -54,12 +36,10 @@ adminRouter.get('/login', (_req: Request, res: Response) => {
 // ── Login POST (POST /admin/login) ──
 adminRouter.post('/login', (req: Request, res: Response) => {
   const { password } = req.body;
-  
-  if (password === env.ADMIN_PASSWORD) {
-    const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, { createdAt: Date.now() });
-    
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/admin; Max-Age=${SESSION_TTL / 1000}; SameSite=Strict`);
+
+  if (verifyAdminPassword(password)) {
+    const token = createSession();
+    res.setHeader('Set-Cookie', sessionCookieHeader(token));
     res.redirect('/admin');
     logger.info(CTX, '🔐 Login successful');
   } else {
@@ -72,9 +52,9 @@ adminRouter.post('/login', (req: Request, res: Response) => {
 adminRouter.get('/logout', (req: Request, res: Response) => {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[SESSION_COOKIE];
-  if (token) sessions.delete(token);
-  
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/admin; Max-Age=0`);
+  if (token) destroySession(token);
+
+  res.setHeader('Set-Cookie', clearCookieHeader());
   res.redirect('/admin/login');
 });
 
@@ -84,10 +64,10 @@ adminRouter.use((req: Request, res: Response, next: NextFunction) => {
     next();
     return;
   }
-  
+
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[SESSION_COOKIE];
-  
+
   if (!isValidSession(token)) {
     // API requests get 401, HTML requests get redirected
     if (req.path.startsWith('/dashboard/') || req.path.startsWith('/clientes') || req.path.startsWith('/integration/') || req.path.startsWith('/bootstrap')) {
@@ -97,7 +77,7 @@ adminRouter.use((req: Request, res: Response, next: NextFunction) => {
     }
     return;
   }
-  
+
   next();
 });
 
@@ -357,6 +337,84 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
       },
     },
   });
+}));
+
+// GET /admin/dashboard/pipeline-kpis - Per-client KPIs for pipeline cards
+adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, res: Response) => {
+  // Faturamento + vendas totais por cliente (últimos 30 dias e total)
+  const sales = await query<{
+    client_id: number;
+    vendas_total: string;
+    faturamento_total: string;
+    vendas_30d: string;
+    faturamento_30d: string;
+  }>(`
+    SELECT
+      client_id,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid' AND status = 'processed') AS vendas_total,
+      COALESCE(SUM((payload->>'total_price')::numeric) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS faturamento_total,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid' AND status = 'processed' AND created_at >= NOW() - INTERVAL '30 days') AS vendas_30d,
+      COALESCE(SUM((payload->>'total_price')::numeric) FILTER (WHERE event_type = 'order.paid' AND status = 'processed' AND created_at >= NOW() - INTERVAL '30 days'), 0) AS faturamento_30d
+    FROM webhook_logs
+    WHERE client_id IS NOT NULL
+    GROUP BY client_id
+  `);
+
+  // Emails disparados = webhooks processados que geram email (order.paid + abandoned_cart + card.declined)
+  const emails = await query<{ client_id: number; emails_disparados: string }>(`
+    SELECT
+      client_id,
+      COUNT(*) AS emails_disparados
+    FROM webhook_logs
+    WHERE client_id IS NOT NULL
+      AND status = 'processed'
+      AND event_type IN ('order.paid', 'abandoned_cart', 'card.declined')
+    GROUP BY client_id
+  `);
+
+  // Faturamento diário últimos 7 dias por cliente (para sparkline)
+  const daily = await query<{ client_id: number; day: string; faturamento: string }>(`
+    SELECT
+      client_id,
+      TO_CHAR(DATE_TRUNC('day', created_at), 'DD/MM') AS day,
+      COALESCE(SUM((payload->>'total_price')::numeric), 0) AS faturamento
+    FROM webhook_logs
+    WHERE client_id IS NOT NULL
+      AND event_type = 'order.paid'
+      AND status = 'processed'
+      AND created_at >= NOW() - INTERVAL '7 days'
+    GROUP BY client_id, DATE_TRUNC('day', created_at)
+    ORDER BY client_id, DATE_TRUNC('day', created_at)
+  `);
+
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Build a map indexed by client_id
+  const emailsMap = new Map(emails.map(e => [e.client_id, parseInt(e.emails_disparados)]));
+  const dailyMap = new Map<number, { labels: string[]; values: number[] }>();
+  for (const row of daily) {
+    const id = row.client_id;
+    if (!dailyMap.has(id)) dailyMap.set(id, { labels: [], values: [] });
+    dailyMap.get(id)!.labels.push(row.day);
+    dailyMap.get(id)!.values.push(parseFloat(row.faturamento));
+  }
+
+  const kpis: Record<number, object> = {};
+  for (const row of sales) {
+    const id = row.client_id;
+    const fat30d = parseFloat(row.faturamento_30d);
+    const fatTotal = parseFloat(row.faturamento_total);
+    kpis[id] = {
+      vendas_total: parseInt(row.vendas_total),
+      faturamento_total: fmtBRL(fatTotal),
+      vendas_30d: parseInt(row.vendas_30d),
+      faturamento_30d: fmtBRL(fat30d),
+      emails_disparados: emailsMap.get(id) ?? 0,
+      sparkline: dailyMap.get(id) ?? { labels: [], values: [] },
+    };
+  }
+
+  res.json({ kpis });
 }));
 
 // ── Store Integration Endpoints ──

@@ -13,11 +13,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
-import { query, isDatabaseReady } from '../db/database';
+import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractDS24Identifier } from './store-lookup';
 
 const CTX = 'Webhook:DS24:Payment';
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface KitRow {
+  id: number;
+  name: string;
+  slug: string;
+  ac_list_id: string | null;
+  ac_tag_compra_id: string | null;
+  created_at: string;
+}
 
 export async function handleDS24Payment(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const params = { ...req.body, ...req.query };
@@ -59,8 +69,8 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     if (isDatabaseReady()) {
       try {
         const result = await query(
-          `INSERT INTO webhook_logs (event_type, source, payload, status) VALUES ($1, $2, $3, $4) RETURNING id`,
-          ['order.paid', 'digistore24', JSON.stringify(data.rawPayload), 'processing']
+          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [store.clientId, 'order.paid', 'digistore24', JSON.stringify(data.rawPayload), 'processing']
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -75,9 +85,15 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
       return;
     }
 
+    // 6. Look up kit in DB
+    const kit = store.clientId ? await queryOne<KitRow>(
+      `SELECT id, name, slug, ac_list_id, ac_tag_compra_id, created_at FROM kits WHERE client_id = $1 AND slug = $2`,
+      [store.clientId, data.productSlug]
+    ) : null;
+
     const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
 
-    // 5a. Sync contact
+    // 6a. Sync contact
     const contact = await ac.syncContact({
       email: data.email,
       firstName: data.firstName,
@@ -85,28 +101,42 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
       phone: data.phone,
     });
 
-    // 5b. Add purchase tag
-    const tagName = `comprou-kit-${data.productSlug}`;
-    const tag = await ac.findTagByName(tagName);
-    if (tag) {
-      await ac.addTagToContact(contact.id, tag.id);
+    // 6b. Add "Compra Aprovada" tag
+    const tagName = `[${kit?.name || data.productName}] Compra Aprovada`;
+    if (kit?.ac_tag_compra_id) {
+      await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
     } else {
-      logger.warn(CTX, `Tag not found: ${tagName} — skipping`);
+      const tag = await ac.findTagByName(tagName);
+      if (tag) {
+        await ac.addTagToContact(contact.id, tag.id);
+      } else {
+        logger.warn(CTX, `Tag not found: ${tagName} — skipping`);
+      }
     }
 
-    // 5c. Add to "Todos os contatos" list
-    const mainList = await ac.findListByName('Todos os contatos');
-    if (mainList) {
-      await ac.addContactToList(contact.id, mainList.id);
+    // 6c. Add to "Todos os contatos" list (not newsletter)
+    const listId = kit?.ac_list_id ?? null;
+    if (listId) {
+      await ac.addContactToList(contact.id, listId);
+    } else {
+      const list = await ac.findListByName('Todos os contatos');
+      if (list) {
+        await ac.addContactToList(contact.id, list.id);
+      }
     }
 
-    // 5d. Trigger automation
-    const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-    if (automationId) {
-      await ac.addContactToAutomation(contact.id, automationId);
+    // 6d. Trigger automation only if kit is older than 1 week
+    const kitAge = kit ? Date.now() - new Date(kit.created_at).getTime() : Infinity;
+    if (kitAge >= ONE_WEEK_MS) {
+      const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
+      if (automationId) {
+        await ac.addContactToAutomation(contact.id, automationId);
+      }
+    } else {
+      logger.info(CTX, `Kit "${kit?.name || data.productName}" < 7 days old — automation skipped`);
     }
 
-    // 6. Update webhook log
+    // 7. Update webhook log
     if (isDatabaseReady() && logId) {
       try {
         await query(
@@ -133,7 +163,7 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     if (isDatabaseReady()) {
       try {
         await query(
-          `UPDATE webhook_logs SET status = 'failed', error = $1 
+          `UPDATE webhook_logs SET status = 'failed', error = $1
            WHERE id = (SELECT id FROM webhook_logs WHERE event_type = 'order.paid' AND source = 'digistore24' ORDER BY created_at DESC LIMIT 1)`,
           [error.message]
         );

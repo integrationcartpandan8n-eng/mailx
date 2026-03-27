@@ -494,6 +494,47 @@
         .tag.blue { background: var(--accent-subtle); color: var(--accent-light); }
         .tag.green { background: var(--success-bg); color: var(--success); }
 
+        /* ── Pipeline KPIs ── */
+        .client-kpis {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 0.4rem;
+            margin-bottom: 0.5rem;
+            padding: 0.5rem;
+            background: rgba(0,0,0,0.25);
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .client-kpi {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .client-kpi-label {
+            font-size: 0.58rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+        }
+
+        .client-kpi-value {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .client-kpi-value.green { color: var(--success); }
+        .client-kpi-value.blue { color: var(--accent-light); }
+
+        .sparkline-wrap {
+            margin-bottom: 0.5rem;
+            height: 32px;
+            position: relative;
+        }
+
         .client-actions { display: flex; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
 
         .btn {
@@ -1102,10 +1143,16 @@
         }
 
         // ── Pipeline ──
+        const pipelineSparklines = new Map(); // clientId → Chart instance
+
         async function loadClients() {
             try {
-                const res = await fetch(`${API}/clientes`);
-                const { clients } = await res.json();
+                const [clientsRes, kpisRes] = await Promise.all([
+                    fetch(`${API}/clientes`),
+                    fetch(`${API}/dashboard/pipeline-kpis`),
+                ]);
+                const { clients } = await clientsRes.json();
+                const { kpis } = await kpisRes.json();
 
                 ['pending', 'configuring', 'dns_pending', 'active'].forEach(status => {
                     const col = document.getElementById(`col-${status === 'dns_pending' ? 'dns' : status}`);
@@ -1115,6 +1162,10 @@
                     }
                 });
 
+                // Destroy old sparkline charts
+                pipelineSparklines.forEach(ch => ch.destroy());
+                pipelineSparklines.clear();
+
                 clients.forEach(c => {
                     const statusMap = { 'dns_pending': 'dns' };
                     const colId = `col-${statusMap[c.status] || c.status}`;
@@ -1123,6 +1174,7 @@
 
                     const list = col.querySelector('.pipeline-list');
                     const count = col.querySelector('.pipeline-count');
+                    const k = kpis[c.id] || null;
 
                     const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${k.name}</span>`).join('');
                     const acBadge = c.ac_api_key ? `<span class="tag green">AC ✓</span>` : '';
@@ -1133,6 +1185,26 @@
                     else if (c.status === 'dns_pending') buttons = `<button class="btn btn-success" onclick="event.stopPropagation(); updateStatus(${c.id}, 'active')">\u2705 Ativar</button>`;
                     else if (c.status === 'active') buttons = `<button class="btn btn-danger-ghost" onclick="event.stopPropagation(); updateStatus(${c.id}, 'paused')">\u23f8 Pausar</button>`;
 
+                    const kpisHtml = k ? `
+                        <div class="client-kpis">
+                            <div class="client-kpi">
+                                <span class="client-kpi-label">Faturamento 30d</span>
+                                <span class="client-kpi-value green">${k.faturamento_30d}</span>
+                            </div>
+                            <div class="client-kpi">
+                                <span class="client-kpi-label">Vendas</span>
+                                <span class="client-kpi-value blue">${k.vendas_total}</span>
+                            </div>
+                            <div class="client-kpi">
+                                <span class="client-kpi-label">Emails</span>
+                                <span class="client-kpi-value">${k.emails_disparados}</span>
+                            </div>
+                        </div>
+                        <div class="sparkline-wrap">
+                            <canvas id="spark-${c.id}" height="32"></canvas>
+                        </div>
+                    ` : '';
+
                     const card = document.createElement('div');
                     card.className = 'client-card';
                     card.style.cursor = 'pointer';
@@ -1141,6 +1213,7 @@
                         <div class="client-name">${c.company_name}</div>
                         <div class="client-email">${c.contact_email}</div>
                         <div class="client-tags">${kitsHtml} ${acBadge}</div>
+                        ${kpisHtml}
                         <div class="client-actions">
                             ${buttons}
                             <a href="/admin/client-detail?id=${c.id}" class="btn btn-outline" onclick="event.stopPropagation()"><i class="fas fa-eye"></i> Detalhes</a>
@@ -1148,6 +1221,39 @@
                     `;
                     list.appendChild(card);
                     count.innerText = parseInt(count.innerText) + 1;
+
+                    // Render sparkline after card is in DOM
+                    if (k && k.sparkline && k.sparkline.labels.length > 0) {
+                        const canvas = document.getElementById(`spark-${c.id}`);
+                        if (canvas) {
+                            const chart = new Chart(canvas, {
+                                type: 'line',
+                                data: {
+                                    labels: k.sparkline.labels,
+                                    datasets: [{
+                                        data: k.sparkline.values,
+                                        borderColor: '#00d68f',
+                                        borderWidth: 1.5,
+                                        pointRadius: 0,
+                                        fill: true,
+                                        backgroundColor: 'rgba(0, 214, 143, 0.08)',
+                                        tension: 0.4,
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    animation: false,
+                                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                                    scales: {
+                                        x: { display: false },
+                                        y: { display: false, beginAtZero: true },
+                                    }
+                                }
+                            });
+                            pipelineSparklines.set(c.id, chart);
+                        }
+                    }
                 });
             } catch (e) {
                 console.error('Failed to load clients:', e);

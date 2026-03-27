@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { handleOrderPaid } from './order-paid.handler';
 import { handleAbandonedCart } from './abandoned-cart.handler';
+import { handleCardDeclined } from './card-declined.handler';
 import { handleDS24Payment } from './digistore24-payment.handler';
 import { handleDS24Refund } from './digistore24-refund.handler';
 import { logger } from '../utils/logger';
@@ -21,6 +22,7 @@ webhookRouter.use((req, _res, next) => {
 // ── CartPanda webhook routes ──
 webhookRouter.post('/cartpanda/order-paid', handleOrderPaid);
 webhookRouter.post('/cartpanda/abandoned-cart', handleAbandonedCart);
+webhookRouter.post('/cartpanda/card-declined', handleCardDeclined);
 
 // ── Digistore24 IPN webhook routes ──
 webhookRouter.post('/digistore24/payment', handleDS24Payment);
