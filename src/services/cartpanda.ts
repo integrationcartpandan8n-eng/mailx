@@ -88,8 +88,40 @@ export class CartPandaClient {
       events: ['order.refunded'],
     });
 
+    // CartPanda has two possible accounts API domains
+    const ACCOUNTS_URLS = [
+      `https://accounts.cartpanda.com/api/${this.storeSlug}`,
+      `https://accounts.mycartpanda.com/api/${this.storeSlug}`,
+    ];
+
+    // Try to determine the correct accounts base URL
+    let accountsBaseUrl = ACCOUNTS_URLS[0];
+    for (const url of ACCOUNTS_URLS) {
+      try {
+        await axios.get(`${url}/webhooks`, {
+          headers: { Authorization: `Bearer ${this.apiToken}`, Accept: 'application/json' },
+          timeout: 10000,
+        });
+        accountsBaseUrl = url;
+        logger.info(CTX, `✅ CartPanda Accounts API found at: ${url}`);
+        break;
+      } catch (err: any) {
+        const status = err.response?.status;
+        if (status && status !== 401 && status !== 403) {
+          // Got a non-auth error, this might be the right URL but with different issue
+          accountsBaseUrl = url;
+          break;
+        }
+        if (status === 401 || status === 403) {
+          logger.debug(CTX, `Auth failed at ${url} (${status}), trying next...`);
+        }
+      }
+    }
+
+    logger.info(CTX, `Using CartPanda Accounts API: ${accountsBaseUrl}`);
+
     const accountsHttp = axios.create({
-      baseURL: `${ACCOUNTS_BASE}/${this.storeSlug}`,
+      baseURL: accountsBaseUrl,
       headers: {
         Authorization: `Bearer ${this.apiToken}`,
         'Content-Type': 'application/json',
@@ -129,9 +161,10 @@ export class CartPandaClient {
         result.created.push(webhook.endpoint);
         logger.info(CTX, `✅ Webhook registered: ${webhook.endpoint} → [${webhook.events.join(', ')}]`);
       } catch (err: any) {
-        const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message;
-        result.errors.push({ endpoint: webhook.endpoint, error: errorMsg });
-        logger.error(CTX, `❌ Failed to register webhook: ${webhook.endpoint}`, errorMsg);
+        const status = err.response?.status || 'unknown';
+        const errorMsg = err.response?.data?.message || err.response?.data?.error || JSON.stringify(err.response?.data) || err.message;
+        result.errors.push({ endpoint: webhook.endpoint, error: `${status}: ${errorMsg}` });
+        logger.error(CTX, `❌ Failed to register webhook: ${webhook.endpoint}`, { status, error: errorMsg, url: accountsBaseUrl });
       }
     }
 
