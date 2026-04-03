@@ -3,10 +3,24 @@ import { logger } from '../utils/logger';
 
 const CTX = 'CartPanda';
 
+/** Base URL for CartPanda Accounts API (webhook management) */
+const ACCOUNTS_BASE = 'https://accounts.cartpanda.com/api';
+
+export interface WebhookRegistrationResult {
+  created: string[];
+  skipped: string[];
+  errors: Array<{ endpoint: string; error: string }>;
+}
+
 export class CartPandaClient {
   private http: AxiosInstance;
+  private storeSlug: string;
+  private apiToken: string;
 
   constructor(storeSlug: string, apiToken: string) {
+    this.storeSlug = storeSlug;
+    this.apiToken = apiToken;
+
     this.http = axios.create({
       baseURL: `https://${storeSlug}.cartpanda.com/api/v3`,
       headers: { Authorization: `Bearer ${apiToken}` },
@@ -29,5 +43,99 @@ export class CartPandaClient {
     const res = await this.http.get('/products', { params });
     logger.debug(CTX, `Fetched ${res.data.length ?? 0} products`);
     return res.data;
+  }
+
+  /**
+   * Register webhooks on CartPanda using the Accounts API.
+   * 
+   * CartPanda Webhook API:
+   *   POST https://accounts.cartpanda.com/api/{shop-slug}/webhooks
+   *   Authorization: Bearer {api_token}
+   *   Body: { endpoint: string, events: string[] }
+   * 
+   * Supported events: product.created, product.updated, product.deleted,
+   *                    order.created, order.paid, order.updated, order.refunded
+   */
+  async registerWebhooks(callbackBaseUrl: string): Promise<WebhookRegistrationResult> {
+    const result: WebhookRegistrationResult = {
+      created: [],
+      skipped: [],
+      errors: [],
+    };
+
+    // Normalize base URL (remove trailing slash)
+    const base = callbackBaseUrl.replace(/\/+$/, '');
+
+    // Define all webhooks to register — one per MailX endpoint with all relevant events
+    const webhooksToRegister = [
+      {
+        endpoint: `${base}/webhook/cartpanda/order-paid`,
+        events: ['order.paid'],
+      },
+      {
+        endpoint: `${base}/webhook/cartpanda/abandoned-cart`,
+        events: ['order.created'],
+      },
+      {
+        endpoint: `${base}/webhook/cartpanda/card-declined`,
+        events: ['order.updated'],
+      },
+    ];
+
+    // Also register a catch-all for refunds and product events
+    webhooksToRegister.push({
+      endpoint: `${base}/webhook/cartpanda/order-paid`,
+      events: ['order.refunded'],
+    });
+
+    const accountsHttp = axios.create({
+      baseURL: `${ACCOUNTS_BASE}/${this.storeSlug}`,
+      headers: {
+        Authorization: `Bearer ${this.apiToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 20000,
+    });
+
+    // First, try to get existing webhooks to avoid duplicates
+    let existingEndpoints: string[] = [];
+    try {
+      const listRes = await accountsHttp.get('/webhooks');
+      const webhooks = listRes.data?.data || listRes.data || [];
+      if (Array.isArray(webhooks)) {
+        existingEndpoints = webhooks.map((w: any) => w.endpoint || w.url || '');
+      }
+      logger.debug(CTX, `Found ${existingEndpoints.length} existing webhooks on CartPanda`);
+    } catch (err: any) {
+      // If listing fails, proceed anyway — we'll try to create all
+      logger.warn(CTX, `Could not list existing webhooks: ${err.message}`);
+    }
+
+    for (const webhook of webhooksToRegister) {
+      // Check if endpoint already exists
+      if (existingEndpoints.includes(webhook.endpoint)) {
+        result.skipped.push(webhook.endpoint);
+        logger.info(CTX, `⏭️ Webhook already exists: ${webhook.endpoint}`);
+        continue;
+      }
+
+      try {
+        await accountsHttp.post('/webhooks', {
+          endpoint: webhook.endpoint,
+          events: webhook.events,
+        });
+
+        result.created.push(webhook.endpoint);
+        logger.info(CTX, `✅ Webhook registered: ${webhook.endpoint} → [${webhook.events.join(', ')}]`);
+      } catch (err: any) {
+        const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message;
+        result.errors.push({ endpoint: webhook.endpoint, error: errorMsg });
+        logger.error(CTX, `❌ Failed to register webhook: ${webhook.endpoint}`, errorMsg);
+      }
+    }
+
+    logger.info(CTX, `Webhook registration complete: ${result.created.length} created, ${result.skipped.length} skipped, ${result.errors.length} errors`);
+    return result;
   }
 }

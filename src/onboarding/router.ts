@@ -4,6 +4,8 @@ import fs from 'fs';
 import { query, queryOne, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { requireAuth } from '../middleware/auth';
+import { CartPandaClient } from '../services/cartpanda';
+import { env } from '../config/env';
 
 const CTX = 'Onboarding';
 
@@ -143,6 +145,25 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       [clientId, storeSlug, cartpanda_api_token || '']
     );
     logger.info(CTX, `Store integration created: cartpanda/${storeSlug} for client #${clientId}`);
+
+    // Auto-register webhooks on CartPanda
+    if (cartpanda_api_token) {
+      try {
+        const callbackBase = `https://${env.API_DOMAIN}`;
+        const cp = new CartPandaClient(storeSlug, cartpanda_api_token);
+        const whResult = await cp.registerWebhooks(callbackBase);
+        logger.info(CTX, `Webhooks registered for ${storeSlug}: ${whResult.created.length} created, ${whResult.errors.length} errors`);
+
+        if (whResult.errors.length === 0) {
+          await query(
+            `UPDATE store_integrations SET status = 'active' WHERE client_id = $1 AND shop_slug = $2`,
+            [clientId, storeSlug]
+          );
+        }
+      } catch (whErr: any) {
+        logger.warn(CTX, `Auto-register webhooks failed for ${storeSlug}: ${whErr.message}`);
+      }
+    }
   }
 
   if (selectedPlatform === 'digistore24' && ds24_vendor_id) {

@@ -698,6 +698,9 @@
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-satellite-dish"></i> URLs dos Webhooks</div>
+                <button class="btn btn-accent" onclick="registerWebhooks()" id="btnRegisterWebhooks">
+                    <i class="fas fa-bolt"></i> Registrar na CartPanda
+                </button>
             </div>
             <div class="card-body">
                 <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
@@ -713,6 +716,11 @@
                         <span class="label">abandoned</span>
                         <code id="urlAbandoned"></code>
                         <button class="copy-btn" onclick="copyUrl('urlAbandoned')"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="webhook-url-item">
+                        <span class="label">card-declined</span>
+                        <code id="urlCardDeclined"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlCardDeclined')"><i class="fas fa-copy"></i></button>
                     </div>
                 </div>
                 <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
@@ -778,6 +786,7 @@
         // Set webhook URLs
         document.getElementById('urlOrderPaid').textContent = `${BASE_URL}/webhook/cartpanda/order-paid`;
         document.getElementById('urlAbandoned').textContent = `${BASE_URL}/webhook/cartpanda/abandoned-cart`;
+        document.getElementById('urlCardDeclined').textContent = `${BASE_URL}/webhook/cartpanda/card-declined`;
         document.getElementById('urlDS24Payment').textContent = `${BASE_URL}/webhook/digistore24/payment`;
         document.getElementById('urlDS24Refund').textContent = `${BASE_URL}/webhook/digistore24/refund`;
 
@@ -1018,7 +1027,10 @@
                     document.getElementById('newStoreToken').value = '';
                     toggleForm('storeForm');
                     loadStores();
-                    showModal('✅ Loja integrada!', `"${slug}.cartpanda.com" foi conectada.\n\nAgora cadastre os webhooks na página da API da CartPanda usando as URLs acima.`);
+                    const whInfo = data.webhooks
+                        ? `\n\nWebhooks: ${data.webhooks.created?.length || 0} registrados, ${data.webhooks.skipped?.length || 0} já existentes, ${data.webhooks.errors?.length || 0} erros.`
+                        : '';
+                    showModal('✅ Loja integrada!', `"${slug}.cartpanda.com" foi conectada.${whInfo}`);
                 } else {
                     showModal('Erro', data.error || 'Erro ao integrar loja');
                 }
@@ -1051,6 +1063,42 @@
                 }
             } catch (e) {
                 showModal('Erro', e.message);
+            }
+        }
+
+        async function registerWebhooks() {
+            const btn = document.getElementById('btnRegisterWebhooks');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registrando...';
+            
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/register-webhooks`, { method: 'POST' });
+                const data = await res.json();
+
+                if (data.ok) {
+                    const summary = data.summary || {};
+                    showModal('✅ Webhooks Registrados!', 
+                        `${summary.created || 0} webhook(s) criados com sucesso na CartPanda.<br><br>` +
+                        `Os eventos serão enviados automaticamente para o MailX.`
+                    );
+                    loadStores();
+                } else if (data.error) {
+                    showModal('❌ Erro', data.error);
+                } else {
+                    const summary = data.summary || {};
+                    const errorDetails = (data.results || [])
+                        .flatMap(r => (r.result?.errors || []).map(e => `${e.endpoint}: ${e.error}`))
+                        .join('<br>');
+                    showModal('⚠️ Parcialmente registrado', 
+                        `Criados: ${summary.created || 0} | Erros: ${summary.errors || 0}<br><br>${errorDetails}`
+                    );
+                    loadStores();
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-bolt"></i> Registrar na CartPanda';
             }
         }
 

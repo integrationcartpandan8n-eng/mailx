@@ -4,6 +4,8 @@ import fs from 'fs';
 import { query, isDatabaseReady, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import { runBootstrap, runKitBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
+import { CartPandaClient } from '../services/cartpanda';
+import { env } from '../config/env';
 import {
   SESSION_COOKIE,
   parseCookies,
@@ -758,7 +760,75 @@ adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: 
   );
 
   logger.info(CTX, `Store "${shop_slug}" (${storePlatform}) integrated for client ${clientId}`);
-  res.json({ ok: true, shop_slug, platform: storePlatform });
+
+  // Auto-register webhooks on CartPanda
+  let webhookResult = null;
+  if (storePlatform === 'cartpanda') {
+    try {
+      const callbackBase = `https://${env.API_DOMAIN}`;
+      const cp = new CartPandaClient(shop_slug, api_token);
+      webhookResult = await cp.registerWebhooks(callbackBase);
+
+      // Update store status to active if webhooks were registered successfully
+      if (webhookResult.errors.length === 0) {
+        await query(
+          `UPDATE store_integrations SET status = 'active' WHERE client_id = $1 AND shop_slug = $2`,
+          [clientId, shop_slug]
+        );
+      }
+    } catch (err: any) {
+      logger.warn(CTX, `Auto-register webhooks failed for ${shop_slug}: ${err.message}`);
+      webhookResult = { created: [], skipped: [], errors: [{ endpoint: 'all', error: err.message }] };
+    }
+  }
+
+  res.json({ ok: true, shop_slug, platform: storePlatform, webhooks: webhookResult });
+}));
+
+// POST /admin/clientes/:id/register-webhooks - Manually register webhooks on CartPanda
+adminRouter.post('/clientes/:id/register-webhooks', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+
+  // Find CartPanda stores for this client
+  const stores = await query<{ id: number; shop_slug: string; api_token: string; platform: string }>(
+    `SELECT id, shop_slug, api_token, platform FROM store_integrations WHERE client_id = $1 AND platform = 'cartpanda'`,
+    [clientId]
+  );
+
+  if (!stores || stores.length === 0) {
+    res.status(404).json({ ok: false, error: 'Nenhuma loja CartPanda encontrada para este cliente' });
+    return;
+  }
+
+  const callbackBase = `https://${env.API_DOMAIN}`;
+  const results: Array<{ slug: string; result: any }> = [];
+
+  for (const store of stores) {
+    try {
+      const cp = new CartPandaClient(store.shop_slug, store.api_token);
+      const result = await cp.registerWebhooks(callbackBase);
+      results.push({ slug: store.shop_slug, result });
+
+      // Update store status
+      if (result.errors.length === 0) {
+        await query(
+          `UPDATE store_integrations SET status = 'active' WHERE id = $1`,
+          [store.id]
+        );
+      }
+    } catch (err: any) {
+      results.push({
+        slug: store.shop_slug,
+        result: { created: [], skipped: [], errors: [{ endpoint: 'all', error: err.message }] },
+      });
+    }
+  }
+
+  const totalCreated = results.reduce((sum, r) => sum + r.result.created.length, 0);
+  const totalErrors = results.reduce((sum, r) => sum + r.result.errors.length, 0);
+
+  logger.info(CTX, `Webhook registration for client #${clientId}: ${totalCreated} created, ${totalErrors} errors`);
+  res.json({ ok: totalErrors === 0, results, summary: { created: totalCreated, errors: totalErrors } });
 }));
 
 // DELETE /admin/stores/:id - Remove a store integration
