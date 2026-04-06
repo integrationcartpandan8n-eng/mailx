@@ -599,25 +599,26 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     [clientId]
   );
 
-  // Sales KPIs from webhook_logs matching this client's stores
-  // Since webhook_logs don't directly reference client_id, we match by source/payload
+  // Sales KPIs — filter by client_id, count both processed and processing
   const salesData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, COALESCE(SUM((payload->>'total_price')::numeric), 0) as revenue
-    FROM webhook_logs WHERE event_type = 'order.paid' AND status = 'processed'
-  `);
+    FROM webhook_logs WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
+  `, [clientId]);
 
-  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
+  const totalWebhooks = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1`, [clientId]
+  );
   const webhooksToday = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
+    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE AND client_id = $1`, [clientId]
   );
   const webhooksProcessed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed'`
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed' AND client_id = $1`, [clientId]
   );
   const webhooksFailed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed'`
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed' AND client_id = $1`, [clientId]
   );
   const refundCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback')`
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1`, [clientId]
   );
 
   const totalSales = parseInt(salesData?.count || '0');
@@ -627,22 +628,23 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const processed = parseInt(webhooksProcessed?.count || '0');
   const successRate = totalWh > 0 ? ((processed / totalWh) * 100).toFixed(1) : '0';
 
-  // Recent webhooks
+  // Recent webhooks — filtered by client_id
   const recentWebhooks = await query(`
     SELECT id, event_type, source, status, error, created_at, processed_at
     FROM webhook_logs
+    WHERE client_id = $1
     ORDER BY created_at DESC
     LIMIT 10
-  `);
+  `, [clientId]);
 
-  // Daily activity last 7 days
+  // Daily activity last 7 days — filtered by client_id
   const dailyActivity = await query<{ day: string, count: string }>(`
     SELECT TO_CHAR(created_at, 'DD/MM') as day, COUNT(*) as count
     FROM webhook_logs
-    WHERE created_at >= NOW() - INTERVAL '7 days'
+    WHERE created_at >= NOW() - INTERVAL '7 days' AND client_id = $1
     GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
     ORDER BY DATE(created_at)
-  `);
+  `, [clientId]);
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -853,4 +855,123 @@ adminRouter.get('/webhooks', asyncHandler(async (req: Request, res: Response) =>
     [limit]
   );
   res.json({ count: logs.length, logs });
+}));
+
+// ── Repair Stuck Webhooks ──
+// POST /admin/clientes/:id/repair-webhooks
+// Finds orphan webhook_logs (no client_id or stuck at 'processing'),
+// associates them to this client, extracts products from payloads, and creates kits.
+adminRouter.post('/clientes/:id/repair-webhooks', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+
+  // Get client's stores
+  const stores = await query<{ shop_slug: string, platform: string }>(
+    `SELECT shop_slug, platform FROM store_integrations WHERE client_id = $1`,
+    [clientId]
+  );
+
+  if (stores.length === 0) {
+    res.status(400).json({ ok: false, error: 'Nenhuma loja encontrada para este cliente' });
+    return;
+  }
+
+  const cartpandaSlugs = stores.filter(s => s.platform === 'cartpanda').map(s => s.shop_slug.toLowerCase());
+  const hasCartpanda = cartpandaSlugs.length > 0;
+
+  // Find orphan webhooks: no client_id OR stuck at 'processing'
+  const orphans = await query<{ id: number, event_type: string, source: string, payload: any, status: string }>(
+    `SELECT id, event_type, source, payload, status FROM webhook_logs
+     WHERE (client_id IS NULL OR (status = 'processing' AND client_id IS NULL))
+     AND source IN ('cartpanda', 'digistore24')
+     ORDER BY created_at ASC
+     LIMIT 2000`
+  );
+
+  let matched = 0;
+  let productsDiscovered = 0;
+  const seenProducts = new Set<string>();
+
+  for (const wh of orphans) {
+    const payload = typeof wh.payload === 'string' ? JSON.parse(wh.payload) : wh.payload;
+
+    let isMatch = false;
+
+    if (wh.source === 'cartpanda' && hasCartpanda) {
+      // Try to match by slug in payload
+      const slug = (payload?.store_slug || payload?.shop || '').toLowerCase();
+      if (slug && cartpandaSlugs.includes(slug)) {
+        isMatch = true;
+      } else {
+        // Try URL matching
+        const storeUrl = payload?.store_url || payload?.shop_url || payload?.domain || '';
+        if (storeUrl) {
+          const match = storeUrl.match(/https?:\/\/([^.]+)\.(?:my)?cartpanda\.com/);
+          if (match && cartpandaSlugs.includes(match[1].toLowerCase())) {
+            isMatch = true;
+          }
+        }
+        // If only one CartPanda store, assume match
+        if (!isMatch && cartpandaSlugs.length === 1) {
+          isMatch = true;
+        }
+      }
+    }
+
+    if (!isMatch) continue;
+
+    // Update client_id and mark as processed
+    await query(
+      `UPDATE webhook_logs SET client_id = $1, status = 'processed', processed_at = NOW() WHERE id = $2`,
+      [clientId, wh.id]
+    );
+    matched++;
+
+    // Extract product info from payload
+    const lineItems = payload?.line_items || payload?.items || payload?.cart_items || [];
+    if (lineItems.length > 0) {
+      const item = lineItems[0];
+      const productName = item?.title || item?.name || 'produto';
+      const externalId = String(item?.product_id || item?.variant_id || item?.id || '');
+
+      if (externalId && productName) {
+        const productKey = `${wh.source}:${externalId}`;
+        if (!seenProducts.has(productKey)) {
+          seenProducts.add(productKey);
+          try {
+            const slug = productName.toLowerCase().normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, '');
+
+            const existing = await queryOne<{ id: number }>(
+              `SELECT id FROM kits WHERE client_id = $1 AND platform = $2 AND external_id = $3`,
+              [clientId, wh.source, externalId]
+            );
+
+            if (!existing) {
+              await query(
+                `INSERT INTO kits (client_id, name, slug, external_id, platform, enabled)
+                 VALUES ($1, $2, $3, $4, $5, false)
+                 ON CONFLICT (client_id, platform, external_id) WHERE external_id IS NOT NULL
+                 DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
+                [clientId, productName, slug, externalId, wh.source]
+              );
+              productsDiscovered++;
+              logger.info(CTX, `Repair: discovered product "${productName}" (${externalId}) for client #${clientId}`);
+            }
+          } catch (err: any) {
+            logger.warn(CTX, `Repair: failed to create kit: ${err.message}`);
+          }
+        }
+      }
+    }
+  }
+
+  logger.info(CTX, `Repair complete for client #${clientId}: ${matched} webhooks matched, ${productsDiscovered} products discovered`);
+  res.json({
+    ok: true,
+    orphan_webhooks_found: orphans.length,
+    matched_to_client: matched,
+    products_discovered: productsDiscovered,
+  });
 }));

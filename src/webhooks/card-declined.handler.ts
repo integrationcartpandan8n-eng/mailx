@@ -36,6 +36,9 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
 
     if (!email) {
       logger.warn(CTX, 'No email found in payload', { orderId });
+      if (isDatabaseReady() && logId) {
+        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'Missing email' WHERE id = $1`, [logId]); } catch (_) {}
+      }
       res.status(400).json({ error: 'Missing email in payload' });
       return;
     }
@@ -47,6 +50,9 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
 
     if (!store.acApiUrl || !store.acApiKey) {
       logger.error(CTX, 'ActiveCampaign credentials not configured');
+      if (isDatabaseReady() && logId) {
+        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'AC credentials not configured' WHERE id = $1`, [logId]); } catch (_) {}
+      }
       res.status(500).json({ error: 'AC not configured' });
       return;
     }

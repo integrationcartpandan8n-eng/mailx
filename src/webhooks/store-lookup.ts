@@ -64,7 +64,7 @@ export async function lookupStore(
         COALESCE(c.ac_api_key, '') as ac_api_key
       FROM store_integrations si
       LEFT JOIN clients c ON c.id = si.client_id
-      WHERE si.platform = $1 AND si.shop_slug = $2
+      WHERE si.platform = $1 AND LOWER(si.shop_slug) = LOWER($2)
       LIMIT 1
     `, [platform, identifier]);
 
@@ -108,17 +108,21 @@ export async function lookupStore(
 /**
  * Extract the shop slug from a CartPanda webhook payload.
  * CartPanda may send `store_slug`, `shop` or the store URL domain.
+ * Supports both cartpanda.com and mycartpanda.com domains.
  */
 export function extractCartPandaSlug(payload: any): string {
   // Direct slug field
-  if (payload.store_slug) return payload.store_slug;
-  if (payload.shop) return payload.shop;
+  if (payload.store_slug) return payload.store_slug.toLowerCase();
+  if (payload.shop) return payload.shop.toLowerCase();
 
-  // From store URL (https://minhaloja.cartpanda.com → minhaloja)
-  const storeUrl = payload.store_url || payload.shop_url || '';
+  // From store URL — supports both cartpanda.com and mycartpanda.com
+  const storeUrl = payload.store_url || payload.shop_url || payload.domain || '';
   if (storeUrl) {
-    const match = storeUrl.match(/https?:\/\/([^.]+)\.cartpanda\.com/);
-    if (match) return match[1];
+    const match = storeUrl.match(/https?:\/\/([^.]+)\.(?:my)?cartpanda\.com/);
+    if (match) return match[1].toLowerCase();
+    // Fallback: try to extract subdomain from any URL
+    const domainMatch = storeUrl.match(/https?:\/\/([^./]+)/);
+    if (domainMatch) return domainMatch[1].toLowerCase();
   }
 
   return '';
