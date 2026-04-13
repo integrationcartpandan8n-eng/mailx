@@ -162,13 +162,14 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
            OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
   `);
-  // MailX abandoned cart recoveries: utm_source contains 'CarrinhoAbandonado'
+  // MailX abandoned cart recoveries: utm_campaign OR utm_source contains 'CarrinhoAbandonado'
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count,
       COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND status = 'processed'
-      AND payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
   `);
   const refundCount = await queryOne<{ count: string }>(`
     SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.refunded'
@@ -659,7 +660,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
-      AND payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
   `, [clientId]);
 
   // Top 5 products — filtered by client_id
