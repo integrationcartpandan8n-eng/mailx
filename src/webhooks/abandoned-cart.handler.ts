@@ -10,6 +10,7 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function handleAbandonedCart(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const payload = req.body;
+    const data = payload.order || payload;
 
   try {
     const slug = extractCartPandaSlug(payload);
@@ -28,15 +29,12 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
       }
     }
 
-    const email = payload.email || payload.customer?.email;
-    const firstName = payload.first_name || payload.customer?.first_name || '';
-    const cartItems = payload.cart_items || payload.line_items || payload.items || [];
+    const email = data.email || data.customer?.email;
+    const firstName = data.first_name || data.customer?.first_name || '';
+    const cartItems = data.cart_items || data.line_items || data.items || [];
 
     if (!email) {
       logger.warn(CTX, 'No email found in abandoned cart payload');
-      if (isDatabaseReady() && logId) {
-        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'Missing email' WHERE id = $1`, [logId]); } catch (_) {}
-      }
       res.status(400).json({ error: 'Missing email in payload' });
       return;
     }
@@ -48,9 +46,6 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
 
     if (!store.acApiUrl || !store.acApiKey) {
       logger.error(CTX, 'ActiveCampaign credentials not configured');
-      if (isDatabaseReady() && logId) {
-        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'AC credentials not configured' WHERE id = $1`, [logId]); } catch (_) {}
-      }
       res.status(500).json({ error: 'AC not configured' });
       return;
     }

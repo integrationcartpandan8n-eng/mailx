@@ -10,6 +10,7 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function handleOrderPaid(req: Request, res: Response, _next: NextFunction): Promise<void> {
   const payload = req.body;
+    const data = payload.order || payload;
 
   try {
     // 1. Identify the store
@@ -31,18 +32,15 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     }
 
     // 2. Extract data
-    const email = payload.email || payload.customer?.email;
-    const firstName = payload.first_name || payload.customer?.first_name || '';
-    const lastName = payload.last_name || payload.customer?.last_name || '';
-    const phone = payload.phone || payload.customer?.phone || '';
-    const lineItems = payload.line_items || payload.items || [];
-    const orderId = payload.id || payload.order_id;
+    const email = data.email || data.customer?.email;
+    const firstName = data.first_name || data.customer?.first_name || '';
+    const lastName = data.last_name || data.customer?.last_name || '';
+    const phone = data.phone || data.customer?.phone || '';
+    const lineItems = data.line_items || data.items || [];
+    const orderId = data.id || data.order_id;
 
     if (!email) {
       logger.warn(CTX, 'No email found in payload', { orderId });
-      if (isDatabaseReady() && logId) {
-        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'Missing email in payload' WHERE id = $1`, [logId]); } catch (_) {}
-      }
       res.status(400).json({ error: 'Missing email in payload' });
       return;
     }
@@ -59,9 +57,6 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     // 3. Validate AC credentials
     if (!store.acApiUrl || !store.acApiKey) {
       logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
-      if (isDatabaseReady() && logId) {
-        try { await query(`UPDATE webhook_logs SET status = 'failed', error = 'AC credentials not configured' WHERE id = $1`, [logId]); } catch (_) {}
-      }
       res.status(500).json({ error: 'AC not configured' });
       return;
     }
