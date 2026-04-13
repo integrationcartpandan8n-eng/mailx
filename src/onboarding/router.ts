@@ -115,21 +115,7 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   const clientId = result?.id;
 
-  // Insert kits
-  const kits = parseKits(req.body);
-  for (const kit of kits) {
-    const slug = kit.name
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
 
-    await query(
-      `INSERT INTO kits (client_id, name, slug, price) VALUES ($1, $2, $3, $4)`,
-      [clientId, kit.name, slug, kit.price || null]
-    );
-  }
 
   // Create store_integrations entry based on selected platform
   const selectedPlatform = platform || 'cartpanda';
@@ -178,7 +164,6 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
   logger.info(CTX, `✅ New client onboarded: ${company_name}`, {
     id: clientId,
     platform: selectedPlatform,
-    kits: kits.length,
   });
 
   res.redirect('/onboarding/sucesso');
@@ -188,26 +173,3 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
 onboardingRouter.get('/sucesso', (_req: Request, res: Response) => {
   serveHtml('success.html', res);
 });
-
-// Parse kits from form body
-function parseKits(body: any): Array<{ name: string; price?: number }> {
-  const kits: Array<{ name: string; price?: number }> = [];
-  if (!body.kits) return kits;
-
-  if (Array.isArray(body.kits)) {
-    for (const kit of body.kits) {
-      if (kit && kit.name) {
-        kits.push({ name: kit.name, price: kit.price ? parseFloat(kit.price) : undefined });
-      }
-    }
-  } else if (typeof body.kits === 'object') {
-    for (const key of Object.keys(body.kits)) {
-      const kit = body.kits[key];
-      if (kit && kit.name) {
-        kits.push({ name: kit.name, price: kit.price ? parseFloat(kit.price) : undefined });
-      }
-    }
-  }
-
-  return kits;
-}

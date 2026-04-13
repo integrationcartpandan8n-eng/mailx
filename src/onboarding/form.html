@@ -176,59 +176,7 @@
         gap: 1rem;
       }
 
-      /* Kit Groups */
-      .kit-group {
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        padding: 1rem;
-        margin-bottom: 0.75rem;
-        position: relative;
-      }
 
-      .kit-group .kit-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.75rem;
-      }
-
-      .kit-group .kit-number {
-        font-size: 0.78rem;
-        font-weight: 700;
-        color: var(--accent-light);
-      }
-
-      .btn-remove-kit {
-        background: none;
-        border: none;
-        color: var(--danger);
-        cursor: pointer;
-        font-size: 0.78rem;
-        padding: 0.25rem 0.5rem;
-        border-radius: 4px;
-        transition: background 0.2s;
-      }
-
-      .btn-remove-kit:hover { background: rgba(255, 77, 106, 0.1); }
-
-      .btn-add-kit {
-        width: 100%;
-        padding: 0.7rem;
-        background: transparent;
-        border: 1px dashed var(--border);
-        border-radius: var(--radius-sm);
-        color: var(--accent-light);
-        font-size: 0.82rem;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-      }
-
-      .btn-add-kit:hover {
-        border-color: var(--accent);
-        background: var(--accent-subtle);
-      }
 
       /* Checkboxes */
       .checkbox-field {
@@ -352,28 +300,7 @@
           </div>
         </div>
 
-        <!-- KITS / PRODUTOS -->
-        <div class="section">
-          <div class="section-title">Kits / Produtos</div>
-          <div id="kitsContainer">
-            <div class="kit-group" data-kit-index="0">
-              <div class="kit-header">
-                <span class="kit-number">Kit 1</span>
-              </div>
-              <div class="row">
-                <div class="field">
-                  <label>Nome do kit <span class="required">*</span></label>
-                  <input type="text" name="kits[0][name]" required placeholder="Kit Emagrecedor" />
-                </div>
-                <div class="field">
-                  <label>Preço (R$)</label>
-                  <input type="number" name="kits[0][price]" step="0.01" placeholder="99.90" />
-                </div>
-              </div>
-            </div>
-          </div>
-          <button type="button" class="btn-add-kit" onclick="addKit()">+ Adicionar outro kit</button>
-        </div>
+
 
         <!-- ACTIVECAMPAIGN -->
         <div class="section">
@@ -481,41 +408,7 @@
       </form>
     </div>
 
-    <script>
-      let kitCount = 1;
 
-      function addKit() {
-        const container = document.getElementById('kitsContainer');
-        const index = kitCount;
-        kitCount++;
-
-        const kitHtml = `
-        <div class="kit-group" data-kit-index="${index}">
-          <div class="kit-header">
-            <span class="kit-number">Kit ${kitCount}</span>
-            <button type="button" class="btn-remove-kit" onclick="removeKit(this)">Remover</button>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label>Nome do kit <span class="required">*</span></label>
-              <input type="text" name="kits[${index}][name]" required placeholder="Kit Exemplo">
-            </div>
-            <div class="field">
-              <label>Preço (R$)</label>
-              <input type="number" name="kits[${index}][price]" step="0.01" placeholder="99.90">
-            </div>
-          </div>
-        </div>
-        `;
-        container.insertAdjacentHTML('beforeend', kitHtml);
-      }
-
-      function removeKit(btn) {
-        btn.closest('.kit-group').remove();
-        document.querySelectorAll('.kit-group').forEach((group, i) => {
-          group.querySelector('.kit-number').textContent = `Kit ${i + 1}`;
-        });
-      }
 
       document.getElementById('dnsManagesOwn').addEventListener('change', function () {
         document.getElementById('dnsCredentials').style.display = this.checked ? 'none' : 'block';

@@ -863,6 +863,36 @@
         </div>
     </div>
 
+    <!-- Store Modal -->
+    <div class="modal-overlay" id="storeModal">
+        <div class="modal" style="width:520px">
+            <h3><i class="fas fa-store" style="color:var(--accent-light);margin-right:8px"></i> Nova Loja</h3>
+            <p style="margin-bottom:1rem">Integrar nova loja para <strong id="storeModalClient"></strong></p>
+            <input type="hidden" id="storeModalClientId">
+            <div style="display:flex;flex-direction:column;gap:0.75rem">
+                <div>
+                    <label style="font-size:0.75rem;font-weight:600;color:var(--text-dim);margin-bottom:0.3rem;display:block">Plataforma</label>
+                    <select id="pipelineStorePlatform" style="width:100%;padding:0.55rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;font-family:inherit">
+                        <option value="cartpanda">CartPanda</option>
+                        <option value="digistore24">Digistore24</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:0.75rem;font-weight:600;color:var(--text-dim);margin-bottom:0.3rem;display:block">Shop Slug / ID *</label>
+                    <input type="text" id="pipelineStoreSlug" placeholder="minhaloja" style="width:100%;padding:0.55rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;font-family:inherit">
+                </div>
+                <div>
+                    <label style="font-size:0.75rem;font-weight:600;color:var(--text-dim);margin-bottom:0.3rem;display:block">API Token *</label>
+                    <input type="password" id="pipelineStoreToken" placeholder="cp_live_xxx..." style="width:100%;padding:0.55rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.85rem;font-family:inherit">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="closeStoreModal()">Cancelar</button>
+                <button class="btn btn-accent" onclick="submitStoreFromPipeline()"><i class="fas fa-plug"></i> Integrar</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API = '/admin';
 
@@ -919,6 +949,8 @@
                     { label: 'Taxa de Reembolso', value: data.kpis.taxa_reembolso, icon: 'rotate-left', color: 'red' },
                     { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue' },
                     { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green' },
+                    { label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0, icon: 'cart-arrow-down', color: 'orange' },
+                    { label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || 'R$ 0,00', icon: 'hand-holding-dollar', color: 'green' },
                 ]);
 
                 // Conversion Funnel
@@ -1216,6 +1248,7 @@
                         ${kpisHtml}
                         <div class="client-actions">
                             ${buttons}
+                            <button class="btn btn-outline" onclick="event.stopPropagation(); openStoreModal(${c.id}, '${c.company_name.replace(/'/g, "\\'")}')"><i class="fas fa-store"></i> Nova Loja</button>
                             <a href="/admin/client-detail?id=${c.id}" class="btn btn-outline" onclick="event.stopPropagation()"><i class="fas fa-eye"></i> Detalhes</a>
                         </div>
                     `;
@@ -1319,6 +1352,51 @@
 
         function closeModal() {
             document.getElementById('modal').classList.remove('show');
+        }
+
+        // ── Pipeline Store Modal ──
+        function openStoreModal(clientId, clientName) {
+            document.getElementById('storeModalClientId').value = clientId;
+            document.getElementById('storeModalClient').textContent = clientName;
+            document.getElementById('pipelineStoreSlug').value = '';
+            document.getElementById('pipelineStoreToken').value = '';
+            document.getElementById('storeModal').classList.add('show');
+        }
+
+        function closeStoreModal() {
+            document.getElementById('storeModal').classList.remove('show');
+        }
+
+        async function submitStoreFromPipeline() {
+            const clientId = document.getElementById('storeModalClientId').value;
+            const slug = document.getElementById('pipelineStoreSlug').value.trim();
+            const token = document.getElementById('pipelineStoreToken').value.trim();
+            const platform = document.getElementById('pipelineStorePlatform').value;
+
+            if (!slug || !token) { alert('Shop Slug e API Token são obrigatórios'); return; }
+
+            closeStoreModal();
+            showModal('Integrando...', `Conectando loja "${slug}" e registrando webhooks...`);
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/stores`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ shop_slug: slug, api_token: token, platform, events: { order_paid: true, checkout_abandoned: true } })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    const whInfo = data.webhooks
+                        ? `<br><br>Webhooks: ${data.webhooks.created?.length || 0} registrados, ${data.webhooks.errors?.length || 0} erros.`
+                        : '';
+                    showModal('✅ Loja integrada!', `"${slug}" foi conectada com sucesso.${whInfo}`);
+                    loadClients();
+                } else {
+                    showModal('Erro', data.error || 'Erro ao integrar loja');
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
         }
 
         function refreshAll() {

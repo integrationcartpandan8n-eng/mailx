@@ -584,6 +584,34 @@
             </div>
         </div>
 
+        <!-- ═══ MailX UTM Metrics ═══ -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-envelope-open-text"></i> Métricas MailX</div>
+                <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">utm attribution</span>
+            </div>
+            <div class="card-body">
+                <div class="kpi-grid" id="mailxKpis">
+                    <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Top 5 Produtos ═══ -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-trophy"></i> Top 5 Produtos</div>
+            </div>
+            <div class="card-body">
+                <div id="topProductsChart" style="height:220px; position:relative">
+                    <canvas id="chartTopProducts"></canvas>
+                </div>
+                <div id="topProductsEmpty" style="display:none" class="empty-state">
+                    <i class="fas fa-box-open"></i>Nenhuma venda registrada ainda
+                </div>
+            </div>
+        </div>
+
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -1136,7 +1164,7 @@
                     { icon: 'fa-receipt purple', label: 'Ticket Médio', value: data.kpis.ticket_medio },
                     { icon: 'fa-satellite-dish blue', label: 'Webhooks Total', value: data.kpis.webhooks_total },
                     { icon: 'fa-bolt orange', label: 'Webhooks Hoje', value: data.kpis.webhooks_hoje },
-                    { icon: 'fa-check-circle green', label: 'Taxa de Sucesso', value: data.kpis.taxa_sucesso },
+                    { icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso },
                     { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
                     { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
                 ].map(k => `
@@ -1146,6 +1174,79 @@
                         <div class="kpi-label">${k.label}</div>
                     </div>
                 `).join('');
+
+                // Render MailX KPIs
+                const mailxGrid = document.getElementById('mailxKpis');
+                mailxGrid.innerHTML = [
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || 'R$ 0,00' },
+                    { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx || 0 },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0 },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || 'R$ 0,00' },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
+
+                // Render Top 5 Products chart
+                if (data.top_products && data.top_products.length > 0) {
+                    document.getElementById('topProductsChart').style.display = 'block';
+                    document.getElementById('topProductsEmpty').style.display = 'none';
+                    new Chart(document.getElementById('chartTopProducts'), {
+                        type: 'bar',
+                        data: {
+                            labels: data.top_products.map(p => p.name),
+                            datasets: [{
+                                label: 'Vendas',
+                                data: data.top_products.map(p => p.sales),
+                                backgroundColor: [
+                                    'rgba(0, 77, 232, 0.8)',
+                                    'rgba(59, 130, 246, 0.7)',
+                                    'rgba(0, 214, 143, 0.7)',
+                                    'rgba(139, 92, 246, 0.7)',
+                                    'rgba(255, 176, 32, 0.7)',
+                                ],
+                                borderColor: [
+                                    '#004de8',
+                                    '#3b82f6',
+                                    '#00d68f',
+                                    '#8b5cf6',
+                                    '#ffb020',
+                                ],
+                                borderWidth: 1,
+                                borderRadius: 6,
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    callbacks: {
+                                        afterLabel: function(ctx) {
+                                            const p = data.top_products[ctx.dataIndex];
+                                            return 'R$ ' + p.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+                                        }
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
+                                y: {
+                                    grid: { display: false },
+                                    ticks: { color: '#e8ecf4', font: { size: 12, weight: '600' } },
+                                },
+                            },
+                        }
+                    });
+                } else {
+                    document.getElementById('topProductsChart').style.display = 'none';
+                    document.getElementById('topProductsEmpty').style.display = 'block';
+                }
 
                 // Render activity chart
                 if (data.daily_activity && data.daily_activity.labels.length > 0) {

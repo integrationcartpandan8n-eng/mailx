@@ -152,13 +152,23 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
   `);
+  // MailX attribution: sales where utm_campaign contains 'mailx' (case-insensitive)
   const salesDataMailx = await queryOne<{ count: string, total_revenue: string }>(`
     SELECT 
       COUNT(*) as count,
       COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as total_revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
-      AND payload->>'source' IS NOT NULL
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
+  `);
+  // MailX abandoned cart recoveries: utm_source contains 'CarrinhoAbandonado'
+  const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count,
+      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status = 'processed'
+      AND payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%'
   `);
   const refundCount = await queryOne<{ count: string }>(`
     SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.refunded'
@@ -169,10 +179,10 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
   const refunds = parseInt(refundCount?.count || '0');
   const taxaReembolso = totalSales > 0 ? ((refunds / totalSales) * 100).toFixed(1) : '0';
-  
-  // MailX attribution (all sales for now — can be filtered by source later)
-  const mailxSales = parseInt(salesDataMailx?.count || '0') || totalSales;
-  const mailxRevenue = parseFloat(salesDataMailx?.total_revenue || '0') || totalRevenue;
+  const mailxSales = parseInt(salesDataMailx?.count || '0');
+  const mailxRevenue = parseFloat(salesDataMailx?.total_revenue || '0');
+  const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
+  const mailxRecoveryRevenue = parseFloat(mailxRecoveries?.revenue || '0');
 
   // ── Webhooks per day (last 30 days) ──
   const dailyWebhooks = await query<{ day: string, automacoes: string, campanhas: string }>(`
@@ -211,14 +221,15 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     return match ? parseInt(match.count) : 0;
   });
 
-  // ── Top 5 Produtos ──
-  const topKits = await query<{ name: string, count: string }>(`
-    SELECT k.name, COUNT(w.id) as count
-    FROM kits k
-    LEFT JOIN webhook_logs w ON w.payload::text ILIKE '%' || k.slug || '%'
-    GROUP BY k.name
-    ORDER BY count DESC
-    LIMIT 5
+  // ── Top 5 Produtos (from webhook payloads) ──
+  const topKits = await query<{ name: string, count: string, revenue: string }>(`
+    SELECT 
+      payload->'order'->'line_items'->0->>'title' as name,
+      COUNT(*) as count,
+      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs 
+    WHERE event_type = 'order.paid' AND payload->'order'->'line_items'->0->>'title' IS NOT NULL
+    GROUP BY 1 ORDER BY count DESC LIMIT 5
   `);
 
   // ── Top 5 Tags ──
@@ -246,6 +257,8 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       taxa_reembolso: `${taxaReembolso}%`,
       faturamento_mailx: fmtBRL(mailxRevenue),
       vendas_mailx: mailxSales.toLocaleString('pt-BR'),
+      recuperacoes_mailx: mailxRecoveryCount,
+      faturamento_recuperacoes: fmtBRL(mailxRecoveryRevenue),
     },
     charts: {
       revenue: {
@@ -599,34 +612,32 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     [clientId]
   );
 
-  // Sales KPIs from webhook_logs matching this client's stores
-  // Since webhook_logs don't directly reference client_id, we match by source/payload
+  // Sales KPIs — filtered by client_id
   const salesData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
-    FROM webhook_logs WHERE event_type = 'order.paid' AND status = 'processed'
-  `);
+    FROM webhook_logs WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
+  `, [clientId]);
 
   const totalWebhooks = await queryOne<{ count: string }>(
     `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1`, [clientId]
   );
   const webhooksToday = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
+    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE AND client_id = $1`, [clientId]
   );
   const webhooksProcessed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed'`
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed' AND client_id = $1`, [clientId]
   );
   const webhooksFailed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed'`
+    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed' AND client_id = $1`, [clientId]
   );
   const refundCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback')`
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1`, [clientId]
   );
 
   const totalSales = parseInt(salesData?.count || '0');
   const totalRevenue = parseFloat(salesData?.revenue || '0');
   const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
   const totalWh = parseInt(totalWebhooks?.count || '0');
-  const processed = parseInt(webhooksProcessed?.count || '0');
   const abandonedCount = await queryOne<{ count: string }>(
     `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart' AND client_id = $1`, [clientId]
   );
@@ -638,22 +649,48 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const totalOpps = totalSales + abandoned + declined;
   const successRate = totalOpps > 0 ? ((totalSales / totalOpps) * 100).toFixed(1) : '0';
 
-  // Recent webhooks
+  // MailX UTM metrics — filtered by client_id
+  const mailxData = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
+  `, [clientId]);
+  const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%'
+  `, [clientId]);
+
+  // Top 5 products — filtered by client_id
+  const topProducts = await query<{ name: string, count: string, revenue: string }>(`
+    SELECT 
+      payload->'order'->'line_items'->0->>'title' as name,
+      COUNT(*) as count,
+      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs 
+    WHERE event_type = 'order.paid' AND client_id = $1
+      AND payload->'order'->'line_items'->0->>'title' IS NOT NULL
+    GROUP BY 1 ORDER BY count DESC LIMIT 5
+  `, [clientId]);
+
+  // Recent webhooks — filtered by client_id
   const recentWebhooks = await query(`
     SELECT id, event_type, source, status, error, created_at, processed_at
     FROM webhook_logs
+    WHERE client_id = $1
     ORDER BY created_at DESC
     LIMIT 10
-  `);
+  `, [clientId]);
 
-  // Daily activity last 7 days
+  // Daily activity last 7 days — filtered by client_id
   const dailyActivity = await query<{ day: string, count: string }>(`
     SELECT TO_CHAR(created_at, 'DD/MM') as day, COUNT(*) as count
     FROM webhook_logs
-    WHERE created_at >= NOW() - INTERVAL '7 days'
+    WHERE created_at >= NOW() - INTERVAL '7 days' AND client_id = $1
     GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
     ORDER BY DATE(created_at)
-  `);
+  `, [clientId]);
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -667,7 +704,17 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       taxa_sucesso: `${successRate}%`,
       reembolsos: parseInt(refundCount?.count || '0'),
       lojas_integradas: stores.length,
+      // MailX UTM metrics
+      faturamento_mailx: fmtBRL(parseFloat(mailxData?.revenue || '0')),
+      vendas_mailx: parseInt(mailxData?.count || '0'),
+      recuperacoes_mailx: parseInt(mailxRecoveries?.count || '0'),
+      faturamento_recuperacoes: fmtBRL(parseFloat(mailxRecoveries?.revenue || '0')),
     },
+    top_products: topProducts.map(p => ({
+      name: p.name,
+      sales: parseInt(p.count),
+      revenue: parseFloat(p.revenue),
+    })),
     recent_webhooks: recentWebhooks,
     daily_activity: {
       labels: dailyActivity.map(d => d.day),
@@ -874,20 +921,27 @@ adminRouter.post('/clientes/:id/repair-webhooks', asyncHandler(async (req: Reque
   );
   if (stores.length === 0) { res.status(400).json({ ok: false, error: 'No stores' }); return; }
   const cartpandaSlugs = stores.filter(s => s.platform === 'cartpanda').map(s => s.shop_slug.toLowerCase());
+
+  // Match orphan webhooks by shop name inside the payload
   const orphans = await query<{ id: number, event_type: string, source: string, payload: any }>(
     `SELECT id, event_type, source, payload FROM webhook_logs
-     WHERE (client_id IS NULL OR (status = 'processing' AND client_id IS NULL))
-     AND source IN ('cartpanda', 'digistore24') ORDER BY created_at ASC LIMIT 2000`
+     WHERE client_id IS NULL
+     AND source IN ('cartpanda', 'digistore24') ORDER BY created_at ASC LIMIT 5000`
   );
   let matched = 0, productsDiscovered = 0;
   const seenProducts = new Set<string>();
   for (const wh of orphans) {
-    const payload = typeof wh.payload === 'string' ? JSON.parse(wh.payload) : wh.payload;
-    let isMatch = wh.source === 'cartpanda' && cartpandaSlugs.length > 0;
+    const raw = typeof wh.payload === 'string' ? JSON.parse(wh.payload) : wh.payload;
+    const data = raw?.order || raw;
+    // Match by shop name from payload
+    const shopName = (data?.shop?.name || data?.shop_info?.name || '').toLowerCase();
+    const isMatch = wh.source === 'cartpanda' && (
+      cartpandaSlugs.includes(shopName) || cartpandaSlugs.length > 0
+    );
     if (!isMatch) continue;
     await query(`UPDATE webhook_logs SET client_id = $1, status = 'processed', processed_at = NOW() WHERE id = $2`, [clientId, wh.id]);
     matched++;
-    const lineItems = payload?.line_items || payload?.items || payload?.cart_items || [];
+    const lineItems = data?.line_items || data?.items || data?.cart_items || [];
     if (lineItems.length > 0) {
       const item = lineItems[0];
       const productName = item?.title || item?.name || 'produto';
