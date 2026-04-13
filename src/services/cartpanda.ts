@@ -3,9 +3,6 @@ import { logger } from '../utils/logger';
 
 const CTX = 'CartPanda';
 
-/** Base URL for CartPanda Accounts API (webhook management) */
-const ACCOUNTS_BASE = 'https://accounts.cartpanda.com/api';
-
 export interface WebhookRegistrationResult {
   created: string[];
   skipped: string[];
@@ -21,6 +18,7 @@ export class CartPandaClient {
     this.storeSlug = storeSlug;
     this.apiToken = apiToken;
 
+    // Default to .cartpanda.com — will be overridden if probe finds .mycartpanda.com
     this.http = axios.create({
       baseURL: `https://${storeSlug}.cartpanda.com/api/v3`,
       headers: { Authorization: `Bearer ${apiToken}` },
@@ -50,11 +48,10 @@ export class CartPandaClient {
    * 
    * CartPanda Webhook API:
    *   POST https://accounts.cartpanda.com/api/{shop-slug}/webhooks
+   *   — OR —
+   *   POST https://accounts.mycartpanda.com/api/{shop-slug}/webhooks
    *   Authorization: Bearer {api_token}
    *   Body: { endpoint: string, events: string[] }
-   * 
-   * Supported events: product.created, product.updated, product.deleted,
-   *                    order.created, order.paid, order.updated, order.refunded
    */
   async registerWebhooks(callbackBaseUrl: string): Promise<WebhookRegistrationResult> {
     const result: WebhookRegistrationResult = {
@@ -80,42 +77,44 @@ export class CartPandaClient {
         endpoint: `${base}/webhook/cartpanda/card-declined`,
         events: ['order.updated'],
       },
+      {
+        endpoint: `${base}/webhook/cartpanda/order-paid`,
+        events: ['order.refunded'],
+      },
     ];
 
-    // Also register a catch-all for refunds and product events
-    webhooksToRegister.push({
-      endpoint: `${base}/webhook/cartpanda/order-paid`,
-      events: ['order.refunded'],
-    });
-
-    // CartPanda has two possible accounts API domains
+    // CartPanda has two possible accounts API domains — probe both
     const ACCOUNTS_URLS = [
       `https://accounts.cartpanda.com/api/${this.storeSlug}`,
       `https://accounts.mycartpanda.com/api/${this.storeSlug}`,
     ];
 
     // Try to determine the correct accounts base URL
-    let accountsBaseUrl = ACCOUNTS_URLS[0];
+    let accountsBaseUrl = '';
     for (const url of ACCOUNTS_URLS) {
       try {
-        await axios.get(`${url}/webhooks`, {
+        logger.debug(CTX, `Probing Accounts API: ${url}/webhooks`);
+        const probeRes = await axios.get(`${url}/webhooks`, {
           headers: { Authorization: `Bearer ${this.apiToken}`, Accept: 'application/json' },
           timeout: 10000,
+          validateStatus: (s) => s < 500, // Accept 2xx, 3xx, 4xx as "found"
         });
-        accountsBaseUrl = url;
-        logger.info(CTX, `✅ CartPanda Accounts API found at: ${url}`);
-        break;
-      } catch (err: any) {
-        const status = err.response?.status;
-        if (status && status !== 401 && status !== 403) {
-          // Got a non-auth error, this might be the right URL but with different issue
+        const status = probeRes.status;
+        // If we get any response that isn't a 404, this is likely the right URL
+        if (status !== 404) {
           accountsBaseUrl = url;
+          logger.info(CTX, `✅ CartPanda Accounts API found at: ${url} (HTTP ${status})`);
           break;
         }
-        if (status === 401 || status === 403) {
-          logger.debug(CTX, `Auth failed at ${url} (${status}), trying next...`);
-        }
+      } catch (err: any) {
+        logger.debug(CTX, `Probe failed for ${url}: ${err.message}`);
       }
+    }
+
+    if (!accountsBaseUrl) {
+      // Fallback: use the first URL if both probes failed
+      accountsBaseUrl = ACCOUNTS_URLS[0];
+      logger.warn(CTX, `⚠️ Could not probe Accounts API, defaulting to: ${accountsBaseUrl}`);
     }
 
     logger.info(CTX, `Using CartPanda Accounts API: ${accountsBaseUrl}`);
@@ -153,6 +152,7 @@ export class CartPandaClient {
       }
 
       try {
+        logger.debug(CTX, `POST ${accountsBaseUrl}/webhooks → endpoint=${webhook.endpoint}, events=${webhook.events.join(',')}`);
         await accountsHttp.post('/webhooks', {
           endpoint: webhook.endpoint,
           events: webhook.events,
@@ -164,7 +164,7 @@ export class CartPandaClient {
         const status = err.response?.status || 'unknown';
         const errorMsg = err.response?.data?.message || err.response?.data?.error || JSON.stringify(err.response?.data) || err.message;
         result.errors.push({ endpoint: webhook.endpoint, error: `${status}: ${errorMsg}` });
-        logger.error(CTX, `❌ Failed to register webhook: ${webhook.endpoint}`, { status, error: errorMsg, url: accountsBaseUrl });
+        logger.error(CTX, `❌ Failed to register webhook: ${webhook.endpoint}`, { status, error: errorMsg, requestUrl: `${accountsBaseUrl}/webhooks` });
       }
     }
 
