@@ -15,12 +15,21 @@ export class CartPandaClient {
   private apiToken: string;
 
   constructor(storeSlug: string, apiToken: string) {
-    this.storeSlug = storeSlug;
+    // Normalize: extract slug from URLs like "https://gox.mycartpanda.com/" → "gox"
+    let slug = storeSlug.trim().replace(/\/+$/, '');
+    const urlMatch = slug.match(/^https?:\/\/([^.]+)\.(my)?cartpanda\.com/i);
+    if (urlMatch) {
+      slug = urlMatch[1];
+    }
+    // Also remove any protocol/domain fragments
+    slug = slug.replace(/^https?:\/\//, '').replace(/\..*$/, '');
+
+    this.storeSlug = slug;
     this.apiToken = apiToken;
 
     // Default to .cartpanda.com — will be overridden if probe finds .mycartpanda.com
     this.http = axios.create({
-      baseURL: `https://${storeSlug}.cartpanda.com/api/v3`,
+      baseURL: `https://${slug}.cartpanda.com/api/v3`,
       headers: { Authorization: `Bearer ${apiToken}` },
       timeout: 15000,
     });

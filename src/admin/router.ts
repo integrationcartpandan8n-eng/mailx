@@ -804,22 +804,28 @@ adminRouter.get('/clientes/:id/stores', asyncHandler(async (req: Request, res: R
 // POST /admin/clientes/:id/stores - Add store to a client
 adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const { shop_slug, api_token, events, platform } = req.body;
+  let { shop_slug, api_token, events, platform } = req.body;
 
   if (!shop_slug || !api_token) {
     res.status(400).json({ error: 'shop_slug and api_token are required' });
     return;
   }
 
+  // Normalize slug: "https://gox.mycartpanda.com/" → "gox"
+  let normalizedSlug = shop_slug.trim().replace(/\/+$/, '');
+  const urlMatch = normalizedSlug.match(/^https?:\/\/([^.]+)\.(my)?cartpanda\.com/i);
+  if (urlMatch) normalizedSlug = urlMatch[1];
+  normalizedSlug = normalizedSlug.replace(/^https?:\/\//, '').replace(/\..*$/, '');
+
   const storePlatform = platform || 'cartpanda';
 
   await query(
     `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, events, status)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [clientId, storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'pending']
+    [clientId, storePlatform, normalizedSlug, api_token, JSON.stringify(events || {}), 'pending']
   );
 
-  logger.info(CTX, `Store "${shop_slug}" (${storePlatform}) integrated for client ${clientId}`);
+  logger.info(CTX, `Store "${normalizedSlug}" (${storePlatform}) integrated for client ${clientId}`);
 
   // Auto-register webhooks on CartPanda
   let webhookResult = null;
