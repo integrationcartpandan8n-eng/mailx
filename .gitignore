@@ -3,3 +3,5 @@ dist/
 .env
 credentials/
 *.db
+_vps_*.mjs
+ssh-diff*.mjs
