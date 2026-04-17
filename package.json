@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "bootstrap": "tsx src/setup/bootstrap.ts"
+    "bootstrap": "tsx src/setup/bootstrap.ts",
+    "resync": "tsx src/setup/resync-webhooks.ts"
   },
   "keywords": [],
   "author": "MailX Group",
