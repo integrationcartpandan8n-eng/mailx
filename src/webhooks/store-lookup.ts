@@ -107,20 +107,28 @@ export async function lookupStore(
 
 /**
  * Extract the shop slug from a CartPanda webhook payload.
- * CartPanda may send `store_slug`, `shop` or the store URL domain.
+ * CartPanda wraps the actual order in `payload.order` and the shop
+ * metadata in `payload.order.shop` (with `slug` and `name` fields).
  * Supports both cartpanda.com and mycartpanda.com domains.
  */
 export function extractCartPandaSlug(payload: any): string {
-  // Direct slug field
-  if (payload.store_slug) return payload.store_slug.toLowerCase();
-  if (payload.shop) return payload.shop.toLowerCase();
+  // CartPanda real structure: payload.order.shop.{slug,name}
+  const orderShop = payload?.order?.shop;
+  if (orderShop?.slug) return String(orderShop.slug).toLowerCase();
+  if (orderShop?.name) return String(orderShop.name).toLowerCase();
+
+  // Legacy / alternative top-level fields
+  if (payload.store_slug) return String(payload.store_slug).toLowerCase();
+  if (payload.shop && typeof payload.shop === 'string') return payload.shop.toLowerCase();
+  if (payload?.shop?.slug) return String(payload.shop.slug).toLowerCase();
+  if (payload?.shop?.name) return String(payload.shop.name).toLowerCase();
 
   // From store URL — supports both cartpanda.com and mycartpanda.com
-  const storeUrl = payload.store_url || payload.shop_url || payload.domain || '';
+  const storeUrl = payload.store_url || payload.shop_url || payload.domain
+    || payload?.order?.store_url || payload?.order?.shop_url || '';
   if (storeUrl) {
     const match = storeUrl.match(/https?:\/\/([^.]+)\.(?:my)?cartpanda\.com/);
     if (match) return match[1].toLowerCase();
-    // Fallback: try to extract subdomain from any URL
     const domainMatch = storeUrl.match(/https?:\/\/([^./]+)/);
     if (domainMatch) return domainMatch[1].toLowerCase();
   }

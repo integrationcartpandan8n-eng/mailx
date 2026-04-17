@@ -597,6 +597,19 @@
             </div>
         </div>
 
+        <!-- ═══ Email Marketing KPIs (pendentes — aguardando integração AC reporting) ═══ -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-envelope"></i> KPIs de Email Marketing</div>
+                <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">pendente — activecampaign</span>
+            </div>
+            <div class="card-body">
+                <div class="kpi-grid" id="emailKpis">
+                    <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ Top 5 Produtos ═══ -->
         <div class="card">
             <div class="card-header">
@@ -1167,6 +1180,7 @@
                     { icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso },
                     { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
                     { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
+                    { icon: 'fa-hand-holding-dollar blue', label: 'Comissões MailX', value: data.kpis.comissoes_mailx || 'R$ 0,00' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
@@ -1182,6 +1196,24 @@
                     { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx || 0 },
                     { icon: 'fa-cart-arrow-down orange', label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0 },
                     { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || 'R$ 0,00' },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
+
+                // Render Email Marketing KPIs (pendentes — ActiveCampaign reporting)
+                const emailGrid = document.getElementById('emailKpis');
+                const em = data.email || {};
+                emailGrid.innerHTML = [
+                    { icon: 'fa-user-plus blue', label: 'Entrada de Contatos', value: em.entrada_contatos || '--' },
+                    { icon: 'fa-mouse-pointer green', label: 'CTR', value: em.ctr || '--' },
+                    { icon: 'fa-envelope-open purple', label: 'Taxa de Abertura', value: em.taxa_abertura || '--' },
+                    { icon: 'fa-bullseye orange', label: 'CTOR', value: em.ctor || '--' },
+                    { icon: 'fa-chart-line blue', label: 'RPM', value: em.rpm || '--' },
+                    { icon: 'fa-coins green', label: 'EPC', value: em.epc || '--' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>

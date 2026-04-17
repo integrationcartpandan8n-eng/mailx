@@ -696,6 +696,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Comissão MailX = 30% do faturamento (mesmo padrão do /dashboard/history)
+  const comissaoMailx = totalRevenue * 0.30;
+
   res.json({
     kpis: {
       faturamento: fmtBRL(totalRevenue),
@@ -706,11 +709,21 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       taxa_sucesso: `${successRate}%`,
       reembolsos: parseInt(refundCount?.count || '0'),
       lojas_integradas: stores.length,
+      comissoes_mailx: fmtBRL(comissaoMailx),
       // MailX UTM metrics
       faturamento_mailx: fmtBRL(parseFloat(mailxData?.revenue || '0')),
       vendas_mailx: parseInt(mailxData?.count || '0'),
       recuperacoes_mailx: parseInt(mailxRecoveries?.count || '0'),
       faturamento_recuperacoes: fmtBRL(parseFloat(mailxRecoveries?.revenue || '0')),
+    },
+    // Pending email-marketing KPIs — aguardando integração com ActiveCampaign reporting API
+    email: {
+      entrada_contatos: '--',
+      ctr: '--',
+      taxa_abertura: '--',
+      ctor: '--',
+      rpm: '--',
+      epc: '--',
     },
     top_products: topProducts.map(p => ({
       name: p.name,
