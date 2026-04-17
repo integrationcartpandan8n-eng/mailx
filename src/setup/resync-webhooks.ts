@@ -55,7 +55,7 @@ interface WebhookRow {
 }
 
 interface ClientRow {
-  name: string;
+  company_name: string;
   ac_api_url: string | null;
   ac_api_key: string | null;
 }
@@ -97,18 +97,18 @@ async function main(): Promise<void> {
     const cached = acCache.get(clientId);
     if (cached) return cached;
     const c = await queryOne<ClientRow>(
-      `SELECT name, ac_api_url, ac_api_key FROM clients WHERE id = $1`,
+      `SELECT company_name, ac_api_url, ac_api_key FROM clients WHERE id = $1`,
       [clientId]
     );
     if (!c || !c.ac_api_url || !c.ac_api_key) {
       logger.warn(CTX, `Client #${clientId} sem credenciais AC — pulando`);
-      const entry: AcEntry = { ac: null, name: c?.name || `#${clientId}` };
+      const entry: AcEntry = { ac: null, name: c?.company_name || `#${clientId}` };
       acCache.set(clientId, entry);
       return entry;
     }
     const entry: AcEntry = {
       ac: new ActiveCampaignClient(c.ac_api_url, c.ac_api_key),
-      name: c.name,
+      name: c.company_name,
     };
     acCache.set(clientId, entry);
     return entry;
