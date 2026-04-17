@@ -625,6 +625,61 @@
             </div>
         </div>
 
+        <!-- ═══ Faturamento x Tempo + Vendas por Hora ═══ -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento x Tempo</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">últimos 30 dias</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartRevenue"></canvas></div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-clock"></i> Vendas por Hora</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">distribuição 24h</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartHourly"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ Top 5 Tags + Conversão Envios por Venda ═══ -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-tags"></i> Top 5 Tags de Email</div>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartTopTags"></canvas></div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-funnel-dollar"></i> Conversão — Envios por Venda</div>
+                </div>
+                <div class="card-body">
+                    <div style="display:flex; gap:1rem; padding:0.5rem 0; flex-wrap:wrap">
+                        <div style="text-align:center; flex:1; min-width:100px">
+                            <div style="font-size:1.6rem; font-weight:700; color:var(--accent-light)" id="fn-envios">0</div>
+                            <div style="font-size:0.7rem; color:var(--text-dim); margin-top:4px">Total de Envios</div>
+                        </div>
+                        <div style="text-align:center; flex:1; min-width:100px">
+                            <div style="font-size:1.6rem; font-weight:700; color:var(--success)" id="fn-vendas">0</div>
+                            <div style="font-size:0.7rem; color:var(--text-dim); margin-top:4px">Vendas</div>
+                        </div>
+                        <div style="text-align:center; flex:1; min-width:100px; background:var(--accent-subtle); border-radius:var(--radius); padding:0.75rem">
+                            <div style="font-size:1.6rem; font-weight:700; color:#fff" id="fn-ratio">0</div>
+                            <div style="font-size:0.7rem; color:var(--text-dim); margin-top:4px">→ envios p/ 1 venda</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -1306,6 +1361,98 @@
                             scales: {
                                 y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
                                 x: { grid: { display: false } },
+                            },
+                        }
+                    });
+                }
+
+                // Funnel (envios por venda)
+                if (data.funnel) {
+                    document.getElementById('fn-envios').textContent = (data.funnel.total_envios || 0).toLocaleString('pt-BR');
+                    document.getElementById('fn-vendas').textContent = (data.funnel.total_vendas || 0).toLocaleString('pt-BR');
+                    document.getElementById('fn-ratio').textContent = (data.funnel.envios_por_venda || 0).toLocaleString('pt-BR');
+                }
+
+                // Revenue x Tempo (últimos 30 dias)
+                if (data.charts && data.charts.revenue) {
+                    new Chart(document.getElementById('chartRevenue'), {
+                        type: 'line',
+                        data: {
+                            labels: data.charts.revenue.labels,
+                            datasets: [
+                                {
+                                    label: 'Automações',
+                                    data: data.charts.revenue.automacoes,
+                                    borderColor: '#004de8',
+                                    backgroundColor: 'rgba(0, 77, 232, 0.08)',
+                                    fill: true, tension: 0.35, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+                                },
+                                {
+                                    label: 'Campanhas',
+                                    data: data.charts.revenue.campanhas,
+                                    borderColor: '#00d68f',
+                                    backgroundColor: 'rgba(0, 214, 143, 0.05)',
+                                    fill: true, tension: 0.35, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5,
+                                },
+                            ]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            scales: {
+                                y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
+                                x: { grid: { display: false } }
+                            },
+                        }
+                    });
+                }
+
+                // Vendas por Hora
+                if (data.charts && data.charts.hourly) {
+                    new Chart(document.getElementById('chartHourly'), {
+                        type: 'bar',
+                        data: {
+                            labels: data.charts.hourly.labels,
+                            datasets: [{
+                                label: 'Webhooks',
+                                data: data.charts.hourly.values,
+                                backgroundColor: data.charts.hourly.values.map((v, i) =>
+                                    i >= 9 && i <= 14 ? 'rgba(0, 77, 232, 0.7)' : 'rgba(0, 77, 232, 0.2)'
+                                ),
+                                borderRadius: 4, borderSkipped: false,
+                            }]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
+                                x: { grid: { display: false } }
+                            },
+                        }
+                    });
+                }
+
+                // Top 5 Tags
+                if (data.charts && data.charts.top_tags) {
+                    new Chart(document.getElementById('chartTopTags'), {
+                        type: 'bar',
+                        data: {
+                            labels: data.charts.top_tags.labels,
+                            datasets: [{
+                                label: 'Webhooks',
+                                data: data.charts.top_tags.values,
+                                backgroundColor: ['rgba(0,214,143,0.8)', 'rgba(0,214,143,0.65)', 'rgba(0,214,143,0.5)', 'rgba(0,214,143,0.35)', 'rgba(0,214,143,0.2)'],
+                                borderRadius: 6, borderSkipped: false,
+                            }]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            indexAxis: 'y',
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                x: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, beginAtZero: true },
+                                y: { grid: { display: false } }
                             },
                         }
                     });

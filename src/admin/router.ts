@@ -694,6 +694,56 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ORDER BY DATE(created_at)
   `, [clientId]);
 
+  // ── Webhooks per day (last 30 days) — split into automações vs campanhas ──
+  const dailyWebhooks = await query<{ day: string, automacoes: string, campanhas: string }>(`
+    SELECT
+      TO_CHAR(created_at, 'DD/MM') as day,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid') as automacoes,
+      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as campanhas
+    FROM webhook_logs
+    WHERE created_at >= NOW() - INTERVAL '30 days' AND client_id = $1
+    GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
+    ORDER BY DATE(created_at)
+  `, [clientId]);
+  const last30Days: string[] = [];
+  const autoData: number[] = [];
+  const campData: number[] = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    last30Days.push(label);
+    const match = dailyWebhooks.find(r => r.day === label);
+    autoData.push(match ? parseInt(match.automacoes) : 0);
+    campData.push(match ? parseInt(match.campanhas) : 0);
+  }
+
+  // ── Webhooks by hour ──
+  const hourlyWebhooks = await query<{ hour: string, count: string }>(`
+    SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
+    FROM webhook_logs
+    WHERE client_id = $1
+    GROUP BY EXTRACT(HOUR FROM created_at)
+    ORDER BY EXTRACT(HOUR FROM created_at)
+  `, [clientId]);
+  const hourlyValues = Array.from({ length: 24 }, (_, i) => {
+    const match = hourlyWebhooks.find(r => parseInt(r.hour) === i);
+    return match ? parseInt(match.count) : 0;
+  });
+
+  // ── Top 5 Tags (event type distribution) ──
+  const eventDist = await query<{ event_type: string, count: string }>(`
+    SELECT event_type, COUNT(*) as count
+    FROM webhook_logs
+    WHERE client_id = $1
+    GROUP BY event_type
+    ORDER BY count DESC
+    LIMIT 5
+  `, [clientId]);
+
+  // ── Conversion Funnel (envios por venda) ──
+  const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
+
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
@@ -730,6 +780,26 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     daily_activity: {
       labels: dailyActivity.map(d => d.day),
       values: dailyActivity.map(d => parseInt(d.count)),
+    },
+    charts: {
+      revenue: {
+        labels: last30Days,
+        automacoes: autoData,
+        campanhas: campData,
+      },
+      hourly: {
+        labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
+        values: hourlyValues,
+      },
+      top_tags: {
+        labels: eventDist.length > 0 ? eventDist.map(e => e.event_type) : ['Nenhum evento'],
+        values: eventDist.length > 0 ? eventDist.map(e => parseInt(e.count)) : [0],
+      },
+    },
+    funnel: {
+      total_envios: totalWh,
+      total_vendas: totalSales,
+      envios_por_venda: enviosPorVenda,
     },
     stores: stores.map(s => ({ slug: s.shop_slug, platform: s.platform })),
   });
