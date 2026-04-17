@@ -1180,7 +1180,8 @@
                     { icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso },
                     { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
                     { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
-                    { icon: 'fa-hand-holding-dollar blue', label: 'Comissões MailX', value: data.kpis.comissoes_mailx || 'R$ 0,00' },
+                    { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx ?? 0 },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || 'R$ 0,00' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
