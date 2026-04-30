@@ -10,6 +10,7 @@ import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractDS24Identifier } from './store-lookup';
 import { upsertProduct, extractDS24ProductId } from './product-upsert';
+import { syncSlickTextOrderPaid, extractDS24Address } from './slicktext-sync';
 
 const CTX = 'Webhook:DS24:Payment';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -112,6 +113,24 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     } else {
       logger.info(CTX, `Product "${data.productName}" not yet enabled — contact synced only`);
     }
+
+    // Sync with SlickText SMS (non-blocking)
+    const address = extractDS24Address(params);
+    syncSlickTextOrderPaid(store, kit, {
+      phone: data.phone,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      email: data.email,
+      address,
+    }).then((stResult) => {
+      if (stResult.synced) {
+        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+      } else {
+        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+      }
+    }).catch((err) => {
+      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+    });
 
     if (isDatabaseReady() && logId) {
       try {

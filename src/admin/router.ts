@@ -5,6 +5,7 @@ import { query, isDatabaseReady, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import { runBootstrap, runKitBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
 import { CartPandaClient } from '../services/cartpanda';
+import { SlickTextClient } from '../services/slicktext';
 import { env } from '../config/env';
 import {
   SESSION_COOKIE,
@@ -571,6 +572,23 @@ adminRouter.patch('/clientes/:id/ac-credentials', asyncHandler(async (req: Reque
   res.json({ ok: true });
 }));
 
+// PATCH /admin/clientes/:id/st-credentials - Update SlickText credentials
+adminRouter.patch('/clientes/:id/st-credentials', asyncHandler(async (req: Request, res: Response) => {
+  const { st_api_token, st_brand_id } = req.body;
+
+  if (!st_api_token || !st_brand_id) {
+    res.status(400).json({ error: 'st_api_token and st_brand_id are required' });
+    return;
+  }
+
+  await query(
+    `UPDATE clients SET st_api_token = $1, st_brand_id = $2, updated_at = NOW() WHERE id = $3`,
+    [st_api_token, st_brand_id, req.params.id]
+  );
+  logger.info(CTX, `Client ${req.params.id} SlickText credentials updated`);
+  res.json({ ok: true });
+}));
+
 // POST /admin/clientes/:id/bootstrap - Run AC setup
 adminRouter.post('/clientes/:id/bootstrap', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
@@ -802,6 +820,26 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       envios_por_venda: enviosPorVenda,
     },
     stores: stores.map(s => ({ slug: s.shop_slug, platform: s.platform })),
+    // New metrics from spec doc
+    representatividade: totalRevenue > 0
+      ? parseFloat(((parseFloat(mailxData?.revenue || '0') / totalRevenue) * 100).toFixed(1))
+      : 0,
+    conversao_por_segmento: {
+      carrinho_abandonado: {
+        leads: abandoned,
+        vendas: parseInt(mailxRecoveries?.count || '0'),
+        taxa: abandoned > 0
+          ? parseFloat(((parseInt(mailxRecoveries?.count || '0') / abandoned) * 100).toFixed(2))
+          : 0,
+      },
+      compradores: {
+        leads: totalSales,
+        vendas: parseInt(mailxData?.count || '0'),
+        taxa: totalSales > 0
+          ? parseFloat(((parseInt(mailxData?.count || '0') / totalSales) * 100).toFixed(2))
+          : 0,
+      },
+    },
   });
 }));
 
@@ -998,6 +1036,110 @@ adminRouter.get('/webhooks', asyncHandler(async (req: Request, res: Response) =>
     [limit]
   );
   res.json({ count: logs.length, logs });
+}));
+
+// ── SlickText SMS Stats ──
+
+// GET /admin/clientes/:id/sms-stats - Fetch SMS metrics from SlickText API
+adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id;
+
+  // Get client's SlickText credentials
+  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`,
+    [clientId]
+  );
+
+  if (!client?.st_api_token || !client?.st_brand_id) {
+    res.json({
+      configured: false,
+      error: 'SlickText not configured for this client',
+    });
+    return;
+  }
+
+  try {
+    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+
+    // Fetch all data in parallel
+    const [
+      contactAnalytics,
+      messageAnalytics,
+      creditAnalytics,
+      brandUsage,
+      lists,
+    ] = await Promise.all([
+      st.getContactAnalytics().catch(() => null),
+      st.getMessageAnalytics().catch(() => null),
+      st.getCreditAnalytics().catch(() => null),
+      st.getBrandUsage().catch(() => null),
+      st.getLists().catch(() => []),
+    ]);
+
+    // Get contact count for each list (product lists)
+    const kits = await query<{
+      name: string;
+      st_list_compra_id: string | null;
+      st_list_abandono_id: string | null;
+    }>(
+      `SELECT name, st_list_compra_id, st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true`,
+      [clientId]
+    );
+
+    const listStats: Array<{
+      product: string;
+      compra_list_id: number | null;
+      compra_contacts: number;
+      abandono_list_id: number | null;
+      abandono_contacts: number;
+    }> = [];
+
+    for (const kit of kits) {
+      const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
+      const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+
+      const [compraCount, abandonoCount] = await Promise.all([
+        compraId ? st.getListContactCount(compraId) : Promise.resolve(0),
+        abandonoId ? st.getListContactCount(abandonoId) : Promise.resolve(0),
+      ]);
+
+      listStats.push({
+        product: kit.name,
+        compra_list_id: compraId,
+        compra_contacts: compraCount,
+        abandono_list_id: abandonoId,
+        abandono_contacts: abandonoCount,
+      });
+    }
+
+    const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
+    const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);
+
+    res.json({
+      configured: true,
+      contacts: {
+        total: totalCompra + totalAbandono,
+        compradores: totalCompra,
+        carrinhos_abandonados: totalAbandono,
+        analytics: contactAnalytics,
+      },
+      messages: messageAnalytics,
+      credits: {
+        usage: brandUsage,
+        analytics: creditAnalytics,
+      },
+      lists: {
+        total: lists.length,
+        per_product: listStats,
+      },
+    });
+  } catch (err: any) {
+    logger.error(CTX, `SlickText API error for client #${clientId}: ${err.message}`);
+    res.json({
+      configured: true,
+      error: `SlickText API error: ${err.message}`,
+    });
+  }
 }));
 
 // ── Repair Stuck Webhooks ──

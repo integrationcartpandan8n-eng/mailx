@@ -29,6 +29,10 @@ export interface StoreContext {
   acApiUrl: string;
   /** Per-client ActiveCampaign API Key */
   acApiKey: string;
+  /** Per-client SlickText API Token */
+  stApiToken: string;
+  /** Per-client SlickText Brand ID */
+  stBrandId: string;
   /** Whether we resolved from DB or fell back to env */
   resolvedFromDb: boolean;
 }
@@ -41,6 +45,8 @@ interface StoreRow {
   api_token: string;
   ac_api_url: string;
   ac_api_key: string;
+  st_api_token: string;
+  st_brand_id: string;
 }
 
 /**
@@ -54,14 +60,16 @@ export async function lookupStore(
 ): Promise<StoreContext> {
   try {
     const row = await queryOne<StoreRow>(`
-      SELECT 
+      SELECT
         si.id as store_id,
         si.client_id,
         si.platform,
         si.shop_slug,
         si.api_token,
         COALESCE(c.ac_api_url, '') as ac_api_url,
-        COALESCE(c.ac_api_key, '') as ac_api_key
+        COALESCE(c.ac_api_key, '') as ac_api_key,
+        COALESCE(c.st_api_token, '') as st_api_token,
+        COALESCE(c.st_brand_id, '') as st_brand_id
       FROM store_integrations si
       LEFT JOIN clients c ON c.id = si.client_id
       WHERE si.platform = $1 AND LOWER(si.shop_slug) = LOWER($2)
@@ -83,6 +91,8 @@ export async function lookupStore(
         apiToken: row.api_token,
         acApiUrl,
         acApiKey,
+        stApiToken: row.st_api_token || '',
+        stBrandId: row.st_brand_id || '',
         resolvedFromDb: true,
       };
     }
@@ -101,6 +111,8 @@ export async function lookupStore(
     apiToken: '',
     acApiUrl: process.env.AC_API_URL || '',
     acApiKey: process.env.AC_API_KEY || '',
+    stApiToken: '',
+    stBrandId: '',
     resolvedFromDb: false,
   };
 }

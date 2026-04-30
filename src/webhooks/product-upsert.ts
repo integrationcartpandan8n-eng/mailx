@@ -26,6 +26,8 @@ export interface KitRecord {
   ac_tag_cartao_recusado_id: string | null;
   ac_tag_reembolso_id: string | null;
   ac_tag_chargeback_id: string | null;
+  st_list_compra_id: string | null;
+  st_list_abandono_id: string | null;
   created_at: string;
 }
 

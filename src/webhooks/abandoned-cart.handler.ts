@@ -4,6 +4,7 @@ import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 import { upsertProduct, extractCartPandaProductId } from './product-upsert';
+import { syncSlickTextAbandonedCart, extractCartPandaAddress } from './slicktext-sync';
 
 const CTX = 'Webhook:AbandonedCart';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -30,8 +31,10 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     }
 
     const email = data.email || data.customer?.email;
-    const firstName = data.first_name || data.customer?.first_name || '';
-    const cartItems = data.cart_items || data.line_items || data.items || [];
+    const firstName = data.first_name || data.customer?.first_name || data.customer_info?.first_name || '';
+    const lastName = data.last_name || data.customer?.last_name || '';
+    const phone = data.phone || data.customer?.phone || '';
+    const cartItems = data.cart_items || data.cart_line_items || data.line_items || data.items || [];
 
     if (!email) {
       logger.warn(CTX, 'No email found in abandoned cart payload');
@@ -82,6 +85,24 @@ export async function handleAbandonedCart(req: Request, res: Response, _next: Ne
     } else {
       logger.info(CTX, `Product "${productName}" not yet enabled — contact synced only`);
     }
+
+    // Sync with SlickText SMS (non-blocking)
+    const address = extractCartPandaAddress(payload);
+    syncSlickTextAbandonedCart(store, kit, {
+      phone,
+      firstName,
+      lastName,
+      email,
+      address,
+    }).then((stResult) => {
+      if (stResult.synced) {
+        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+      } else {
+        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+      }
+    }).catch((err) => {
+      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+    });
 
     if (isDatabaseReady() && logId) {
       try {

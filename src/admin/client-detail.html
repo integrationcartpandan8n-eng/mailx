@@ -547,6 +547,22 @@
             <span class="status-badge" id="clientStatus"></span>
         </div>
 
+        <!-- ═══ Tab Navigation ═══ -->
+        <div style="display:flex; gap:0; margin-bottom:1.25rem; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden">
+            <button class="tab-btn active" onclick="switchTab('geral')" id="tab-geral" style="flex:1; padding:0.7rem; border:none; background:var(--accent); color:#fff; font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em">
+                <i class="fas fa-chart-pie"></i> Visão Geral
+            </button>
+            <button class="tab-btn" onclick="switchTab('email')" id="tab-email" style="flex:1; padding:0.7rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
+                <i class="fas fa-envelope"></i> Email
+            </button>
+            <button class="tab-btn" onclick="switchTab('sms')" id="tab-sms" style="flex:1; padding:0.7rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
+                <i class="fas fa-sms"></i> SMS
+            </button>
+        </div>
+
+        <!-- ═══ TAB: VISÃO GERAL (Email + SMS consolidated) ═══ -->
+        <div id="tab-content-geral">
+
         <!-- ═══ Per-Client KPIs ═══ -->
         <div class="card">
             <div class="card-header">
@@ -680,6 +696,115 @@
             </div>
         </div>
 
+        <!-- ═══ Representatividade + Conversão por Segmento ═══ -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-percentage"></i> Representatividade MailX</div>
+                </div>
+                <div class="card-body" style="text-align:center; padding:1.5rem">
+                    <div style="font-size:2.5rem; font-weight:800; letter-spacing:-0.03em" id="rep-percent">0%</div>
+                    <div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.5rem">do faturamento total gerado pela MailX</div>
+                    <div style="margin-top:1rem; display:flex; justify-content:center; gap:2rem">
+                        <div>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--success)" id="rep-mailx">R$ 0</div>
+                            <div style="font-size:0.65rem; color:var(--text-muted)">Fat. MailX</div>
+                        </div>
+                        <div>
+                            <div style="font-size:0.95rem; font-weight:700" id="rep-total">R$ 0</div>
+                            <div style="font-size:0.65rem; color:var(--text-muted)">Fat. Total</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento</div>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Segmento</th><th>Leads</th><th>Vendas</th><th>Taxa</th></tr>
+                        </thead>
+                        <tbody id="convSegmentoBody">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        </div><!-- end tab-content-geral -->
+
+        <!-- ═══ TAB: EMAIL (email-specific metrics) ═══ -->
+        <div id="tab-content-email" style="display:none">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-envelope"></i> Métricas de Email Marketing</div>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="emailTabKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-envelope-open-text"></i> Métricas MailX (Email)</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">utm attribution</span>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="emailMailxKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end tab-content-email -->
+
+        <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
+        <div id="tab-content-sms" style="display:none">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS</div>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="smsContactKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos</div>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="smsSendKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-list"></i> Listas por Produto</div>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table" id="smsListsTable">
+                        <thead>
+                            <tr>
+                                <th>Produto</th>
+                                <th>Compradores</th>
+                                <th>Carrinhos Abandonados</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody id="smsListsBody">
+                            <tr><td colspan="4" class="empty-state"><i class="fas fa-sms"></i> Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div><!-- end tab-content-sms -->
+
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -709,6 +834,33 @@
                         <input type="password" id="editAcKey" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
                     </div>
                     <button class="btn btn-accent" onclick="saveAcCredentials()" style="height:36px">Salvar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SlickText SMS Credentials -->
+        <div class="card" id="stCredentialsSection">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-sms"></i> SlickText (SMS)</div>
+                <button class="btn btn-accent" onclick="toggleForm('stForm')"><i class="fas fa-pen"></i> Editar</button>
+            </div>
+            <div class="card-body" id="stStatusInfo">
+                <div style="display:flex; align-items:center; gap:0.75rem">
+                    <span id="stStatusBadge" class="tag gray">Não configurado</span>
+                    <span id="stBrandIdDisplay" style="font-size:0.78rem; color:var(--text-dim)"></span>
+                </div>
+            </div>
+            <div class="inline-form" id="stForm">
+                <div class="form-row">
+                    <div>
+                        <label>API Token (Bearer) *</label>
+                        <input type="password" id="editStToken" placeholder="seu-bearer-token-slicktext">
+                    </div>
+                    <div>
+                        <label>Brand ID *</label>
+                        <input type="text" id="editStBrandId" placeholder="26136">
+                    </div>
+                    <button class="btn btn-accent" onclick="saveStCredentials()" style="height:36px">Salvar</button>
                 </div>
             </div>
         </div>
@@ -935,6 +1087,21 @@
                     document.getElementById('editAcKey').value = client.ac_api_key || '';
                 }
 
+                // Show SlickText status
+                const stBadge = document.getElementById('stStatusBadge');
+                const stBrandDisplay = document.getElementById('stBrandIdDisplay');
+                if (client.st_api_token && client.st_brand_id) {
+                    stBadge.textContent = 'Configurado';
+                    stBadge.className = 'tag green';
+                    stBrandDisplay.textContent = `Brand ID: ${client.st_brand_id}`;
+                    document.getElementById('editStToken').value = client.st_api_token || '';
+                    document.getElementById('editStBrandId').value = client.st_brand_id || '';
+                } else {
+                    stBadge.textContent = 'Não configurado';
+                    stBadge.className = 'tag gray';
+                    stBrandDisplay.textContent = '';
+                }
+
                 // Load per-client stats
                 loadClientStats();
 
@@ -1055,6 +1222,35 @@
                 if (data.ok) {
                     showModal('✅ Sucesso', 'Credenciais ActiveCampaign salvas com sucesso.');
                     document.getElementById('acForm').classList.remove('show');
+                    loadClient();
+                } else {
+                    showModal('Erro', data.error || 'Falha ao salvar credenciais.');
+                }
+            } catch (e) {
+                showModal('Erro', e.message);
+            }
+        }
+
+        // ── Save SlickText Credentials ──
+        async function saveStCredentials() {
+            const stToken = document.getElementById('editStToken').value.trim();
+            const stBrandId = document.getElementById('editStBrandId').value.trim();
+
+            if (!stToken || !stBrandId) {
+                alert('Preencha o API Token e o Brand ID do SlickText.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/st-credentials`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ st_api_token: stToken, st_brand_id: stBrandId })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    showModal('Sucesso', 'Credenciais SlickText salvas com sucesso.');
+                    document.getElementById('stForm').classList.remove('show');
                     loadClient();
                 } else {
                     showModal('Erro', data.error || 'Falha ao salvar credenciais.');
@@ -1458,6 +1654,32 @@
                     });
                 }
 
+                // Representatividade MailX
+                if (data.representatividade !== undefined) {
+                    const repPercent = data.representatividade;
+                    const repEl = document.getElementById('rep-percent');
+                    repEl.textContent = repPercent.toFixed(1) + '%';
+                    repEl.style.color = repPercent >= 5 ? 'var(--success)' : repPercent >= 2 ? 'var(--warning)' : 'var(--accent-light)';
+                    document.getElementById('rep-mailx').textContent = data.kpis.faturamento_mailx;
+                    document.getElementById('rep-total').textContent = data.kpis.faturamento;
+                }
+
+                // Conversão por Segmento
+                if (data.conversao_por_segmento) {
+                    const cs = data.conversao_por_segmento;
+                    document.getElementById('convSegmentoBody').innerHTML = [
+                        { seg: 'Carrinho Abandonado', leads: cs.carrinho_abandonado.leads, vendas: cs.carrinho_abandonado.vendas, taxa: cs.carrinho_abandonado.taxa },
+                        { seg: 'Compradores', leads: cs.compradores.leads, vendas: cs.compradores.vendas, taxa: cs.compradores.taxa },
+                    ].map(r => `
+                        <tr>
+                            <td style="font-weight:600">${r.seg}</td>
+                            <td>${r.leads.toLocaleString('pt-BR')}</td>
+                            <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
+                            <td><span class="tag ${r.taxa > 3 ? 'green' : ''}" style="${r.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${r.taxa}%</span></td>
+                        </tr>
+                    `).join('');
+                }
+
                 // Render recent webhooks
                 const tbody = document.getElementById('recentWebhooks');
                 if (!data.recent_webhooks || data.recent_webhooks.length === 0) {
@@ -1475,6 +1697,121 @@
             } catch (e) {
                 console.error('Failed to load client stats:', e);
             }
+        }
+
+        // ── Tab Switching ──
+        function switchTab(tab) {
+            // Hide all tabs
+            document.getElementById('tab-content-geral').style.display = 'none';
+            document.getElementById('tab-content-email').style.display = 'none';
+            document.getElementById('tab-content-sms').style.display = 'none';
+
+            // Deactivate all buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.style.background = 'transparent';
+                btn.style.color = 'var(--text-dim)';
+            });
+
+            // Show selected tab
+            document.getElementById('tab-content-' + tab).style.display = 'block';
+            const activeBtn = document.getElementById('tab-' + tab);
+            activeBtn.style.background = 'var(--accent)';
+            activeBtn.style.color = '#fff';
+
+            // Load SMS data on first switch
+            if (tab === 'sms' && !window._smsLoaded) {
+                loadSmsStats();
+                window._smsLoaded = true;
+            }
+
+            // Load email tab data
+            if (tab === 'email' && !window._emailTabLoaded) {
+                loadEmailTabStats();
+                window._emailTabLoaded = true;
+            }
+        }
+
+        // ── Load SMS Stats from SlickText API ──
+        async function loadSmsStats() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/sms-stats`);
+                const data = await res.json();
+
+                if (!data.configured) {
+                    document.getElementById('smsContactKpis').innerHTML =
+                        '<div style="text-align:center; padding:1rem; color:var(--text-muted); grid-column:1/-1"><i class="fas fa-exclamation-triangle" style="margin-right:0.5rem; color:var(--warning)"></i>SlickText não configurado. Adicione as credenciais na seção abaixo.</div>';
+                    document.getElementById('smsSendKpis').innerHTML =
+                        '<div style="text-align:center; padding:1rem; color:var(--text-muted); grid-column:1/-1">—</div>';
+                    document.getElementById('smsListsBody').innerHTML =
+                        '<tr><td colspan="4" class="empty-state">Configure o SlickText primeiro</td></tr>';
+                    return;
+                }
+
+                if (data.error) {
+                    document.getElementById('smsContactKpis').innerHTML =
+                        `<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1"><i class="fas fa-times-circle"></i> ${data.error}</div>`;
+                    return;
+                }
+
+                // Contact KPIs
+                const c = data.contacts || {};
+                document.getElementById('smsContactKpis').innerHTML = [
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: (c.total || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR') },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
+
+                // Credits/Messages KPIs
+                const credits = data.credits?.usage || {};
+                document.getElementById('smsSendKpis').innerHTML = [
+                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0 },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
+
+                // Lists per product table
+                const listStats = data.lists?.per_product || [];
+                if (listStats.length === 0) {
+                    document.getElementById('smsListsBody').innerHTML =
+                        '<tr><td colspan="4" class="empty-state"><i class="fas fa-box-open"></i> Nenhum produto com listas SMS</td></tr>';
+                } else {
+                    document.getElementById('smsListsBody').innerHTML = listStats.map(l => `
+                        <tr>
+                            <td style="color:#fff; font-weight:600">${l.product}</td>
+                            <td><span class="tag green">${l.compra_contacts}</span></td>
+                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${l.abandono_contacts}</span></td>
+                            <td style="font-weight:700">${l.compra_contacts + l.abandono_contacts}</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Failed to load SMS stats:', e);
+                document.getElementById('smsContactKpis').innerHTML =
+                    '<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1">Erro ao carregar dados SMS</div>';
+            }
+        }
+
+        // ── Load Email Tab Stats ──
+        function loadEmailTabStats() {
+            // Re-use data from the general stats already loaded
+            const emailTabKpis = document.getElementById('emailTabKpis');
+            const emailMailxKpis = document.getElementById('emailMailxKpis');
+            // These will be populated from the existing loadClientStats data
+            emailTabKpis.innerHTML = document.getElementById('emailKpis').innerHTML;
+            emailMailxKpis.innerHTML = document.getElementById('mailxKpis').innerHTML;
         }
 
         // Init

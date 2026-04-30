@@ -142,6 +142,14 @@ export async function initDatabase(): Promise<void> {
         -- Ensure unique (shop_slug, platform) combination
         CREATE UNIQUE INDEX IF NOT EXISTS idx_store_slug_platform
         ON store_integrations (shop_slug, platform);
+
+        -- SlickText SMS integration columns on clients
+        ALTER TABLE clients ADD COLUMN IF NOT EXISTS st_api_token TEXT;
+        ALTER TABLE clients ADD COLUMN IF NOT EXISTS st_brand_id VARCHAR(50);
+
+        -- SlickText list IDs on kits (per-product lists)
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_compra_id VARCHAR(50);
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_abandono_id VARCHAR(50);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');

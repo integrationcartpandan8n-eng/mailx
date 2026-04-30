@@ -4,6 +4,7 @@ import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 import { upsertProduct, extractCartPandaProductId } from './product-upsert';
+import { syncSlickTextAbandonedCart, extractCartPandaAddress } from './slicktext-sync';
 
 const CTX = 'Webhook:CardDeclined';
 
@@ -76,6 +77,24 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
     } else {
       logger.info(CTX, `Product "${productName}" not yet enabled — contact synced only`);
     }
+
+    // Sync with SlickText SMS (card declined → abandonment list, non-blocking)
+    const address = extractCartPandaAddress(payload);
+    syncSlickTextAbandonedCart(store, kit, {
+      phone,
+      firstName,
+      lastName,
+      email,
+      address,
+    }).then((stResult) => {
+      if (stResult.synced) {
+        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+      } else {
+        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+      }
+    }).catch((err) => {
+      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+    });
 
     if (isDatabaseReady() && logId) {
       try {

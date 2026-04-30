@@ -4,6 +4,7 @@ import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 import { upsertProduct, extractCartPandaProductId } from './product-upsert';
+import { syncSlickTextOrderPaid, extractCartPandaAddress } from './slicktext-sync';
 
 const CTX = 'Webhook:OrderPaid';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -100,6 +101,24 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     } else {
       logger.info(CTX, `Product "${productName}" not yet enabled by admin — contact synced only`);
     }
+
+    // 7. Sync with SlickText SMS (parallel to AC — non-blocking)
+    const address = extractCartPandaAddress(payload);
+    syncSlickTextOrderPaid(store, kit, {
+      phone,
+      firstName,
+      lastName,
+      email,
+      address,
+    }).then((stResult) => {
+      if (stResult.synced) {
+        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+      } else {
+        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+      }
+    }).catch((err) => {
+      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+    });
 
     // Update webhook log
     if (isDatabaseReady() && logId) {
