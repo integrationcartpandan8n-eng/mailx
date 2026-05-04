@@ -73,6 +73,8 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
     cartpanda_api_token,
     ds24_vendor_id,
     ds24_ipn_passphrase,
+    cb_vendor_nickname,
+    cb_ins_secret,
     ac_api_url,
     ac_api_key,
     ac_plan,
@@ -164,6 +166,15 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       [clientId, ds24_vendor_id, ds24_ipn_passphrase || '']
     );
     logger.info(CTX, `Store integration created: digistore24/${ds24_vendor_id} for client #${clientId}`);
+  }
+
+  if (selectedPlatform === 'clickbank' && cb_vendor_nickname) {
+    await query(
+      `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, status)
+       VALUES ($1, 'clickbank', $2, $3, 'pending')`,
+      [clientId, cb_vendor_nickname.toLowerCase(), cb_ins_secret || '']
+    );
+    logger.info(CTX, `Store integration created: clickbank/${cb_vendor_nickname} for client #${clientId}`);
   }
 
   logger.info(CTX, `✅ New client onboarded: ${company_name}`, {

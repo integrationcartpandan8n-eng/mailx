@@ -272,6 +272,7 @@
             <select name="platform" id="platformSelect" required onchange="togglePlatformFields()">
               <option value="cartpanda">CartPanda</option>
               <option value="digistore24">Digistore24</option>
+              <option value="clickbank">ClickBank</option>
             </select>
           </div>
           <div id="cartpandaFields">
@@ -284,6 +285,18 @@
               <label>API Token (Bearer) <span class="required">*</span></label>
               <input type="password" name="cartpanda_api_token" id="cpToken" placeholder="cp_live_xxxxxxxxxxxxx" />
               <div class="hint">CartPanda → Configurações → Integrações → API → Copiar token</div>
+            </div>
+          </div>
+          <div id="clickbankFields" style="display:none">
+            <div class="field">
+              <label>Vendor Nickname <span class="required">*</span></label>
+              <input type="text" name="cb_vendor_nickname" id="cbVendor" placeholder="meuvendor" />
+              <div class="hint">ClickBank → Accounts → seu nickname de vendor</div>
+            </div>
+            <div class="field">
+              <label>INS Secret Key <span class="required">*</span></label>
+              <input type="password" name="cb_ins_secret" id="cbSecret" placeholder="chave-secreta-ins (max 16 chars)" maxlength="16" />
+              <div class="hint">Vendor Settings → My Site → Advanced Tools → Secret Key</div>
             </div>
           </div>
           <div id="digistore24Fields" style="display:none">
@@ -439,25 +452,37 @@
         const platform = document.getElementById('platformSelect').value;
         const cpFields = document.getElementById('cartpandaFields');
         const dsFields = document.getElementById('digistore24Fields');
+        const cbFields = document.getElementById('clickbankFields');
         const cpUrl = document.getElementById('cpUrl');
         const cpToken = document.getElementById('cpToken');
         const ds24Vendor = document.getElementById('ds24Vendor');
         const ds24Pass = document.getElementById('ds24Pass');
+        const cbVendor = document.getElementById('cbVendor');
+        const cbSecret = document.getElementById('cbSecret');
+
+        // Hide all
+        cpFields.style.display = 'none';
+        dsFields.style.display = 'none';
+        cbFields.style.display = 'none';
+        cpUrl.required = false;
+        cpToken.required = false;
+        ds24Vendor.required = false;
+        ds24Pass.required = false;
+        cbVendor.required = false;
+        cbSecret.required = false;
 
         if (platform === 'cartpanda') {
           cpFields.style.display = 'block';
-          dsFields.style.display = 'none';
           cpUrl.required = true;
           cpToken.required = true;
-          ds24Vendor.required = false;
-          ds24Pass.required = false;
-        } else {
-          cpFields.style.display = 'none';
+        } else if (platform === 'digistore24') {
           dsFields.style.display = 'block';
-          cpUrl.required = false;
-          cpToken.required = false;
           ds24Vendor.required = true;
           ds24Pass.required = true;
+        } else if (platform === 'clickbank') {
+          cbFields.style.display = 'block';
+          cbVendor.required = true;
+          cbSecret.required = true;
         }
       }
     </script>

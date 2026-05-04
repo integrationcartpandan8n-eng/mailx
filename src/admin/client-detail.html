@@ -903,6 +903,7 @@
                         <select id="newStorePlatform" style="min-width:120px">
                             <option value="cartpanda">CartPanda</option>
                             <option value="digistore24">Digistore24</option>
+                            <option value="clickbank">ClickBank</option>
                         </select>
                     </div>
                     <div>
@@ -974,7 +975,7 @@
                 <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
                     <i class="fas fa-globe" style="color:var(--success)"></i> Digistore24 (IPN)
                 </p>
-                <div class="webhook-urls">
+                <div class="webhook-urls" style="margin-bottom:1rem">
                     <div class="webhook-url-item">
                         <span class="label">payment</span>
                         <code id="urlDS24Payment"></code>
@@ -984,6 +985,21 @@
                         <span class="label">refund</span>
                         <code id="urlDS24Refund"></code>
                         <button class="copy-btn" onclick="copyUrl('urlDS24Refund')"><i class="fas fa-copy"></i></button>
+                    </div>
+                </div>
+                <p style="font-size:0.72rem; color:var(--text-dim); margin-bottom:0.5rem; font-weight:600">
+                    <i class="fas fa-money-bill-wave" style="color:var(--warning)"></i> ClickBank (INS)
+                </p>
+                <div class="webhook-urls">
+                    <div class="webhook-url-item">
+                        <span class="label">payment</span>
+                        <code id="urlCBPayment"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlCBPayment')"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="webhook-url-item">
+                        <span class="label">refund</span>
+                        <code id="urlCBRefund"></code>
+                        <button class="copy-btn" onclick="copyUrl('urlCBRefund')"><i class="fas fa-copy"></i></button>
                     </div>
                 </div>
             </div>
@@ -1037,6 +1053,8 @@
         document.getElementById('urlCardDeclined').textContent = `${BASE_URL}/webhook/cartpanda/card-declined`;
         document.getElementById('urlDS24Payment').textContent = `${BASE_URL}/webhook/digistore24/payment`;
         document.getElementById('urlDS24Refund').textContent = `${BASE_URL}/webhook/digistore24/refund`;
+        document.getElementById('urlCBPayment').textContent = `${BASE_URL}/webhook/clickbank/payment`;
+        document.getElementById('urlCBRefund').textContent = `${BASE_URL}/webhook/clickbank/refund`;
 
         function copyUrl(id) {
             const text = document.getElementById(id).textContent;

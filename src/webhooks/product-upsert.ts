@@ -64,7 +64,7 @@ export function extractDS24ProductId(params: Record<string, any>): string {
  */
 export async function upsertProduct(
   clientId: number | null,
-  platform: 'cartpanda' | 'digistore24',
+  platform: 'cartpanda' | 'digistore24' | 'clickbank',
   externalId: string,
   productName: string
 ): Promise<KitRecord | null> {

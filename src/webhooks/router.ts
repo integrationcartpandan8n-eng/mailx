@@ -4,6 +4,8 @@ import { handleAbandonedCart } from './abandoned-cart.handler';
 import { handleCardDeclined } from './card-declined.handler';
 import { handleDS24Payment } from './digistore24-payment.handler';
 import { handleDS24Refund } from './digistore24-refund.handler';
+import { handleClickBankPayment } from './clickbank-payment.handler';
+import { handleClickBankRefund } from './clickbank-refund.handler';
 import { logger } from '../utils/logger';
 
 const CTX = 'Webhooks';
@@ -27,6 +29,10 @@ webhookRouter.post('/cartpanda/card-declined', handleCardDeclined);
 // ── Digistore24 IPN webhook routes ──
 webhookRouter.post('/digistore24/payment', handleDS24Payment);
 webhookRouter.post('/digistore24/refund', handleDS24Refund);
+
+// ── ClickBank INS webhook routes ──
+webhookRouter.post('/clickbank/payment', handleClickBankPayment);
+webhookRouter.post('/clickbank/refund', handleClickBankRefund);
 
 // Health check for webhook endpoint
 webhookRouter.get('/health', (_req, res) => {

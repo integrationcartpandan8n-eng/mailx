@@ -19,7 +19,7 @@ export interface StoreContext {
   storeId: number | null;
   /** clients.id */
   clientId: number | null;
-  /** Platform: 'cartpanda' | 'digistore24' */
+  /** Platform: 'cartpanda' | 'digistore24' | 'clickbank' */
   platform: string;
   /** Shop slug / vendor ID */
   shopSlug: string;
@@ -55,7 +55,7 @@ interface StoreRow {
  * Falls back to global env vars if no match in DB.
  */
 export async function lookupStore(
-  platform: 'cartpanda' | 'digistore24',
+  platform: 'cartpanda' | 'digistore24' | 'clickbank',
   identifier: string
 ): Promise<StoreContext> {
   try {
