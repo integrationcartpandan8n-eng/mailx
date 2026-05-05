@@ -122,4 +122,75 @@ export class ActiveCampaignClient {
     });
     logger.info(CTX, `Contact ${contactId} added to automation ${automationId}`);
   }
+
+  // ── Reporting ──
+
+  /**
+   * Aggregates send/open/click totals across all campaigns sent in the last `daysBack` days.
+   * Iterates campaigns in DESC sdate order, stops once a campaign older than the window is seen.
+   * Status 5 = sent (per AC docs).
+   */
+  async getCampaignsAggregate(daysBack: number = 30): Promise<{
+    campaigns: number;
+    send_amt: number;
+    opens: number;
+    uniqueopens: number;
+    linkclicks: number;
+    uniquelinkclicks: number;
+  }> {
+    const sinceMs = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+    const totals = { campaigns: 0, send_amt: 0, opens: 0, uniqueopens: 0, linkclicks: 0, uniquelinkclicks: 0 };
+    let offset = 0;
+
+    for (let page = 0; page < 10; page++) {
+      const res = await this.http.get('/campaigns', {
+        params: { limit: 100, offset, 'orders[sdate]': 'DESC' },
+      });
+      const items: any[] = res.data?.campaigns ?? [];
+      if (items.length === 0) break;
+
+      let stop = false;
+      for (const c of items) {
+        const sdate = c.sdate ? new Date(c.sdate).getTime() : NaN;
+        if (Number.isNaN(sdate)) continue;
+        if (sdate < sinceMs) {
+          stop = true;
+          break;
+        }
+        if (String(c.status) !== '5') continue;
+        totals.campaigns++;
+        totals.send_amt += parseInt(c.send_amt || '0', 10);
+        totals.opens += parseInt(c.opens || '0', 10);
+        totals.uniqueopens += parseInt(c.uniqueopens || '0', 10);
+        totals.linkclicks += parseInt(c.linkclicks || '0', 10);
+        totals.uniquelinkclicks += parseInt(c.uniquelinkclicks || '0', 10);
+      }
+
+      if (stop || items.length < 100) break;
+      offset += 100;
+    }
+
+    return totals;
+  }
+
+  /**
+   * Count contacts created in the last `daysBack` days.
+   * AC supports `filters[created_after]=YYYY-MM-DD` on the contacts endpoint.
+   * Falls back to total contact count if the filter is rejected.
+   */
+  async getNewContactsCount(daysBack: number = 30): Promise<number> {
+    const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0];
+    try {
+      const res = await this.http.get('/contacts', {
+        params: { limit: 1, 'filters[created_after]': since },
+      });
+      return parseInt(res.data?.meta?.total || '0', 10);
+    } catch (err: any) {
+      logger.warn(CTX, `getNewContactsCount filter failed (${err.message}) — falling back to total`);
+      const res = await this.http.get('/contacts', { params: { limit: 1 } });
+      return parseInt(res.data?.meta?.total || '0', 10);
+    }
+  }
 }

@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { runBootstrap, runKitBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
 import { CartPandaClient } from '../services/cartpanda';
 import { SlickTextClient } from '../services/slicktext';
+import { ActiveCampaignClient } from '../services/activecampaign';
 import { env } from '../config/env';
 import {
   SESSION_COOKIE,
@@ -764,6 +765,43 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ── Email Marketing KPIs (ActiveCampaign reporting, last 30 days) ──
+  const emailMetrics = {
+    entrada_contatos: '--' as string,
+    ctr: '--' as string,
+    taxa_abertura: '--' as string,
+    ctor: '--' as string,
+    rpm: '--' as string,
+    epc: '--' as string,
+  };
+  const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
+    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
+  );
+  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
+    try {
+      const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
+      const [agg, newContacts] = await Promise.all([
+        ac.getCampaignsAggregate(30),
+        ac.getNewContactsCount(30),
+      ]);
+      const mailxRev = parseFloat(mailxData?.revenue || '0');
+      const ctr = agg.send_amt > 0 ? (agg.uniquelinkclicks / agg.send_amt) * 100 : 0;
+      const openRate = agg.send_amt > 0 ? (agg.uniqueopens / agg.send_amt) * 100 : 0;
+      const ctor = agg.uniqueopens > 0 ? (agg.uniquelinkclicks / agg.uniqueopens) * 100 : 0;
+      const rpm = agg.send_amt > 0 ? (mailxRev / agg.send_amt) * 1000 : 0;
+      const epc = agg.uniquelinkclicks > 0 ? mailxRev / agg.uniquelinkclicks : 0;
+
+      emailMetrics.entrada_contatos = newContacts.toLocaleString('pt-BR');
+      emailMetrics.ctr = `${ctr.toFixed(2)}%`;
+      emailMetrics.taxa_abertura = `${openRate.toFixed(2)}%`;
+      emailMetrics.ctor = `${ctor.toFixed(2)}%`;
+      emailMetrics.rpm = fmtBRL(rpm);
+      emailMetrics.epc = fmtBRL(epc);
+    } catch (err: any) {
+      logger.warn(CTX, `Failed to fetch AC stats for client ${clientId}: ${err.message}`);
+    }
+  }
+
   res.json({
     kpis: {
       faturamento: fmtBRL(totalRevenue),
@@ -780,15 +818,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       recuperacoes_mailx: parseInt(mailxRecoveries?.count || '0'),
       faturamento_recuperacoes: fmtBRL(parseFloat(mailxRecoveries?.revenue || '0')),
     },
-    // Pending email-marketing KPIs — aguardando integração com ActiveCampaign reporting API
-    email: {
-      entrada_contatos: '--',
-      ctr: '--',
-      taxa_abertura: '--',
-      ctor: '--',
-      rpm: '--',
-      epc: '--',
-    },
+    email: emailMetrics,
     top_products: topProducts.map(p => ({
       name: p.name,
       sales: parseInt(p.count),
