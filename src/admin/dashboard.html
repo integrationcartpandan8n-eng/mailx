@@ -704,6 +704,8 @@
                 <!-- Tabs -->
                 <div class="tabs">
                     <button class="tab-btn active" onclick="switchTab('overview')">Visão Geral</button>
+                    <button class="tab-btn" onclick="switchTab('email')">Email</button>
+                    <button class="tab-btn" onclick="switchTab('sms')">SMS</button>
                     <button class="tab-btn" onclick="switchTab('history')">Histórico Importado</button>
                     <button class="tab-btn" onclick="switchTab('pipeline')">Pipeline</button>
                     <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
@@ -769,6 +771,34 @@
                                 <div style="font-size:0.75rem; color:var(--text-dim); margin-top:4px">→ envios para gerar 1 venda</div>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- ═══════════ TAB: Email ═══════════ -->
+                <div class="tab-content" id="tab-email">
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; font-weight:600">Faturamento Email (UTM MailX)</h3>
+                    <div class="kpi-grid" id="email-revenue-kpis"><div style="color:var(--text-muted); padding:1rem">Carregando…</div></div>
+
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; margin-top:1.5rem; font-weight:600">KPIs de Email Marketing (ActiveCampaign · últimos 30 dias)</h3>
+                    <div class="kpi-grid" id="email-marketing-kpis"></div>
+
+                    <div style="margin-top:1rem; padding:1rem; background:var(--accent-subtle); border-radius:var(--radius); color:var(--text-dim); font-size:0.85rem">
+                        <i class="fas fa-info-circle" style="margin-right:0.5rem"></i>
+                        Métricas agregadas entre <strong><span id="email-clients-count">0</span> cliente(s)</strong> com ActiveCampaign conectado.
+                    </div>
+                </div>
+
+                <!-- ═══════════ TAB: SMS ═══════════ -->
+                <div class="tab-content" id="tab-sms">
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; font-weight:600">Faturamento SMS (UTM MailxSMS)</h3>
+                    <div class="kpi-grid" id="sms-revenue-kpis"><div style="color:var(--text-muted); padding:1rem">Carregando…</div></div>
+
+                    <h3 style="font-size:0.9rem; color:var(--text-dim); margin-bottom:1rem; margin-top:1.5rem; font-weight:600">KPIs de SMS (SlickText)</h3>
+                    <div class="kpi-grid" id="sms-marketing-kpis"></div>
+
+                    <div style="margin-top:1rem; padding:1rem; background:var(--accent-subtle); border-radius:var(--radius); color:var(--text-dim); font-size:0.85rem">
+                        <i class="fas fa-info-circle" style="margin-right:0.5rem"></i>
+                        Métricas agregadas entre <strong><span id="sms-clients-count">0</span> cliente(s)</strong> com SlickText conectado.
                     </div>
                 </div>
 
@@ -904,9 +934,13 @@
 
             document.querySelectorAll('.tab-btn').forEach(b => {
                 const tabName = b.textContent.trim();
-                const map = { 'Visão Geral': 'overview', 'Histórico Importado': 'history', 'Pipeline': 'pipeline', 'Webhooks': 'webhooks-tab' };
+                const map = { 'Visão Geral': 'overview', 'Email': 'email', 'SMS': 'sms', 'Histórico Importado': 'history', 'Pipeline': 'pipeline', 'Webhooks': 'webhooks-tab' };
                 if (map[tabName] === id) b.classList.add('active');
             });
+
+            // Lazy-load tab data on first activation
+            if (id === 'email' && !window.__emailLoaded) { window.__emailLoaded = true; loadEmailDashboard(); }
+            if (id === 'sms' && !window.__smsLoaded) { window.__smsLoaded = true; loadSmsDashboard(); }
         }
 
         // ── Chart.js defaults ──
@@ -1392,11 +1426,68 @@
             }
         }
 
+        // ── Load Email Dashboard (aggregated AC across all clients) ──
+        async function loadEmailDashboard() {
+            try {
+                const res = await fetch(`${API}/dashboard/email`);
+                const data = await res.json();
+                const r = data.revenue || {};
+                renderKPI('email-revenue-kpis', [
+                    { label: 'Faturamento Email', value: r.faturamento_email, icon: 'envelope-open-text', color: 'blue' },
+                    { label: 'Vendas Email', value: r.vendas_email, icon: 'paper-plane', color: 'green' },
+                    { label: 'Recuperações Email', value: r.recuperacoes_email, icon: 'cart-arrow-down', color: 'orange' },
+                    { label: 'Fat. Recuperações Email', value: r.faturamento_recuperacoes_email, icon: 'hand-holding-dollar', color: 'green' },
+                ]);
+                const e = data.email_kpis || {};
+                renderKPI('email-marketing-kpis', [
+                    { label: 'Entrada de Contatos', value: e.entrada_contatos, icon: 'user-plus', color: 'blue' },
+                    { label: 'CTR', value: e.ctr, icon: 'mouse-pointer', color: 'green' },
+                    { label: 'Taxa de Abertura', value: e.taxa_abertura, icon: 'envelope-open', color: 'purple' },
+                    { label: 'CTOR', value: e.ctor, icon: 'bullseye', color: 'orange' },
+                    { label: 'RPM', value: e.rpm, icon: 'chart-line', color: 'blue' },
+                    { label: 'EPC', value: e.epc, icon: 'coins', color: 'green' },
+                ]);
+                document.getElementById('email-clients-count').textContent = data.clients_with_ac || 0;
+            } catch (err) {
+                console.error('Failed to load email dashboard:', err);
+                document.getElementById('email-revenue-kpis').innerHTML = '<div style="color:var(--danger); padding:1rem">Erro ao carregar dados de Email.</div>';
+            }
+        }
+
+        // ── Load SMS Dashboard (aggregated SlickText across all clients) ──
+        async function loadSmsDashboard() {
+            try {
+                const res = await fetch(`${API}/dashboard/sms`);
+                const data = await res.json();
+                const r = data.revenue || {};
+                renderKPI('sms-revenue-kpis', [
+                    { label: 'Faturamento SMS', value: r.faturamento_sms, icon: 'comment-dollar', color: 'blue' },
+                    { label: 'Vendas SMS', value: r.vendas_sms, icon: 'paper-plane', color: 'green' },
+                    { label: 'Recuperações SMS', value: r.recuperacoes_sms, icon: 'cart-arrow-down', color: 'orange' },
+                    { label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms, icon: 'hand-holding-dollar', color: 'green' },
+                ]);
+                const s = data.sms_kpis || {};
+                renderKPI('sms-marketing-kpis', [
+                    { label: 'Total Contatos', value: s.total_contatos, icon: 'users', color: 'blue' },
+                    { label: 'Créditos Disponíveis', value: s.creditos_disponiveis, icon: 'coins', color: 'green' },
+                    { label: 'Créditos Usados', value: s.creditos_usados, icon: 'paper-plane', color: 'blue' },
+                    { label: 'Total Créditos', value: s.total_creditos, icon: 'database', color: 'purple' },
+                    { label: 'Listas SMS', value: s.listas_sms, icon: 'list', color: 'orange' },
+                ]);
+                document.getElementById('sms-clients-count').textContent = data.clients_with_st || 0;
+            } catch (err) {
+                console.error('Failed to load sms dashboard:', err);
+                document.getElementById('sms-revenue-kpis').innerHTML = '<div style="color:var(--danger); padding:1rem">Erro ao carregar dados de SMS.</div>';
+            }
+        }
+
         function refreshAll() {
             loadOverview();
             loadHistory();
             loadClients();
             loadWebhooks();
+            if (window.__emailLoaded) loadEmailDashboard();
+            if (window.__smsLoaded) loadSmsDashboard();
         }
 
         // ── Init ──

@@ -357,6 +357,145 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
   });
 }));
 
+// GET /admin/dashboard/email - Aggregated email marketing KPIs across all clients
+adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Response) => {
+  // Sales aggregates filtered to email-driven MailX traffic
+  // Email = utm_source/campaign containing 'mailx' but NOT 'mailxsms'
+  const emailSales = await queryOne<{ count: string; revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs
+    WHERE event_type = 'order.paid'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
+      AND COALESCE(payload->'order'->'checkout_params'->>'utm_source', '') NOT ILIKE '%mailxsms%'
+      AND COALESCE(payload->'order'->'checkout_params'->>'utm_campaign', '') NOT ILIKE '%mailxsms%'
+  `);
+  const emailRecoveries = await queryOne<{ count: string; revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs
+    WHERE event_type = 'order.paid'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+      AND COALESCE(payload->'order'->'checkout_params'->>'utm_source', '') NOT ILIKE '%mailxsms%'
+      AND COALESCE(payload->'order'->'checkout_params'->>'utm_campaign', '') NOT ILIKE '%mailxsms%'
+  `);
+
+  // AC reporting aggregated across all clients with credentials
+  const clientsWithAc = await query<{ id: number; ac_api_url: string; ac_api_key: string }>(
+    `SELECT id, ac_api_url, ac_api_key FROM clients WHERE ac_api_url IS NOT NULL AND ac_api_key IS NOT NULL`
+  );
+
+  const acTotals = { send_amt: 0, opens: 0, uniqueopens: 0, linkclicks: 0, uniquelinkclicks: 0, contacts: 0 };
+  for (const c of clientsWithAc) {
+    try {
+      const ac = new ActiveCampaignClient(c.ac_api_url, c.ac_api_key);
+      const [agg, newContacts] = await Promise.all([
+        ac.getCampaignsAggregate(30),
+        ac.getNewContactsCount(30),
+      ]);
+      acTotals.send_amt += agg.send_amt;
+      acTotals.opens += agg.opens;
+      acTotals.uniqueopens += agg.uniqueopens;
+      acTotals.linkclicks += agg.linkclicks;
+      acTotals.uniquelinkclicks += agg.uniquelinkclicks;
+      acTotals.contacts += newContacts;
+    } catch (err: any) {
+      logger.warn(CTX, `Dashboard email: AC fetch failed for client ${c.id}: ${err.message}`);
+    }
+  }
+
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const emailRev = parseFloat(emailSales?.revenue || '0');
+  const ctr = acTotals.send_amt > 0 ? (acTotals.uniquelinkclicks / acTotals.send_amt) * 100 : 0;
+  const openRate = acTotals.send_amt > 0 ? (acTotals.uniqueopens / acTotals.send_amt) * 100 : 0;
+  const ctor = acTotals.uniqueopens > 0 ? (acTotals.uniquelinkclicks / acTotals.uniqueopens) * 100 : 0;
+  const rpm = acTotals.send_amt > 0 ? (emailRev / acTotals.send_amt) * 1000 : 0;
+  const epc = acTotals.uniquelinkclicks > 0 ? emailRev / acTotals.uniquelinkclicks : 0;
+
+  res.json({
+    revenue: {
+      faturamento_email: fmtBRL(emailRev),
+      vendas_email: parseInt(emailSales?.count || '0'),
+      recuperacoes_email: parseInt(emailRecoveries?.count || '0'),
+      faturamento_recuperacoes_email: fmtBRL(parseFloat(emailRecoveries?.revenue || '0')),
+    },
+    email_kpis: {
+      entrada_contatos: acTotals.contacts.toLocaleString('pt-BR'),
+      ctr: `${ctr.toFixed(2)}%`,
+      taxa_abertura: `${openRate.toFixed(2)}%`,
+      ctor: `${ctor.toFixed(2)}%`,
+      rpm: fmtBRL(rpm),
+      epc: fmtBRL(epc),
+    },
+    clients_with_ac: clientsWithAc.length,
+  });
+}));
+
+// GET /admin/dashboard/sms - Aggregated SMS marketing KPIs across all clients
+adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Response) => {
+  // Sales aggregates filtered to SMS-driven MailX traffic
+  const smsSales = await queryOne<{ count: string; revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs
+    WHERE event_type = 'order.paid'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+  `);
+  const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
+    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    FROM webhook_logs
+    WHERE event_type = 'order.paid'
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%' OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
+           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+  `);
+
+  // SlickText aggregated across all clients with credentials
+  const clientsWithSt = await query<{ id: number; st_api_token: string; st_brand_id: string }>(
+    `SELECT id, st_api_token, st_brand_id FROM clients WHERE st_api_token IS NOT NULL AND st_brand_id IS NOT NULL`
+  );
+
+  const stTotals = { contacts: 0, total_credits: 0, credits_used: 0, credits_available: 0, lists: 0 };
+  for (const c of clientsWithSt) {
+    try {
+      const st = new SlickTextClient(c.st_api_token, c.st_brand_id);
+      const [contactAnalytics, usage, lists] = await Promise.all([
+        st.getContactAnalytics().catch(() => null),
+        st.getBrandUsage().catch(() => null),
+        st.getLists().catch(() => []),
+      ]);
+      if (contactAnalytics?.totals?.total) stTotals.contacts += contactAnalytics.totals.total;
+      if (usage) {
+        stTotals.total_credits += usage.total_credits || 0;
+        stTotals.credits_used += usage.credits_used || 0;
+        stTotals.credits_available += usage.credits_available || 0;
+      }
+      stTotals.lists += Array.isArray(lists) ? lists.length : 0;
+    } catch (err: any) {
+      logger.warn(CTX, `Dashboard sms: SlickText fetch failed for client ${c.id}: ${err.message}`);
+    }
+  }
+
+  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  res.json({
+    revenue: {
+      faturamento_sms: fmtBRL(parseFloat(smsSales?.revenue || '0')),
+      vendas_sms: parseInt(smsSales?.count || '0'),
+      recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),
+      faturamento_recuperacoes_sms: fmtBRL(parseFloat(smsRecoveries?.revenue || '0')),
+    },
+    sms_kpis: {
+      total_contatos: stTotals.contacts.toLocaleString('pt-BR'),
+      creditos_disponiveis: stTotals.credits_available.toLocaleString('pt-BR'),
+      creditos_usados: stTotals.credits_used.toLocaleString('pt-BR'),
+      total_creditos: stTotals.total_credits.toLocaleString('pt-BR'),
+      listas_sms: stTotals.lists.toLocaleString('pt-BR'),
+    },
+    clients_with_st: clientsWithSt.length,
+  });
+}));
+
 // GET /admin/dashboard/pipeline-kpis - Per-client KPIs for pipeline cards
 adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, res: Response) => {
   // Faturamento + vendas totais por cliente (últimos 30 dias e total)
