@@ -1773,8 +1773,11 @@
 
                 // Contact KPIs
                 const c = data.contacts || {};
+                // Total contacts: prefer SlickText brand-wide total over per-kit sum (which is 0 until kits link to lists)
+                const brandTotal = c.analytics?.totals?.total ?? 0;
+                const totalContatos = brandTotal || (c.total || 0);
                 document.getElementById('smsContactKpis').innerHTML = [
-                    { icon: 'fa-users blue', label: 'Total Contatos', value: (c.total || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR') },
                     { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR') },
                     { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR') },
                 ].map(k => `
