@@ -139,7 +139,18 @@ Reestruturação do `client-detail.html` em **3 sub-abas**:
 |---|---|
 | **Visão Geral** | KPIs consolidados (Email + SMS), gráficos, top 5 produtos, atividade recente |
 | **Email** | KPIs de email marketing (Entrada Contatos, CTR, Taxa Abertura, CTOR, RPM, EPC) + Métricas MailX UTM (Faturamento, Vendas, Recuperações) |
-| **SMS** | Contatos por lista (Compradores vs Abandonos), Créditos disponíveis/usados, Listas por produto, dados em tempo real da API SlickText |
+| **SMS** | Faturamento SMS (UTM `mailxsms`: Faturamento, Vendas, Recuperações, Fat. Recuperações) + Contatos por lista (Compradores vs Abandonos) + Créditos disponíveis/usados + Listas por produto, dados em tempo real da API SlickText |
+
+### Iteração adicional — KPIs de venda dentro da aba SMS do cliente
+
+Espelhando a estrutura da aba Email, a aba SMS de cada cliente passou a ter no topo uma seção **"Faturamento SMS (UTM MailxSMS)"** com 4 KPIs filtrados pela atribuição via UTM `mailxsms`:
+
+- Faturamento SMS
+- Vendas SMS
+- Recuperações SMS
+- Fat. Recuperações SMS
+
+Endpoint `/admin/clientes/:id/sms-stats` ganhou bloco `revenue` no JSON de resposta. Frontend renderiza acima das seções de Contatos e Créditos.
 
 Plus duas métricas novas na Visão Geral:
 
@@ -271,6 +282,8 @@ ssh root@app.mailxgroup.com 'cd /var/www/mailx && git reset --hard HEAD && npm r
 | `76b4003` | fix: SlickText brand_id sanitize and broken endpoints |
 | `44b2e7e` | fix: show SlickText brand-wide contact total when kits not yet linked |
 | `54d5f8f` | feat: add Email/SMS tabs to main dashboard |
+| `64f9289` | docs: add session changelog covering SMS/ClickBank/Buygoods/dashboard |
+| `68748ab` | feat: show SMS-attributed sales KPIs inside client SMS tab |
 
 ---
 
