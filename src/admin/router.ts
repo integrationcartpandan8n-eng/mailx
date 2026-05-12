@@ -1284,8 +1284,35 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
     const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);
 
+    // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') ──
+    const smsSales = await queryOne<{ count: string; revenue: string }>(`
+      SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND client_id = $1
+        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%'
+             OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+    `, [clientId]);
+    const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
+      SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND client_id = $1
+        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%' OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
+             OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+    `, [clientId]);
+
+    const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const smsRevenue = parseFloat(smsSales?.revenue || '0');
+    const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
+
     res.json({
       configured: true,
+      revenue: {
+        faturamento_sms: fmtBRL(smsRevenue),
+        vendas_sms: parseInt(smsSales?.count || '0'),
+        recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),
+        faturamento_recuperacoes_sms: fmtBRL(smsRecRevenue),
+      },
       contacts: {
         total: totalCompra + totalAbandono,
         compradores: totalCompra,

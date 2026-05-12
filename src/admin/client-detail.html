@@ -765,6 +765,16 @@
         <div id="tab-content-sms" style="display:none">
             <div class="card">
                 <div class="card-header">
+                    <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="smsRevenueKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS</div>
                 </div>
                 <div class="card-body">
@@ -1756,6 +1766,8 @@
                 const data = await res.json();
 
                 if (!data.configured) {
+                    document.getElementById('smsRevenueKpis').innerHTML =
+                        '<div style="text-align:center; padding:1rem; color:var(--text-muted); grid-column:1/-1">—</div>';
                     document.getElementById('smsContactKpis').innerHTML =
                         '<div style="text-align:center; padding:1rem; color:var(--text-muted); grid-column:1/-1"><i class="fas fa-exclamation-triangle" style="margin-right:0.5rem; color:var(--warning)"></i>SlickText não configurado. Adicione as credenciais na seção abaixo.</div>';
                     document.getElementById('smsSendKpis').innerHTML =
@@ -1770,6 +1782,21 @@
                         `<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1"><i class="fas fa-times-circle"></i> ${data.error}</div>`;
                     return;
                 }
+
+                // SMS Revenue KPIs (mailxsms UTM-attributed)
+                const r = data.revenue || {};
+                document.getElementById('smsRevenueKpis').innerHTML = [
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || 'R$ 0,00' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR') },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || 'R$ 0,00' },
+                ].map(k => `
+                    <div class="kpi-card">
+                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-label">${k.label}</div>
+                    </div>
+                `).join('');
 
                 // Contact KPIs
                 const c = data.contacts || {};
