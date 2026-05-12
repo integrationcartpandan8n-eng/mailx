@@ -31,10 +31,13 @@ export class SlickTextClient {
   private brandId: string;
 
   constructor(apiToken: string, brandId: string) {
-    this.brandId = brandId;
+    // SlickText UI shows brand id with a leading letter (e.g. "b26136"),
+    // but the API path expects the numeric id only.
+    const numericId = String(brandId).replace(/\D/g, '');
+    this.brandId = numericId;
 
     this.http = axios.create({
-      baseURL: `https://dev.slicktext.com/v1/brands/${brandId}`,
+      baseURL: `https://dev.slicktext.com/v1/brands/${numericId}`,
       headers: {
         Authorization: `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
@@ -190,7 +193,9 @@ export class SlickTextClient {
   async getListContactCount(listId: number): Promise<number> {
     try {
       const res = await this.http.get(`/lists/${listId}/contacts/count`);
-      return res.data?.count || res.data?.total || 0;
+      // Endpoint returns a bare number (e.g. 228), not an object
+      if (typeof res.data === 'number') return res.data;
+      return res.data?.count ?? res.data?.total ?? 0;
     } catch {
       return 0;
     }
@@ -223,15 +228,11 @@ export class SlickTextClient {
   }
 
   /**
-   * Get message credit analytics.
+   * Message credit analytics — endpoint /analytics/message/credits returns 404.
+   * Use getBrandUsage() instead for credit totals.
    */
-  async getCreditAnalytics(start?: string, end?: string): Promise<any> {
-    const params: any = {};
-    if (start) params.start = start;
-    if (end) params.end = end;
-
-    const res = await this.http.get('/analytics/message/credits', { params });
-    return res.data;
+  async getCreditAnalytics(_start?: string, _end?: string): Promise<any> {
+    return null;
   }
 
   /**
