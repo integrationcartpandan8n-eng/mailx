@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.env.*
 credentials/
 *.db
 _vps_*.mjs

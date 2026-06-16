@@ -386,6 +386,7 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
   );
 
   const acTotals = { send_amt: 0, opens: 0, uniqueopens: 0, linkclicks: 0, uniquelinkclicks: 0, contacts: 0 };
+  let clientsWithAcSuccess = 0;
   for (const c of clientsWithAc) {
     try {
       const ac = new ActiveCampaignClient(c.ac_api_url, c.ac_api_key);
@@ -399,6 +400,7 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
       acTotals.linkclicks += agg.linkclicks;
       acTotals.uniquelinkclicks += agg.uniquelinkclicks;
       acTotals.contacts += newContacts;
+      clientsWithAcSuccess++;
     } catch (err: any) {
       logger.warn(CTX, `Dashboard email: AC fetch failed for client ${c.id}: ${err.message}`);
     }
@@ -427,7 +429,7 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
       rpm: fmtBRL(rpm),
       epc: fmtBRL(epc),
     },
-    clients_with_ac: clientsWithAc.length,
+    clients_with_ac: clientsWithAcSuccess,
   });
 }));
 
