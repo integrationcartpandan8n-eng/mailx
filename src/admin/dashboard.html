@@ -814,8 +814,8 @@
                         <div class="chart-card">
                             <div class="chart-header">
                                 <div>
-                                    <div class="chart-title">Performance de Email ao Longo do Tempo</div>
-                                    <div class="chart-subtitle">Taxa de Abertura vs CTR</div>
+                                    <div class="chart-title">Pedidos Pagos vs Carrinhos Abandonados por Mês</div>
+                                    <div class="chart-subtitle">Últimos 12 meses · baseado em webhooks recebidos</div>
                                 </div>
                             </div>
                             <div class="chart-wrap"><canvas id="chartEmailPerf"></canvas></div>
@@ -1138,8 +1138,8 @@
                         labels: data.charts.email_perf.labels,
                         datasets: [
                             {
-                                label: 'Taxa de Abertura',
-                                data: data.charts.email_perf.open_rate,
+                                label: 'Pedidos Pagos',
+                                data: data.charts.email_perf.order_paid,
                                 borderColor: '#8b5cf6',
                                 backgroundColor: 'rgba(139, 92, 246, 0.05)',
                                 fill: true,
@@ -1149,8 +1149,8 @@
                                 pointBackgroundColor: '#8b5cf6',
                             },
                             {
-                                label: 'CTR',
-                                data: data.charts.email_perf.ctr,
+                                label: 'Carrinhos Abandonados',
+                                data: data.charts.email_perf.abandoned,
                                 borderColor: '#004de8',
                                 backgroundColor: 'rgba(0, 77, 232, 0.05)',
                                 fill: true,
@@ -1166,7 +1166,7 @@
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
                         scales: {
-                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => v + '%' } },
+                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => Number.isInteger(v) ? v : '' }, beginAtZero: true },
                             x: { grid: { display: false } }
                         },
                     }

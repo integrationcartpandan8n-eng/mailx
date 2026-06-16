@@ -346,8 +346,8 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
     charts: {
       email_perf: {
         labels: months,
-        open_rate: monthlyActivity.map(m => parseInt(m.order_paid)),
-        ctr: monthlyActivity.map(m => parseInt(m.abandoned)),
+        order_paid: monthlyActivity.map(m => parseInt(m.order_paid)),
+        abandoned: monthlyActivity.map(m => parseInt(m.abandoned)),
       },
       contacts: {
         labels: monthsClients,
