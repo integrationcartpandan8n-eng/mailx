@@ -21,12 +21,15 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     const store = await lookupStore('digistore24', identifier);
 
     const passphrase = store.apiToken || process.env.DS24_IPN_PASSPHRASE || '';
-    if (passphrase) {
-      if (!validateSignature(params, passphrase)) {
-        logger.warn(CTX, 'Invalid IPN signature — rejecting');
-        res.status(403).json({ error: 'Invalid signature' });
-        return;
-      }
+    if (!passphrase) {
+      logger.error(CTX, 'DS24_IPN_PASSPHRASE not configured — rejecting request (fail closed)');
+      res.status(403).json({ error: 'Webhook validation not configured' });
+      return;
+    }
+    if (!validateSignature(params, passphrase)) {
+      logger.warn(CTX, 'Invalid IPN signature — rejecting');
+      res.status(403).json({ error: 'Invalid signature' });
+      return;
     }
 
     const data = normalizePayload(params);
