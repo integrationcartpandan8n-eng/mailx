@@ -35,6 +35,11 @@ export async function handleClickBankPayment(req: Request, res: Response, _next:
   const rawBody = req.body;
 
   try {
+    if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+      res.status(400).json({ error: 'Invalid ClickBank INS payload' });
+      return;
+    }
+
     // 1. Lookup store to get the INS secret key
     //    ClickBank sends vendor in the encrypted payload, but we need the key to decrypt.
     //    Strategy: try all clickbank store_integrations until one decrypts successfully.

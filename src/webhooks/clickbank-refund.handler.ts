@@ -24,6 +24,11 @@ export async function handleClickBankRefund(req: Request, res: Response, _next: 
   const rawBody = req.body;
 
   try {
+    if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+      res.status(400).json({ error: 'Invalid ClickBank INS payload' });
+      return;
+    }
+
     if (!rawBody.notification || !rawBody.iv) {
       res.status(400).json({ error: 'Invalid ClickBank INS payload' });
       return;

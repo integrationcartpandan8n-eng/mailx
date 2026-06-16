@@ -10,8 +10,12 @@ const CTX = 'Webhook:AbandonedCart';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function handleAbandonedCart(req: Request, res: Response, _next: NextFunction): Promise<void> {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    res.status(400).json({ error: 'Invalid payload: body must be a non-empty JSON object' });
+    return;
+  }
   const payload = req.body;
-    const data = payload.order || payload;
+  const data = payload.order || payload;
 
   try {
     const slug = extractCartPandaSlug(payload);
