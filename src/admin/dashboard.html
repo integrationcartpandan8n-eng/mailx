@@ -746,7 +746,7 @@
                         </div>
                         <div class="chart-card">
                             <div class="chart-header">
-                                <div class="chart-title">Top 5 Tags de Email</div>
+                                <div class="chart-title">Top 5 Tipos de Evento</div>
                             </div>
                             <div class="chart-wrap sm"><canvas id="chartTags"></canvas></div>
                         </div>
@@ -1084,10 +1084,10 @@
                 new Chart(document.getElementById('chartTags'), {
                     type: 'bar',
                     data: {
-                        labels: data.charts.top_tags.labels,
+                        labels: data.charts.top_event_types.labels,
                         datasets: [{
                             label: 'Contatos',
-                            data: data.charts.top_tags.values,
+                            data: data.charts.top_event_types.values,
                             backgroundColor: ['rgba(0,214,143,0.8)', 'rgba(0,214,143,0.65)', 'rgba(0,214,143,0.5)', 'rgba(0,214,143,0.35)', 'rgba(0,214,143,0.2)'],
                             borderRadius: 6,
                             borderSkipped: false,

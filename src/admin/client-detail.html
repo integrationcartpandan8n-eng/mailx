@@ -663,11 +663,11 @@
             </div>
         </div>
 
-        <!-- ═══ Top 5 Tags + Conversão Envios por Venda ═══ -->
+        <!-- ═══ Top 5 Tipos de Evento + Conversão Envios por Venda ═══ -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
-                    <div class="card-title"><i class="fas fa-tags"></i> Top 5 Tags de Email</div>
+                    <div class="card-title"><i class="fas fa-tags"></i> Top 5 Tipos de Evento</div>
                 </div>
                 <div class="card-body">
                     <div style="height:220px; position:relative"><canvas id="chartTopTags"></canvas></div>
@@ -1657,15 +1657,15 @@
                     });
                 }
 
-                // Top 5 Tags
-                if (data.charts && data.charts.top_tags) {
+                // Top 5 Tipos de Evento
+                if (data.charts && data.charts.top_event_types) {
                     new Chart(document.getElementById('chartTopTags'), {
                         type: 'bar',
                         data: {
-                            labels: data.charts.top_tags.labels,
+                            labels: data.charts.top_event_types.labels,
                             datasets: [{
                                 label: 'Webhooks',
-                                data: data.charts.top_tags.values,
+                                data: data.charts.top_event_types.values,
                                 backgroundColor: ['rgba(0,214,143,0.8)', 'rgba(0,214,143,0.65)', 'rgba(0,214,143,0.5)', 'rgba(0,214,143,0.35)', 'rgba(0,214,143,0.2)'],
                                 borderRadius: 6, borderSkipped: false,
                             }]

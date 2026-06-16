@@ -277,7 +277,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
         labels: topKits.length > 0 ? topKits.map(k => k.name) : ['Nenhum kit'],
         values: topKits.length > 0 ? topKits.map(k => parseInt(k.count)) : [0],
       },
-      top_tags: {
+      top_event_types: {
         labels: eventDist.length > 0 ? eventDist.map(e => e.event_type) : ['Nenhum evento'],
         values: eventDist.length > 0 ? eventDist.map(e => parseInt(e.count)) : [0],
       },
@@ -980,7 +980,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
         values: hourlyValues,
       },
-      top_tags: {
+      top_event_types: {
         labels: eventDist.length > 0 ? eventDist.map(e => e.event_type) : ['Nenhum evento'],
         values: eventDist.length > 0 ? eventDist.map(e => parseInt(e.count)) : [0],
       },
