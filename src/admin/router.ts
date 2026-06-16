@@ -387,23 +387,30 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
 
   const acTotals = { send_amt: 0, opens: 0, uniqueopens: 0, linkclicks: 0, uniquelinkclicks: 0, contacts: 0 };
   let clientsWithAcSuccess = 0;
-  for (const c of clientsWithAc) {
-    try {
-      const ac = new ActiveCampaignClient(c.ac_api_url, c.ac_api_key);
-      const [agg, newContacts] = await Promise.all([
-        ac.getCampaignsAggregate(30),
-        ac.getNewContactsCount(30),
-      ]);
-      acTotals.send_amt += agg.send_amt;
-      acTotals.opens += agg.opens;
-      acTotals.uniqueopens += agg.uniqueopens;
-      acTotals.linkclicks += agg.linkclicks;
-      acTotals.uniquelinkclicks += agg.uniquelinkclicks;
-      acTotals.contacts += newContacts;
-      clientsWithAcSuccess++;
-    } catch (err: any) {
-      logger.warn(CTX, `Dashboard email: AC fetch failed for client ${c.id}: ${err.message}`);
-    }
+  const acResults = await Promise.all(
+    clientsWithAc.map(async (c) => {
+      try {
+        const ac = new ActiveCampaignClient(c.ac_api_url, c.ac_api_key);
+        const [agg, newContacts] = await Promise.all([
+          ac.getCampaignsAggregate(30),
+          ac.getNewContactsCount(30),
+        ]);
+        return { ok: true as const, agg, newContacts };
+      } catch (err: any) {
+        logger.warn(CTX, `Dashboard email: AC fetch failed for client ${c.id}: ${err.message}`);
+        return { ok: false as const };
+      }
+    })
+  );
+  for (const r of acResults) {
+    if (!r.ok) continue;
+    acTotals.send_amt += r.agg.send_amt;
+    acTotals.opens += r.agg.opens;
+    acTotals.uniqueopens += r.agg.uniqueopens;
+    acTotals.linkclicks += r.agg.linkclicks;
+    acTotals.uniquelinkclicks += r.agg.uniquelinkclicks;
+    acTotals.contacts += r.newContacts;
+    clientsWithAcSuccess++;
   }
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

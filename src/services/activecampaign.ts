@@ -13,13 +13,20 @@ export class ActiveCampaignClient {
       timeout: 15000,
     });
 
-    // Rate limit: 5 req/s — add small delay between calls
+    // Rate limit: 5 req/s — exponential backoff, max 3 retries (1s, 2s, 4s)
     this.http.interceptors.response.use(
       (res) => res,
       async (error) => {
         if (error.response?.status === 429) {
-          logger.warn(CTX, 'Rate limited — retrying in 1s');
-          await new Promise((r) => setTimeout(r, 1000));
+          const attempt = (error.config.__retryCount || 0) + 1;
+          if (attempt > 3) {
+            logger.warn(CTX, 'Rate limited — max retries reached, giving up');
+            throw error;
+          }
+          const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
+          logger.warn(CTX, `Rate limited — retry ${attempt}/3 in ${delay}ms`);
+          await new Promise((r) => setTimeout(r, delay));
+          error.config.__retryCount = attempt;
           return this.http.request(error.config);
         }
         throw error;
