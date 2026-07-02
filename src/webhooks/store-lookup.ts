@@ -9,7 +9,8 @@
  * ensuring backward compatibility.
  */
 
-import { queryOne } from '../db/database';
+import { queryOne, query } from '../db/database';
+import { validateSignature } from '../services/digistore24';
 import { logger } from '../utils/logger';
 
 const CTX = 'StoreLookup';
@@ -154,4 +155,69 @@ export function extractCartPandaSlug(payload: any): string {
  */
 export function extractDS24Identifier(params: Record<string, any>): string {
   return params.vendor_id || params.affiliate || params.product_id || '';
+}
+
+/**
+ * Resolve a Digistore24 store by testing the IPN signature against
+ * every registered client's passphrase. This avoids depending on
+ * product_id/vendor_id being present or pre-registered in the payload.
+ *
+ * Returns null if no passphrase matches (caller should fall back to
+ * the identifier-based lookupStore()).
+ */
+export async function resolveDS24StoreBySignature(
+  params: Record<string, any>
+): Promise<StoreContext | null> {
+  let candidates: StoreRow[];
+  try {
+    candidates = await query<StoreRow>(`
+      SELECT
+        si.id as store_id,
+        si.client_id,
+        si.platform,
+        si.shop_slug,
+        si.api_token,
+        COALESCE(c.ac_api_url, '') as ac_api_url,
+        COALESCE(c.ac_api_key, '') as ac_api_key,
+        COALESCE(c.st_api_token, '') as st_api_token,
+        COALESCE(c.st_brand_id, '') as st_brand_id
+      FROM store_integrations si
+      LEFT JOIN clients c ON c.id = si.client_id
+      WHERE si.platform = 'digistore24'
+        AND si.api_token IS NOT NULL
+        AND si.api_token != ''
+    `);
+  } catch (err: any) {
+    logger.warn(CTX, `Signature-based candidate query failed: ${err.message}`);
+    return null;
+  }
+
+  // Dedupe by api_token — a client may have multiple store_integrations
+  // rows (legacy per-product rows) sharing the same passphrase.
+  const seen = new Set<string>();
+  for (const row of candidates) {
+    if (seen.has(row.api_token)) continue;
+    seen.add(row.api_token);
+
+    if (validateSignature(params, row.api_token)) {
+      logger.info(CTX, `✅ Resolved DS24 store by signature → client #${row.client_id}`);
+      const acApiUrl = row.ac_api_url || process.env.AC_API_URL || '';
+      const acApiKey = row.ac_api_key || process.env.AC_API_KEY || '';
+      return {
+        storeId: row.store_id,
+        clientId: row.client_id,
+        platform: row.platform,
+        shopSlug: row.shop_slug,
+        apiToken: row.api_token,
+        acApiUrl,
+        acApiKey,
+        stApiToken: row.st_api_token || '',
+        stBrandId: row.st_brand_id || '',
+        resolvedFromDb: true,
+      };
+    }
+  }
+
+  logger.warn(CTX, '⚠️ No DS24 store matched by signature — falling back to identifier lookup');
+  return null;
 }

@@ -8,7 +8,7 @@ import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
-import { lookupStore, extractDS24Identifier } from './store-lookup';
+import { lookupStore, extractDS24Identifier, resolveDS24StoreBySignature } from './store-lookup';
 import { upsertProduct, extractDS24ProductId } from './product-upsert';
 import { syncSlickTextOrderPaid, extractDS24Address } from './slicktext-sync';
 
@@ -19,21 +19,26 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
   const params = { ...req.body, ...req.query };
 
   try {
-    // 1. Identify store
-    const identifier = extractDS24Identifier(params);
-    const store = await lookupStore('digistore24', identifier);
+    // 1. Try to resolve store by testing signature against all registered
+    //    DS24 clients. If it matches, the signature is already validated.
+    let store = await resolveDS24StoreBySignature(params);
 
-    // 2. Validate signature — fail closed: reject if no passphrase is configured
-    const passphrase = store.apiToken || process.env.DS24_IPN_PASSPHRASE || '';
-    if (!passphrase) {
-      logger.error(CTX, 'DS24_IPN_PASSPHRASE not configured — rejecting request (fail closed)');
-      res.status(403).json({ error: 'Webhook validation not configured' });
-      return;
-    }
-    if (!validateSignature(params, passphrase)) {
-      logger.warn(CTX, 'Invalid IPN signature — rejecting');
-      res.status(403).json({ error: 'Invalid signature' });
-      return;
+    if (!store) {
+      // Fallback: legacy identifier-based lookup (product_id/vendor_id)
+      const identifier = extractDS24Identifier(params);
+      store = await lookupStore('digistore24', identifier);
+
+      const passphrase = store.apiToken || process.env.DS24_IPN_PASSPHRASE || '';
+      if (!passphrase) {
+        logger.error(CTX, 'DS24_IPN_PASSPHRASE not configured — rejecting request (fail closed)');
+        res.status(403).json({ error: 'Webhook validation not configured' });
+        return;
+      }
+      if (!validateSignature(params, passphrase)) {
+        logger.warn(CTX, 'Invalid IPN signature — rejecting');
+        res.status(403).json({ error: 'Invalid signature' });
+        return;
+      }
     }
 
     // 3. Normalize
