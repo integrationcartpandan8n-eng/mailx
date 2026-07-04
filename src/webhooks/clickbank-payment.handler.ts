@@ -24,9 +24,11 @@ import {
 } from '../services/clickbank';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { METRICS_ONLY } from '../config/env';
 import { lookupStore } from './store-lookup';
 import { upsertProduct } from './product-upsert';
 import { syncSlickTextOrderPaid, syncSlickTextAbandonedCart } from './slicktext-sync';
+import { extractClickBankMetrics } from './metrics-extract';
 
 const CTX = 'Webhook:ClickBank';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -112,9 +114,20 @@ export async function handleClickBankPayment(req: Request, res: Response, _next:
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
+        const m = extractClickBankMetrics(data.rawPayload);
         const result = await query(
-          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, eventType, 'clickbank', JSON.stringify(data.rawPayload), 'processing']
+          `INSERT INTO webhook_logs (
+            client_id, event_type, source, payload, status,
+            total_price, currency, product_name, product_external_id,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            affiliate_name, tracking_code
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          [
+            store.clientId, eventType, 'clickbank', JSON.stringify(data.rawPayload), 'processing',
+            m.totalPrice, m.currency, m.productName, m.productExternalId,
+            m.utmSource, m.utmMedium, m.utmCampaign, m.utmContent, m.utmTerm,
+            m.affiliateName, m.trackingCode,
+          ]
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -136,69 +149,69 @@ export async function handleClickBankPayment(req: Request, res: Response, _next:
       vendor: data.vendor,
     });
 
-    // 6. Upsert product
     const kit = await upsertProduct(store.clientId, 'clickbank', data.productId, data.productName);
 
-    // 7. ActiveCampaign sync
-    if (store.acApiUrl && store.acApiKey) {
-      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-      const contact = await ac.syncContact({
-        email: data.email,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        phone: data.phone,
-      });
+    if (!METRICS_ONLY) {
+      if (store.acApiUrl && store.acApiKey) {
+        const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+        const contact = await ac.syncContact({
+          email: data.email,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          phone: data.phone,
+        });
 
-      if (kit?.enabled) {
-        if (isPurchaseEvent) {
-          const tagName = `[${kit.name}] Compra Aprovada`;
-          if (kit.ac_tag_compra_id) {
-            await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
+        if (kit?.enabled) {
+          if (isPurchaseEvent) {
+            const tagName = `[${kit.name}] Compra Aprovada`;
+            if (kit.ac_tag_compra_id) {
+              await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
+            } else {
+              const tag = await ac.findTagByName(tagName);
+              if (tag) await ac.addTagToContact(contact.id, tag.id);
+            }
           } else {
-            const tag = await ac.findTagByName(tagName);
-            if (tag) await ac.addTagToContact(contact.id, tag.id);
+            const tagName = `[${kit.name}] Abandono`;
+            if (kit.ac_tag_abandono_id) {
+              await ac.addTagToContact(contact.id, kit.ac_tag_abandono_id);
+            } else {
+              const tag = await ac.findTagByName(tagName);
+              if (tag) await ac.addTagToContact(contact.id, tag.id);
+            }
+          }
+
+          if (kit.ac_list_id) {
+            await ac.addContactToList(contact.id, kit.ac_list_id);
+          }
+
+          if (isPurchaseEvent) {
+            const kitAge = Date.now() - new Date(kit.created_at).getTime();
+            if (kitAge >= ONE_WEEK_MS) {
+              const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
+              if (automationId) await ac.addContactToAutomation(contact.id, automationId);
+            }
           }
         } else {
-          const tagName = `[${kit.name}] Abandono`;
-          if (kit.ac_tag_abandono_id) {
-            await ac.addTagToContact(contact.id, kit.ac_tag_abandono_id);
-          } else {
-            const tag = await ac.findTagByName(tagName);
-            if (tag) await ac.addTagToContact(contact.id, tag.id);
-          }
+          logger.info(CTX, `Product "${data.productName}" not yet enabled — contact synced only`);
         }
-
-        if (kit.ac_list_id) {
-          await ac.addContactToList(contact.id, kit.ac_list_id);
-        }
-
-        // Automation — only for kits > 1 week old
-        if (isPurchaseEvent) {
-          const kitAge = Date.now() - new Date(kit.created_at).getTime();
-          if (kitAge >= ONE_WEEK_MS) {
-            const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-            if (automationId) await ac.addContactToAutomation(contact.id, automationId);
-          }
-        }
-      } else {
-        logger.info(CTX, `Product "${data.productName}" not yet enabled — contact synced only`);
       }
-    }
 
-    // 8. SlickText SMS sync (non-blocking)
-    const stSync = isPurchaseEvent ? syncSlickTextOrderPaid : syncSlickTextAbandonedCart;
-    stSync(store, kit, {
-      phone: data.phone,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      email: data.email,
-      address: data.address,
-    }).then((r) => {
-      if (r.synced) logger.info(CTX, `SlickText synced: ${r.contactId} → list ${r.listId}`);
-      else logger.debug(CTX, `SlickText skipped: ${r.reason}`);
-    }).catch((err) => {
-      logger.warn(CTX, `SlickText error (non-blocking): ${err.message}`);
-    });
+      const stSync = isPurchaseEvent ? syncSlickTextOrderPaid : syncSlickTextAbandonedCart;
+      stSync(store, kit, {
+        phone: data.phone,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        address: data.address,
+      }).then((r) => {
+        if (r.synced) logger.info(CTX, `SlickText synced: ${r.contactId} → list ${r.listId}`);
+        else logger.debug(CTX, `SlickText skipped: ${r.reason}`);
+      }).catch((err) => {
+        logger.warn(CTX, `SlickText error (non-blocking): ${err.message}`);
+      });
+    } else {
+      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
+    }
 
     // 9. Update webhook log
     if (isDatabaseReady() && logId) {
@@ -215,7 +228,7 @@ export async function handleClickBankPayment(req: Request, res: Response, _next:
     }
 
     logger.info(CTX, `✅ ClickBank ${data.transactionType} ${data.orderId} processed for ${data.email}`);
-    res.status(200).json({ ok: true, receipt: data.orderId });
+    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true, receipt: data.orderId });
   } catch (error: any) {
     logger.error(CTX, `Failed to process ClickBank payment: ${error.message}`);
     res.status(500).json({ error: 'Internal processing error' });

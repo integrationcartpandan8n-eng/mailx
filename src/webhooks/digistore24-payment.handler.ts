@@ -8,9 +8,11 @@ import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { METRICS_ONLY } from '../config/env';
 import { lookupStore, extractDS24Identifier, resolveDS24StoreBySignature } from './store-lookup';
 import { upsertProduct, extractDS24ProductId } from './product-upsert';
 import { syncSlickTextOrderPaid, extractDS24Address } from './slicktext-sync';
+import { extractDS24Metrics } from './metrics-extract';
 
 const CTX = 'Webhook:DS24:Payment';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -62,9 +64,20 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
+        const m = extractDS24Metrics(data.rawPayload);
         const result = await query(
-          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, 'order.paid', 'digistore24', JSON.stringify(data.rawPayload), 'processing']
+          `INSERT INTO webhook_logs (
+            client_id, event_type, source, payload, status,
+            total_price, currency, product_name, product_external_id,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            affiliate_name, tracking_code
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          [
+            store.clientId, 'order.paid', 'digistore24', JSON.stringify(data.rawPayload), 'processing',
+            m.totalPrice, m.currency, m.productName, m.productExternalId,
+            m.utmSource, m.utmMedium, m.utmCampaign, m.utmContent, m.utmTerm,
+            m.affiliateName, m.trackingCode,
+          ]
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -72,71 +85,72 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
       }
     }
 
-    if (!store.acApiUrl || !store.acApiKey) {
-      logger.error(CTX, 'ActiveCampaign credentials not configured');
-      res.status(500).json({ error: 'AC not configured' });
-      return;
-    }
-
-    // 5. Upsert product (auto-discovery)
     const kit = await upsertProduct(store.clientId, 'digistore24', externalId, data.productName);
 
-    const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-
-    // 6. Sync contact (always)
-    const contact = await ac.syncContact({
-      email: data.email,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      phone: data.phone,
-    });
-
-    // 7. Tags, list, automation — only if enabled
-    if (kit?.enabled) {
-      const tagName = `[${kit.name}] Compra Aprovada`;
-      if (kit.ac_tag_compra_id) {
-        await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
-      } else {
-        const tag = await ac.findTagByName(tagName);
-        if (tag) await ac.addTagToContact(contact.id, tag.id);
-        else logger.warn(CTX, `Tag not found: ${tagName}`);
+    let contact: { id: string } | null = null;
+    if (!METRICS_ONLY) {
+      if (!store.acApiUrl || !store.acApiKey) {
+        logger.error(CTX, 'ActiveCampaign credentials not configured');
+        res.status(500).json({ error: 'AC not configured' });
+        return;
       }
 
-      if (kit.ac_list_id) {
-        await ac.addContactToList(contact.id, kit.ac_list_id);
+      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+
+      contact = await ac.syncContact({
+        email: data.email,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone,
+      });
+
+      if (kit?.enabled) {
+        const tagName = `[${kit.name}] Compra Aprovada`;
+        if (kit.ac_tag_compra_id) {
+          await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
+        } else {
+          const tag = await ac.findTagByName(tagName);
+          if (tag) await ac.addTagToContact(contact.id, tag.id);
+          else logger.warn(CTX, `Tag not found: ${tagName}`);
+        }
+
+        if (kit.ac_list_id) {
+          await ac.addContactToList(contact.id, kit.ac_list_id);
+        } else {
+          const list = await ac.findListByName('Todos os contatos');
+          if (list) await ac.addContactToList(contact.id, list.id);
+        }
+
+        const kitAge = Date.now() - new Date(kit.created_at).getTime();
+        if (kitAge >= ONE_WEEK_MS) {
+          const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
+          if (automationId) await ac.addContactToAutomation(contact.id, automationId);
+        } else {
+          logger.info(CTX, `Kit "${kit.name}" < 7 days old — automation skipped`);
+        }
       } else {
-        const list = await ac.findListByName('Todos os contatos');
-        if (list) await ac.addContactToList(contact.id, list.id);
+        logger.info(CTX, `Product "${data.productName}" not yet enabled — contact synced only`);
       }
 
-      const kitAge = Date.now() - new Date(kit.created_at).getTime();
-      if (kitAge >= ONE_WEEK_MS) {
-        const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-        if (automationId) await ac.addContactToAutomation(contact.id, automationId);
-      } else {
-        logger.info(CTX, `Kit "${kit.name}" < 7 days old — automation skipped`);
-      }
+      const address = extractDS24Address(params);
+      syncSlickTextOrderPaid(store, kit, {
+        phone: data.phone,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        address,
+      }).then((stResult) => {
+        if (stResult.synced) {
+          logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+        } else {
+          logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+        }
+      }).catch((err) => {
+        logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+      });
     } else {
-      logger.info(CTX, `Product "${data.productName}" not yet enabled — contact synced only`);
+      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
     }
-
-    // Sync with SlickText SMS (non-blocking)
-    const address = extractDS24Address(params);
-    syncSlickTextOrderPaid(store, kit, {
-      phone: data.phone,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      email: data.email,
-      address,
-    }).then((stResult) => {
-      if (stResult.synced) {
-        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
-      } else {
-        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
-      }
-    }).catch((err) => {
-      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
-    });
 
     if (isDatabaseReady() && logId) {
       try {
@@ -151,7 +165,7 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     }
 
     logger.info(CTX, `✅ DS24 payment ${data.orderId} processed for ${data.email}`);
-    res.status(200).json({ ok: true, contactId: contact.id });
+    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true, contactId: contact!.id });
   } catch (error: any) {
     logger.error(CTX, 'Failed to process DS24 payment', error.message);
     if (isDatabaseReady()) {

@@ -2,9 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { METRICS_ONLY } from '../config/env';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 import { upsertProduct, extractCartPandaProductId } from './product-upsert';
 import { syncSlickTextAbandonedCart, extractCartPandaAddress } from './slicktext-sync';
+import { extractCartPandaMetrics } from './metrics-extract';
 
 const CTX = 'Webhook:CardDeclined';
 
@@ -23,9 +25,20 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
+        const m = extractCartPandaMetrics(payload);
         const result = await query(
-          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, 'card.declined', 'cartpanda', JSON.stringify(payload), 'processing']
+          `INSERT INTO webhook_logs (
+            client_id, event_type, source, payload, status,
+            total_price, currency, product_name, product_external_id,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            affiliate_name, tracking_code
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          [
+            store.clientId, 'card.declined', 'cartpanda', JSON.stringify(payload), 'processing',
+            m.totalPrice, m.currency, m.productName, m.productExternalId,
+            m.utmSource, m.utmMedium, m.utmCampaign, m.utmContent, m.utmTerm,
+            m.affiliateName, m.trackingCode,
+          ]
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -51,54 +64,58 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
 
     logger.info(CTX, `Processing card declined for ${email}`, { product: productName, client: store.clientId });
 
-    if (!store.acApiUrl || !store.acApiKey) {
-      logger.error(CTX, 'ActiveCampaign credentials not configured');
-      res.status(500).json({ error: 'AC not configured' });
-      return;
-    }
-
     const kit = await upsertProduct(store.clientId, 'cartpanda', externalId, productName);
 
-    const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-    const contact = await ac.syncContact({ email, firstName, lastName, phone });
-
-    if (kit?.enabled) {
-      const tagName = `[${kit.name}] Cartão Recusado`;
-      if (kit.ac_tag_cartao_recusado_id) {
-        await ac.addTagToContact(contact.id, kit.ac_tag_cartao_recusado_id);
-      } else {
-        const tag = await ac.findTagByName(tagName);
-        if (tag) await ac.addTagToContact(contact.id, tag.id);
-        else logger.warn(CTX, `Tag not found: ${tagName}`);
+    let contact: { id: string } | null = null;
+    if (!METRICS_ONLY) {
+      if (!store.acApiUrl || !store.acApiKey) {
+        logger.error(CTX, 'ActiveCampaign credentials not configured');
+        res.status(500).json({ error: 'AC not configured' });
+        return;
       }
 
-      if (kit.ac_list_id) {
-        await ac.addContactToList(contact.id, kit.ac_list_id);
+      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+      contact = await ac.syncContact({ email, firstName, lastName, phone });
+
+      if (kit?.enabled) {
+        const tagName = `[${kit.name}] Cartão Recusado`;
+        if (kit.ac_tag_cartao_recusado_id) {
+          await ac.addTagToContact(contact.id, kit.ac_tag_cartao_recusado_id);
+        } else {
+          const tag = await ac.findTagByName(tagName);
+          if (tag) await ac.addTagToContact(contact.id, tag.id);
+          else logger.warn(CTX, `Tag not found: ${tagName}`);
+        }
+
+        if (kit.ac_list_id) {
+          await ac.addContactToList(contact.id, kit.ac_list_id);
+        } else {
+          const list = await ac.findListByName('Todos os contatos');
+          if (list) await ac.addContactToList(contact.id, list.id);
+        }
       } else {
-        const list = await ac.findListByName('Todos os contatos');
-        if (list) await ac.addContactToList(contact.id, list.id);
+        logger.info(CTX, `Product "${productName}" not yet enabled — contact synced only`);
       }
+
+      const address = extractCartPandaAddress(payload);
+      syncSlickTextAbandonedCart(store, kit, {
+        phone,
+        firstName,
+        lastName,
+        email,
+        address,
+      }).then((stResult) => {
+        if (stResult.synced) {
+          logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+        } else {
+          logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+        }
+      }).catch((err) => {
+        logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+      });
     } else {
-      logger.info(CTX, `Product "${productName}" not yet enabled — contact synced only`);
+      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
     }
-
-    // Sync with SlickText SMS (card declined → abandonment list, non-blocking)
-    const address = extractCartPandaAddress(payload);
-    syncSlickTextAbandonedCart(store, kit, {
-      phone,
-      firstName,
-      lastName,
-      email,
-      address,
-    }).then((stResult) => {
-      if (stResult.synced) {
-        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
-      } else {
-        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
-      }
-    }).catch((err) => {
-      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
-    });
 
     if (isDatabaseReady() && logId) {
       try {
@@ -107,7 +124,7 @@ export async function handleCardDeclined(req: Request, res: Response, _next: Nex
     }
 
     logger.info(CTX, `✅ Card declined processed for ${email}`);
-    res.status(200).json({ ok: true, contactId: contact.id });
+    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true, contactId: contact!.id });
   } catch (error: any) {
     logger.error(CTX, 'Failed to process card declined', error.message);
     if (isDatabaseReady()) {

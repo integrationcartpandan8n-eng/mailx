@@ -2,9 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { METRICS_ONLY } from '../config/env';
 import { lookupStore, extractCartPandaSlug } from './store-lookup';
 import { upsertProduct, extractCartPandaProductId } from './product-upsert';
 import { syncSlickTextOrderPaid, extractCartPandaAddress } from './slicktext-sync';
+import { extractCartPandaMetrics } from './metrics-extract';
 
 const CTX = 'Webhook:OrderPaid';
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -26,9 +28,20 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
+        const m = extractCartPandaMetrics(payload);
         const result = await query(
-          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, 'order.paid', 'cartpanda', JSON.stringify(payload), 'processing']
+          `INSERT INTO webhook_logs (
+            client_id, event_type, source, payload, status,
+            total_price, currency, product_name, product_external_id,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            affiliate_name, tracking_code
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          [
+            store.clientId, 'order.paid', 'cartpanda', JSON.stringify(payload), 'processing',
+            m.totalPrice, m.currency, m.productName, m.productExternalId,
+            m.utmSource, m.utmMedium, m.utmCampaign, m.utmContent, m.utmTerm,
+            m.affiliateName, m.trackingCode,
+          ]
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -59,70 +72,75 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
       client: store.clientId,
     });
 
-    // 3. Validate AC credentials
-    if (!store.acApiUrl || !store.acApiKey) {
-      logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
-      res.status(500).json({ error: 'AC not configured' });
-      return;
-    }
-
     // 4. Upsert product (auto-discovery)
     const kit = await upsertProduct(store.clientId, 'cartpanda', externalId, productName);
 
-    const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-
-    // 5. Sync contact (always)
-    const contact = await ac.syncContact({ email, firstName, lastName, phone });
-
-    // 6. Tags, list, automation — only if product is enabled by admin
-    if (kit?.enabled) {
-      // Tag: [Product] Compra Aprovada
-      const tagName = `[${kit.name}] Compra Aprovada`;
-      if (kit.ac_tag_compra_id) {
-        await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
-      } else {
-        const tag = await ac.findTagByName(tagName);
-        if (tag) await ac.addTagToContact(contact.id, tag.id);
-        else logger.warn(CTX, `Tag not found: ${tagName}`);
+    let contact: { id: string } | null = null;
+    if (!METRICS_ONLY) {
+      // 3. Validate AC credentials
+      if (!store.acApiUrl || !store.acApiKey) {
+        logger.error(CTX, 'ActiveCampaign credentials not configured for this client');
+        res.status(500).json({ error: 'AC not configured' });
+        return;
       }
 
-      // List: Todos os contatos
-      if (kit.ac_list_id) {
-        await ac.addContactToList(contact.id, kit.ac_list_id);
+      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+
+      // 5. Sync contact (always)
+      contact = await ac.syncContact({ email, firstName, lastName, phone });
+
+      // 6. Tags, list, automation — only if product is enabled by admin
+      if (kit?.enabled) {
+        // Tag: [Product] Compra Aprovada
+        const tagName = `[${kit.name}] Compra Aprovada`;
+        if (kit.ac_tag_compra_id) {
+          await ac.addTagToContact(contact.id, kit.ac_tag_compra_id);
+        } else {
+          const tag = await ac.findTagByName(tagName);
+          if (tag) await ac.addTagToContact(contact.id, tag.id);
+          else logger.warn(CTX, `Tag not found: ${tagName}`);
+        }
+
+        // List: Todos os contatos
+        if (kit.ac_list_id) {
+          await ac.addContactToList(contact.id, kit.ac_list_id);
+        } else {
+          const list = await ac.findListByName('Todos os contatos');
+          if (list) await ac.addContactToList(contact.id, list.id);
+        }
+
+        // Automation: only if kit > 1 week old
+        const kitAge = Date.now() - new Date(kit.created_at).getTime();
+        if (kitAge >= ONE_WEEK_MS) {
+          const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
+          if (automationId) await ac.addContactToAutomation(contact.id, automationId);
+        } else {
+          logger.info(CTX, `Kit "${kit.name}" < 7 days old — automation skipped`);
+        }
       } else {
-        const list = await ac.findListByName('Todos os contatos');
-        if (list) await ac.addContactToList(contact.id, list.id);
+        logger.info(CTX, `Product "${productName}" not yet enabled by admin — contact synced only`);
       }
 
-      // Automation: only if kit > 1 week old
-      const kitAge = Date.now() - new Date(kit.created_at).getTime();
-      if (kitAge >= ONE_WEEK_MS) {
-        const automationId = process.env.AC_AUTOMATION_COMPRA_APROVADA;
-        if (automationId) await ac.addContactToAutomation(contact.id, automationId);
-      } else {
-        logger.info(CTX, `Kit "${kit.name}" < 7 days old — automation skipped`);
-      }
+      // 7. Sync with SlickText SMS (parallel to AC — non-blocking)
+      const address = extractCartPandaAddress(payload);
+      syncSlickTextOrderPaid(store, kit, {
+        phone,
+        firstName,
+        lastName,
+        email,
+        address,
+      }).then((stResult) => {
+        if (stResult.synced) {
+          logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
+        } else {
+          logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
+        }
+      }).catch((err) => {
+        logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
+      });
     } else {
-      logger.info(CTX, `Product "${productName}" not yet enabled by admin — contact synced only`);
+      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
     }
-
-    // 7. Sync with SlickText SMS (parallel to AC — non-blocking)
-    const address = extractCartPandaAddress(payload);
-    syncSlickTextOrderPaid(store, kit, {
-      phone,
-      firstName,
-      lastName,
-      email,
-      address,
-    }).then((stResult) => {
-      if (stResult.synced) {
-        logger.info(CTX, `SlickText synced: contact ${stResult.contactId} → list ${stResult.listId}`);
-      } else {
-        logger.debug(CTX, `SlickText skipped: ${stResult.reason}`);
-      }
-    }).catch((err) => {
-      logger.warn(CTX, `SlickText sync error (non-blocking): ${err.message}`);
-    });
 
     // Update webhook log
     if (isDatabaseReady() && logId) {
@@ -139,7 +157,7 @@ export async function handleOrderPaid(req: Request, res: Response, _next: NextFu
     }
 
     logger.info(CTX, `✅ Order ${orderId} processed for ${email}`);
-    res.status(200).json({ ok: true, contactId: contact.id });
+    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true, contactId: contact!.id });
   } catch (error: any) {
     logger.error(CTX, 'Failed to process order', error.message);
     if (isDatabaseReady()) {

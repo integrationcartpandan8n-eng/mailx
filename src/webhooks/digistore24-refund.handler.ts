@@ -8,8 +8,10 @@ import { ActiveCampaignClient } from '../services/activecampaign';
 import { validateSignature, normalizePayload } from '../services/digistore24';
 import { query, isDatabaseReady } from '../db/database';
 import { logger } from '../utils/logger';
+import { METRICS_ONLY } from '../config/env';
 import { lookupStore, extractDS24Identifier, resolveDS24StoreBySignature } from './store-lookup';
 import { upsertProduct, extractDS24ProductId } from './product-upsert';
+import { extractDS24Metrics } from './metrics-extract';
 
 const CTX = 'Webhook:DS24:Refund';
 
@@ -58,9 +60,20 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
+        const m = extractDS24Metrics(data.rawPayload);
         const result = await query(
-          `INSERT INTO webhook_logs (client_id, event_type, source, payload, status) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [store.clientId, eventType, 'digistore24', JSON.stringify(data.rawPayload), 'processing']
+          `INSERT INTO webhook_logs (
+            client_id, event_type, source, payload, status,
+            total_price, currency, product_name, product_external_id,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            affiliate_name, tracking_code
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+          [
+            store.clientId, eventType, 'digistore24', JSON.stringify(data.rawPayload), 'processing',
+            m.totalPrice, m.currency, m.productName, m.productExternalId,
+            m.utmSource, m.utmMedium, m.utmCampaign, m.utmContent, m.utmTerm,
+            m.affiliateName, m.trackingCode,
+          ]
         );
         logId = result[0]?.id || null;
       } catch (dbErr: any) {
@@ -68,29 +81,33 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
       }
     }
 
-    if (store.acApiUrl && store.acApiKey) {
-      const kit = await upsertProduct(store.clientId, 'digistore24', externalId, data.productName);
+    const kit = await upsertProduct(store.clientId, 'digistore24', externalId, data.productName);
 
-      const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-      const contact = await ac.syncContact({ email: data.email });
+    if (!METRICS_ONLY) {
+      if (store.acApiUrl && store.acApiKey) {
+        const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+        const contact = await ac.syncContact({ email: data.email });
 
-      if (kit?.enabled) {
-        const tagName = isChargeback
-          ? `[${kit.name}] Chargeback`
-          : `[${kit.name}] Reembolso`;
+        if (kit?.enabled) {
+          const tagName = isChargeback
+            ? `[${kit.name}] Chargeback`
+            : `[${kit.name}] Reembolso`;
 
-        const storedTagId = isChargeback ? kit.ac_tag_chargeback_id : kit.ac_tag_reembolso_id;
+          const storedTagId = isChargeback ? kit.ac_tag_chargeback_id : kit.ac_tag_reembolso_id;
 
-        if (storedTagId) {
-          await ac.addTagToContact(contact.id, storedTagId);
+          if (storedTagId) {
+            await ac.addTagToContact(contact.id, storedTagId);
+          } else {
+            const tag = await ac.findTagByName(tagName);
+            if (tag) await ac.addTagToContact(contact.id, tag.id);
+            else logger.warn(CTX, `Tag not found: ${tagName}`);
+          }
         } else {
-          const tag = await ac.findTagByName(tagName);
-          if (tag) await ac.addTagToContact(contact.id, tag.id);
-          else logger.warn(CTX, `Tag not found: ${tagName}`);
+          logger.info(CTX, `Product "${data.productName}" not enabled — contact synced only`);
         }
-      } else {
-        logger.info(CTX, `Product "${data.productName}" not enabled — contact synced only`);
       }
+    } else {
+      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
     }
 
     if (isDatabaseReady() && logId) {
@@ -100,7 +117,7 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     }
 
     logger.info(CTX, `✅ DS24 ${eventType} processed for ${data.email}`);
-    res.status(200).json({ ok: true });
+    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true });
   } catch (error: any) {
     logger.error(CTX, 'Failed to process DS24 refund', error.message);
     if (isDatabaseReady()) {
