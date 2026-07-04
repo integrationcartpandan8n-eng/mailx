@@ -47,3 +47,6 @@ export const env = {
 
   isDev: optional('NODE_ENV', 'development') === 'development',
 };
+
+/** When true (default), handlers only record metrics — no AC/SlickText side effects. */
+export const METRICS_ONLY = (process.env.METRICS_ONLY ?? 'true').toLowerCase() !== 'false';
