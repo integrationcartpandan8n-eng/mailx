@@ -150,6 +150,27 @@ export async function initDatabase(): Promise<void> {
         -- SlickText list IDs on kits (per-product lists)
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_compra_id VARCHAR(50);
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_abandono_id VARCHAR(50);
+
+        -- Fase A: colunas normalizadas para métricas multi-gateway
+        DO $$ BEGIN
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS total_price NUMERIC(12,2);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS currency VARCHAR(10);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS product_name VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS product_external_id VARCHAR(100);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS utm_source VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS utm_medium VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS utm_campaign VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS utm_content VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS utm_term VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS affiliate_name VARCHAR(255);
+          ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS tracking_code TEXT;
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+
+        CREATE INDEX IF NOT EXISTS idx_webhook_logs_metrics
+          ON webhook_logs (client_id, event_type, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_webhook_logs_utm_source
+          ON webhook_logs (utm_source) WHERE utm_source IS NOT NULL;
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
