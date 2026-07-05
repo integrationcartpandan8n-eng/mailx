@@ -21,6 +21,45 @@ import {
 
 const CTX = 'Admin';
 
+// ─────────────────────────────────────────────────────────────
+// Fase B — Atribuição MailX via colunas normalizadas
+// Canal decidido por utm_medium (padrão UTMS_DASH), com fallback
+// legado (source/campaign sem hífen) para registros antigos sem medium.
+// ─────────────────────────────────────────────────────────────
+
+/** Venda atribuída à MailX (qualquer canal). */
+const SQL_IS_MAILX = `(
+  COALESCE(utm_source, '')   ILIKE '%mailx%'
+  OR COALESCE(utm_campaign, '') ILIKE '%mailx%'
+)`;
+
+/** Canal SMS: medium contém 'sms'; fallback legado se medium nulo. */
+const SQL_IS_SMS = `(
+  COALESCE(utm_medium, '') ILIKE '%sms%'
+  OR (
+    utm_medium IS NULL
+    AND (
+      REPLACE(COALESCE(utm_source, ''),   '-', '') ILIKE '%mailxsms%'
+      OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
+    )
+  )
+)`;
+
+/** MailX via SMS. */
+const SQL_MAILX_SMS = `(${SQL_IS_MAILX} AND ${SQL_IS_SMS})`;
+
+/** MailX via Email = MailX e NÃO SMS. */
+const SQL_MAILX_EMAIL = `(${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS})`;
+
+/** Recuperação de carrinho abandonado (qualquer canal). */
+const SQL_IS_RECOVERY = `(
+  COALESCE(utm_campaign, '') ILIKE '%carrinhoabandonado%'
+  OR COALESCE(utm_source, '') ILIKE '%carrinhoabandonado%'
+)`;
+
+/** Receita normalizada (Fase A garante NUMERIC ou NULL). */
+const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
+
 export const adminRouter = Router();
 
 // ── Login Page (GET /admin/login) ──
@@ -150,28 +189,27 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const salesData = await queryOne<{ count: string, total_revenue: string }>(`
     SELECT 
       COUNT(*) as count,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as total_revenue
+      ${SQL_REVENUE} as total_revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
   `);
-  // MailX attribution: sales where utm_campaign contains 'mailx' (case-insensitive)
+  // MailX attribution: sales where utm contains 'mailx' (case-insensitive)
   const salesDataMailx = await queryOne<{ count: string, total_revenue: string }>(`
     SELECT 
       COUNT(*) as count,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as total_revenue
+      ${SQL_REVENUE} as total_revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
+      AND ${SQL_IS_MAILX}
   `);
-  // MailX abandoned cart recoveries: utm_campaign OR utm_source contains 'CarrinhoAbandonado'
+  // MailX abandoned cart recoveries: MailX attribution + recovery UTM
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
+      ${SQL_REVENUE} as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND status = 'processed'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+      AND ${SQL_IS_MAILX}
+      AND ${SQL_IS_RECOVERY}
   `);
   const refundCount = await queryOne<{ count: string }>(`
     SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.refunded'
@@ -227,12 +265,12 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   // ── Top 5 Produtos (from webhook payloads) ──
   const topKits = await query<{ name: string, count: string, revenue: string }>(`
     SELECT 
-      payload->'order'->'line_items'->0->>'title' as name,
+      product_name as name,
       COUNT(*) as count,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      ${SQL_REVENUE} as revenue
     FROM webhook_logs 
-    WHERE event_type = 'order.paid' AND payload->'order'->'line_items'->0->>'title' IS NOT NULL
-    GROUP BY 1 ORDER BY count DESC LIMIT 5
+    WHERE event_type = 'order.paid' AND product_name IS NOT NULL
+    GROUP BY product_name ORDER BY count DESC LIMIT 5
   `);
 
   // ── Top 5 Tags ──
@@ -294,7 +332,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
 adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Response) => {
   // ── Sales totals from webhook data ──
   const salesTotal = await queryOne<{ count: string, revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND status = 'processed'
   `);
   const totalSales = parseInt(salesTotal?.count || '0');
@@ -362,22 +400,17 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
   // Sales aggregates filtered to email-driven MailX traffic
   // Email = utm_source/campaign containing 'mailx' but NOT 'mailxsms'
   const emailSales = await queryOne<{ count: string; revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
-      AND COALESCE(payload->'order'->'checkout_params'->>'utm_source', '') NOT ILIKE '%mailxsms%'
-      AND COALESCE(payload->'order'->'checkout_params'->>'utm_campaign', '') NOT ILIKE '%mailxsms%'
+      AND ${SQL_MAILX_EMAIL}
   `);
   const emailRecoveries = await queryOne<{ count: string; revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
-      AND COALESCE(payload->'order'->'checkout_params'->>'utm_source', '') NOT ILIKE '%mailxsms%'
-      AND COALESCE(payload->'order'->'checkout_params'->>'utm_campaign', '') NOT ILIKE '%mailxsms%'
+      AND ${SQL_MAILX_EMAIL}
+      AND ${SQL_IS_RECOVERY}
   `);
 
   // AC reporting aggregated across all clients with credentials
@@ -444,19 +477,17 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
 adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Response) => {
   // Sales aggregates filtered to SMS-driven MailX traffic
   const smsSales = await queryOne<{ count: string; revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+      AND ${SQL_MAILX_SMS}
   `);
   const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs
     WHERE event_type = 'order.paid'
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%' OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+      AND ${SQL_MAILX_SMS}
+      AND ${SQL_IS_RECOVERY}
   `);
 
   // SlickText aggregated across all clients with credentials
@@ -518,9 +549,9 @@ adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, r
     SELECT
       client_id,
       COUNT(*) FILTER (WHERE event_type = 'order.paid' AND status = 'processed') AS vendas_total,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS faturamento_total,
+      COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS faturamento_total,
       COUNT(*) FILTER (WHERE event_type = 'order.paid' AND status = 'processed' AND created_at >= NOW() - INTERVAL '30 days') AS vendas_30d,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric) FILTER (WHERE event_type = 'order.paid' AND status = 'processed' AND created_at >= NOW() - INTERVAL '30 days'), 0) AS faturamento_30d
+      COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed' AND created_at >= NOW() - INTERVAL '30 days'), 0) AS faturamento_30d
     FROM webhook_logs
     WHERE client_id IS NOT NULL
     GROUP BY client_id
@@ -543,7 +574,7 @@ adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, r
     SELECT
       client_id,
       TO_CHAR(DATE_TRUNC('day', created_at), 'DD/MM') AS day,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) AS faturamento
+      COALESCE(SUM(total_price), 0) AS faturamento
     FROM webhook_logs
     WHERE client_id IS NOT NULL
       AND event_type = 'order.paid'
@@ -782,7 +813,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   // Sales KPIs — filtered by client_id
   const salesData = await queryOne<{ count: string, revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', payload->>'total_price'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
   `, [clientId]);
 
@@ -819,28 +850,27 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   // MailX UTM metrics — filtered by client_id
   const mailxData = await queryOne<{ count: string, revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailx%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailx%')
+      AND ${SQL_IS_MAILX}
   `, [clientId]);
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
-    SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
-      AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
-           OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+      AND ${SQL_IS_MAILX}
+      AND ${SQL_IS_RECOVERY}
   `, [clientId]);
 
   // Top 5 products — filtered by client_id
   const topProducts = await query<{ name: string, count: string, revenue: string }>(`
     SELECT 
-      payload->'order'->'line_items'->0->>'title' as name,
+      product_name as name,
       COUNT(*) as count,
-      COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      ${SQL_REVENUE} as revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND client_id = $1
-      AND payload->'order'->'line_items'->0->>'title' IS NOT NULL
-    GROUP BY 1 ORDER BY count DESC LIMIT 5
+      AND product_name IS NOT NULL
+    GROUP BY product_name ORDER BY count DESC LIMIT 5
   `, [clientId]);
 
   // Recent webhooks — filtered by client_id
@@ -1295,19 +1325,17 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
 
     // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') ──
     const smsSales = await queryOne<{ count: string; revenue: string }>(`
-      SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
-        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%'
-             OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
+        AND ${SQL_MAILX_SMS}
     `, [clientId]);
     const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
-      SELECT COUNT(*) as count, COALESCE(SUM(REPLACE(COALESCE(payload->'order'->>'total_price', '0'), ',', '')::numeric), 0) as revenue
+      SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
-        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%mailxsms%' OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%mailxsms%')
-        AND (payload->'order'->'checkout_params'->>'utm_campaign' ILIKE '%carrinhoabandonado%'
-             OR payload->'order'->'checkout_params'->>'utm_source' ILIKE '%carrinhoabandonado%')
+        AND ${SQL_MAILX_SMS}
+        AND ${SQL_IS_RECOVERY}
     `, [clientId]);
 
     const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
