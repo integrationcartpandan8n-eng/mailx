@@ -256,6 +256,7 @@
         }
         .platform-badge.cartpanda { background: rgba(59,130,246,0.1); color: var(--accent-light); }
         .platform-badge.digistore24 { background: rgba(0,214,143,0.1); color: var(--success); }
+        .platform-badge.clickbank { background: rgba(245,158,11,0.1); color: #f59e0b; }
         .platform-badge.manual { background: rgba(255,255,255,0.05); color: var(--text-muted); }
 
         /* Stores Table */
@@ -907,14 +908,18 @@
                 <button class="btn btn-accent" onclick="toggleForm('storeForm')"><i class="fas fa-plug"></i> Nova Loja</button>
             </div>
             <div class="inline-form" id="storeForm">
-                <div class="form-row" style="grid-template-columns: auto 1fr 1fr 1fr auto">
+                <div class="form-row" style="grid-template-columns: auto 1fr 1fr 1fr 1fr auto">
                     <div>
                         <label>Plataforma</label>
-                        <select id="newStorePlatform" style="min-width:120px">
+                        <select id="newStorePlatform" style="min-width:120px" onchange="updateStoreFormLabels()">
                             <option value="cartpanda">CartPanda</option>
                             <option value="digistore24">Digistore24</option>
                             <option value="clickbank">ClickBank</option>
                         </select>
+                    </div>
+                    <div>
+                        <label>Nome de exibição</label>
+                        <input type="text" id="newStoreDisplayName" placeholder="ex: Loja do David (Future)">
                     </div>
                     <div>
                         <label>Shop Slug / ID *</label>
@@ -934,12 +939,14 @@
                     </div>
                     <button class="btn btn-accent" onclick="addStore()" style="height:36px">Integrar</button>
                 </div>
+                <p id="storeFormHint" style="display:none; font-size:0.72rem; color:var(--text-dim); margin:0.5rem 0 0"></p>
             </div>
             <div class="card-body" style="padding:0">
                 <table class="store-table">
                     <thead>
                         <tr>
                             <th>Plataforma</th>
+                            <th>Nome</th>
                             <th>Shop Slug</th>
                             <th>Eventos</th>
                             <th>Status</th>
@@ -947,7 +954,7 @@
                         </tr>
                     </thead>
                     <tbody id="storesTableBody">
-                        <tr><td colspan="5" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>
+                        <tr><td colspan="6" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1101,7 +1108,7 @@
                     <div class="info-item"><label>Email</label><span>${client.contact_email}</span></div>
                     <div class="info-item"><label>WhatsApp</label><span>${client.contact_whatsapp || '—'}</span></div>
                     <div class="info-item"><label>CNPJ</label><span>${client.cnpj || '—'}</span></div>
-                    <div class="info-item"><label>Loja CartPanda</label><span class="mono">${client.cartpanda_store_url || '—'}</span></div>
+                    ${client.cartpanda_store_url ? `<div class="info-item"><label>Loja CartPanda</label><span class="mono">${client.cartpanda_store_url}</span></div>` : ''}
                     <div class="info-item"><label>AC API URL</label><span class="mono" style="font-size:0.72rem">${client.ac_api_url || '<span style="color:var(--danger)">Não configurado</span>'}</span></div>
                     <div class="info-item"><label>AC API Key</label><span class="mono" style="font-size:0.72rem">${client.ac_api_key ? '••••••••' + client.ac_api_key.slice(-6) : '<span style="color:var(--danger)">Não configurada</span>'}</span></div>
                     <div class="info-item"><label>DNS Registrar</label><span>${client.dns_registrar || '—'}</span></div>
@@ -1289,6 +1296,40 @@
         }
 
         // ── Stores ──
+        function updateStoreFormLabels() {
+            const platform = document.getElementById('newStorePlatform').value;
+            const slugLabel = document.querySelector('label[for="newStoreSlug"]') || document.getElementById('newStoreSlug').previousElementSibling;
+            const slugInput = document.getElementById('newStoreSlug');
+            const tokenLabel = document.getElementById('newStoreToken').previousElementSibling;
+            const tokenInput = document.getElementById('newStoreToken');
+            const eventsWrap = document.getElementById('newStoreEvents').parentElement;
+            const hint = document.getElementById('storeFormHint');
+
+            if (platform === 'digistore24') {
+                slugLabel.textContent = 'Identificador (fallback, opcional)';
+                slugInput.placeholder = 'deixe vazio para gerar automático';
+                tokenLabel.textContent = 'IPN Passphrase *';
+                tokenInput.placeholder = 'mesma senha das conexões IPN (Payment e Refund)';
+                eventsWrap.style.display = 'none';
+                hint.innerHTML = '<i class="fas fa-magic"></i> Produtos são descobertos automaticamente na primeira venda. A identificação do cliente é feita pela passphrase.';
+                hint.style.display = 'block';
+            } else if (platform === 'clickbank') {
+                slugLabel.textContent = 'Identificador *';
+                slugInput.placeholder = 'nickname ClickBank';
+                tokenLabel.textContent = 'Secret Key *';
+                tokenInput.placeholder = 'secret key do INS';
+                eventsWrap.style.display = 'none';
+                hint.style.display = 'none';
+            } else { // cartpanda
+                slugLabel.textContent = 'Shop Slug / ID *';
+                slugInput.placeholder = 'minhaloja';
+                tokenLabel.textContent = 'API Token (Bearer) *';
+                tokenInput.placeholder = 'cp_live_xxx...';
+                eventsWrap.style.display = '';
+                hint.style.display = 'none';
+            }
+        }
+
         async function loadStores() {
             try {
                 const res = await fetch(`${API}/clientes/${clientId}/stores`);
@@ -1296,39 +1337,54 @@
                 const tbody = document.getElementById('storesTableBody');
 
                 if (!stores || stores.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><i class="fas fa-store"></i>Nenhuma loja integrada</td></tr>';
+                    document.getElementById('btnRegisterWebhooks').style.display = 'none';
                     return;
                 }
 
                 tbody.innerHTML = stores.map(s => {
-                    const events = s.events ? Object.entries(JSON.parse(typeof s.events === 'string' ? s.events : JSON.stringify(s.events)))
-                        .filter(([_, v]) => v).map(([k]) => k).join(', ') : 'all';
                     const platform = s.platform || 'cartpanda';
-                    const platformIcon = platform === 'digistore24' ? '🌐' : '🛒';
-                    const platformLabel = platform === 'digistore24' ? 'Digistore24' : 'CartPanda';
+                    const events = (platform === 'digistore24' || platform === 'clickbank')
+                        ? '—'
+                        : (s.events ? Object.entries(JSON.parse(typeof s.events === 'string' ? s.events : JSON.stringify(s.events)))
+                            .filter(([_, v]) => v).map(([k]) => k).join(', ') : 'all');
+                    const displayName = s.display_name || s.shop_slug;
+                    const platformIcon = platform === 'digistore24' ? '🌐'
+                        : platform === 'clickbank' ? '<i class="fas fa-dollar-sign"></i>'
+                        : '🛒';
+                    const platformLabel = platform === 'digistore24' ? 'Digistore24'
+                        : platform === 'clickbank' ? 'ClickBank'
+                        : 'CartPanda';
                     return `
                         <tr>
                             <td style="font-size:0.78rem">${platformIcon} ${platformLabel}</td>
-                            <td style="color:#fff; font-weight:500">${s.shop_slug}</td>
+                            <td style="color:#fff; font-weight:500">${displayName}</td>
+                            <td style="font-size:0.72rem; color:var(--text-dim); font-family:monospace">${s.shop_slug}</td>
                             <td style="font-size:0.75rem; color:var(--text-dim)">${events}</td>
                             <td><span class="tag green">${s.status}</span></td>
                             <td><button class="btn btn-danger-sm" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button></td>
                         </tr>
                     `;
                 }).join('');
+
+                const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
+                document.getElementById('btnRegisterWebhooks').style.display = hasCartPanda ? '' : 'none';
             } catch (e) {
                 console.error('Failed to load stores:', e);
             }
         }
 
         async function addStore() {
-            const slug = document.getElementById('newStoreSlug').value.trim();
+            let slug = document.getElementById('newStoreSlug').value.trim();
             const token = document.getElementById('newStoreToken').value.trim();
+            const displayName = document.getElementById('newStoreDisplayName').value.trim();
             const eventsVal = document.getElementById('newStoreEvents').value;
-
-            if (!slug || !token) { alert('Shop Slug e API Token são obrigatórios'); return; }
-
             const platform = document.getElementById('newStorePlatform').value;
+
+            if (!token) { alert('Token/credencial é obrigatório'); return; }
+            if (platform !== 'digistore24' && !slug) { alert('Identificador é obrigatório'); return; }
+            if (platform === 'digistore24' && !slug) slug = 'ds24-' + Date.now();
+
             const events = eventsVal === 'all'
                 ? { order_paid: true, checkout_abandoned: true }
                 : eventsVal === 'order_paid'
@@ -1339,18 +1395,27 @@
                 const res = await fetch(`${API}/clientes/${clientId}/stores`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ shop_slug: slug, api_token: token, events, platform })
+                    body: JSON.stringify({ shop_slug: slug, api_token: token, events, platform, display_name: displayName || undefined })
                 });
                 const data = await res.json();
                 if (data.ok) {
                     document.getElementById('newStoreSlug').value = '';
                     document.getElementById('newStoreToken').value = '';
+                    document.getElementById('newStoreDisplayName').value = '';
                     toggleForm('storeForm');
                     loadStores();
                     const whInfo = data.webhooks
                         ? `\n\nWebhooks: ${data.webhooks.created?.length || 0} registrados, ${data.webhooks.skipped?.length || 0} já existentes, ${data.webhooks.errors?.length || 0} erros.`
                         : '';
-                    showModal('✅ Loja integrada!', `"${slug}.cartpanda.com" foi conectada.${whInfo}`);
+                    let successMsg;
+                    if (platform === 'cartpanda') {
+                        successMsg = `"${slug}.cartpanda.com" foi conectada.${whInfo}`;
+                    } else if (platform === 'digistore24') {
+                        successMsg = 'Loja Digistore24 conectada! Produtos serão descobertos automaticamente na primeira venda.';
+                    } else {
+                        successMsg = 'Loja ClickBank conectada.';
+                    }
+                    showModal('✅ Loja integrada!', successMsg);
                 } else {
                     showModal('Erro', data.error || 'Erro ao integrar loja');
                 }
@@ -1864,6 +1929,7 @@
 
         // Init
         loadClient();
+        updateStoreFormLabels();
     </script>
 </body>
 </html>

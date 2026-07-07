@@ -118,6 +118,11 @@ export async function initDatabase(): Promise<void> {
         EXCEPTION WHEN duplicate_column THEN NULL;
         END $$;
 
+        DO $$ BEGIN
+          ALTER TABLE store_integrations ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+
         -- Add new tag columns to kits if they don't exist
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_cartao_recusado_id VARCHAR(50);
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_tag_reembolso_id VARCHAR(50);

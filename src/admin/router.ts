@@ -651,7 +651,7 @@ adminRouter.post('/integration/test', asyncHandler(async (req: Request, res: Res
 
 // POST /admin/integration/store - Save new store integration
 adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Response) => {
-  const { shop_slug, api_token, events, platform } = req.body;
+  const { shop_slug, api_token, events, platform, display_name } = req.body;
 
   if (!shop_slug || !api_token) {
     res.status(400).json({ error: 'shop_slug and api_token are required' });
@@ -663,10 +663,10 @@ adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Re
 
   // Store the integration in the database with 'pending' status (not yet validated via webhook)
   await query(
-    `INSERT INTO store_integrations (platform, shop_slug, api_token, events, status)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO store_integrations (platform, shop_slug, api_token, events, status, display_name)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (shop_slug, platform) DO UPDATE SET api_token = $3, events = $4, updated_at = NOW()`,
-    [storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'pending']
+    [storePlatform, shop_slug, api_token, JSON.stringify(events || {}), 'pending', display_name || null]
   );
 
   res.json({ ok: true, shop_slug, platform: storePlatform });
@@ -1129,7 +1129,7 @@ adminRouter.get('/clientes/:id/stores', asyncHandler(async (req: Request, res: R
 // POST /admin/clientes/:id/stores - Add store to a client
 adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  let { shop_slug, api_token, events, platform } = req.body;
+  let { shop_slug, api_token, events, platform, display_name } = req.body;
 
   if (!shop_slug || !api_token) {
     res.status(400).json({ error: 'shop_slug and api_token are required' });
@@ -1145,9 +1145,9 @@ adminRouter.post('/clientes/:id/stores', asyncHandler(async (req: Request, res: 
   const storePlatform = platform || 'cartpanda';
 
   await query(
-    `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, events, status)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [clientId, storePlatform, normalizedSlug, api_token, JSON.stringify(events || {}), 'pending']
+    `INSERT INTO store_integrations (client_id, platform, shop_slug, api_token, events, status, display_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [clientId, storePlatform, normalizedSlug, api_token, JSON.stringify(events || {}), 'pending', display_name || null]
   );
 
   logger.info(CTX, `Store "${normalizedSlug}" (${storePlatform}) integrated for client ${clientId}`);
