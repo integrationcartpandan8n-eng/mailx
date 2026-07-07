@@ -64,17 +64,20 @@ export function validateSignature(
     return false;
   }
 
-  // Build signature string: sort keys, exclude sha_sign, concatenate
   const keys = Object.keys(params)
     .filter((k) => k !== 'sha_sign')
     .sort();
-
-  const signString = keys.map((k) => `${k}=${params[k]}`).join('') + passphrase;
+  let signString = '';
+  for (const k of keys) {
+    const v = params[k];
+    if (v === undefined || v === null || v === '' || v === false) continue;
+    signString += `${k}=${v}${passphrase}`;
+  }
 
   logger.warn(CTX, 'DEBUG signature check', {
     keys,
     paramsPreview: JSON.stringify(params),
-    signStringMasked: signString.replace(passphrase, '[PASSPHRASE]'),
+    signStringMasked: signString.split(passphrase).join('[PASSPHRASE]'),
   });
 
   const computedSign = crypto
