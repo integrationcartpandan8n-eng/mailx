@@ -57,8 +57,42 @@ const SQL_IS_RECOVERY = `(
   OR COALESCE(utm_source, '') ILIKE '%carrinhoabandonado%'
 )`;
 
+/** Medium de automação (auto-email / auto-sms). */
+const SQL_MEDIUM_AUTO = `COALESCE(utm_medium, '') ILIKE '%auto%'`;
+
+/** Medium de campanha (campaign-editorial / campaing-promo e variações). */
+const SQL_MEDIUM_CAMPAIGN = `(
+  COALESCE(utm_medium, '') ILIKE '%campai%'
+  OR COALESCE(utm_medium, '') ILIKE '%editorial%'
+  OR COALESCE(utm_medium, '') ILIKE '%promo%'
+)`;
+
+/** Campanha de upsell. */
+const SQL_IS_UPSELL = `COALESCE(utm_campaign, '') ILIKE '%upsell%'`;
+
 /** Receita normalizada (Fase A garante NUMERIC ou NULL). */
 const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
+
+const DATE_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseYmd(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function formatDayLabel(d: Date): string {
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 export const adminRouter = Router();
 
@@ -225,31 +259,6 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
   const mailxRecoveryRevenue = parseFloat(mailxRecoveries?.revenue || '0');
 
-  // ── Webhooks per day (last 30 days) ──
-  const dailyWebhooks = await query<{ day: string, automacoes: string, campanhas: string }>(`
-    SELECT 
-      TO_CHAR(created_at, 'DD/MM') as day,
-      COUNT(*) FILTER (WHERE event_type = 'order.paid') as automacoes,
-      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as campanhas
-    FROM webhook_logs 
-    WHERE created_at >= NOW() - INTERVAL '30 days'
-    GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
-    ORDER BY DATE(created_at)
-  `);
-
-  const last30Days: string[] = [];
-  const autoData: number[] = [];
-  const campData: number[] = [];
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-    last30Days.push(label);
-    const match = dailyWebhooks.find(r => r.day === label);
-    autoData.push(match ? parseInt(match.automacoes) : 0);
-    campData.push(match ? parseInt(match.campanhas) : 0);
-  }
-
   // ── Webhooks by hour ──
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
@@ -302,11 +311,6 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       faturamento_recuperacoes: fmtBRL(mailxRecoveryRevenue),
     },
     charts: {
-      revenue: {
-        labels: last30Days,
-        automacoes: autoData,
-        campanhas: campData,
-      },
       hourly: {
         labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
         values: hourlyValues,
@@ -326,6 +330,96 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       envios_por_venda: enviosPorVenda,
     },
   });
+}));
+
+// GET /admin/dashboard/revenue-charts - Revenue time-series for dashboard charts
+adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, res: Response) => {
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const clientId = req.query.client_id as string | undefined;
+  const channel = req.query.channel as string | undefined;
+
+  if (!from || !to || !DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' });
+    return;
+  }
+
+  const fromDate = parseYmd(from);
+  const toDate = parseYmd(to);
+  if (fromDate > toDate) {
+    res.status(400).json({ error: 'from must be <= to' });
+    return;
+  }
+
+  const dayCount = Math.round((toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  if (dayCount > 366) {
+    res.status(400).json({ error: 'Date range cannot exceed 366 days' });
+    return;
+  }
+
+  const channelExtra = channel === 'email' ? `AND NOT ${SQL_IS_SMS}` : '';
+  const params: (string | number)[] = [from, to];
+  let clientFilter = '';
+  if (clientId) {
+    const cid = parseInt(clientId, 10);
+    if (Number.isNaN(cid)) {
+      res.status(400).json({ error: 'Invalid client_id' });
+      return;
+    }
+    params.push(cid);
+    clientFilter = `AND client_id = $${params.length}`;
+  }
+
+  const rows = await query<{
+    day: string | Date;
+    total: string;
+    automacao: string;
+    campanha: string;
+    recuperacao: string;
+    upsell: string;
+  }>(`
+    SELECT
+      DATE(created_at) AS day,
+      COALESCE(SUM(total_price), 0) AS total,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_IS_MAILX} AND ${SQL_MEDIUM_AUTO} ${channelExtra}), 0) AS automacao,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_IS_MAILX} AND ${SQL_MEDIUM_CAMPAIGN} ${channelExtra}), 0) AS campanha,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_IS_MAILX} AND ${SQL_IS_RECOVERY} ${channelExtra}), 0) AS recuperacao,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_IS_MAILX} AND ${SQL_IS_UPSELL} ${channelExtra}), 0) AS upsell
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status = 'processed'
+      AND created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
+      ${clientFilter}
+    GROUP BY DATE(created_at)
+    ORDER BY DATE(created_at)
+  `, params);
+
+  const byDay = new Map<string, typeof rows[0]>();
+  for (const row of rows) {
+    const key = typeof row.day === 'string'
+      ? row.day.slice(0, 10)
+      : dayKey(new Date(row.day));
+    byDay.set(key, row);
+  }
+
+  const labels: string[] = [];
+  const total: number[] = [];
+  const automacao: number[] = [];
+  const campanha: number[] = [];
+  const recuperacao: number[] = [];
+  const upsell: number[] = [];
+
+  for (let d = new Date(fromDate); d <= toDate; d = addDays(d, 1)) {
+    const key = dayKey(d);
+    const row = byDay.get(key);
+    labels.push(formatDayLabel(d));
+    total.push(row ? parseFloat(row.total) : 0);
+    automacao.push(row ? parseFloat(row.automacao) : 0);
+    campanha.push(row ? parseFloat(row.campanha) : 0);
+    recuperacao.push(row ? parseFloat(row.recuperacao) : 0);
+    upsell.push(row ? parseFloat(row.upsell) : 0);
+  }
+
+  res.json({ labels, total, automacao, campanha, recuperacao, upsell });
 }));
 
 // GET /admin/dashboard/history - Historical KPIs
@@ -891,30 +985,6 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ORDER BY DATE(created_at)
   `, [clientId]);
 
-  // ── Webhooks per day (last 30 days) — split into automações vs campanhas ──
-  const dailyWebhooks = await query<{ day: string, automacoes: string, campanhas: string }>(`
-    SELECT
-      TO_CHAR(created_at, 'DD/MM') as day,
-      COUNT(*) FILTER (WHERE event_type = 'order.paid') as automacoes,
-      COUNT(*) FILTER (WHERE event_type = 'abandoned_cart') as campanhas
-    FROM webhook_logs
-    WHERE created_at >= NOW() - INTERVAL '30 days' AND client_id = $1
-    GROUP BY TO_CHAR(created_at, 'DD/MM'), DATE(created_at)
-    ORDER BY DATE(created_at)
-  `, [clientId]);
-  const last30Days: string[] = [];
-  const autoData: number[] = [];
-  const campData: number[] = [];
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-    last30Days.push(label);
-    const match = dailyWebhooks.find(r => r.day === label);
-    autoData.push(match ? parseInt(match.automacoes) : 0);
-    campData.push(match ? parseInt(match.campanhas) : 0);
-  }
-
   // ── Webhooks by hour ──
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
@@ -1008,11 +1078,6 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       values: dailyActivity.map(d => parseInt(d.count)),
     },
     charts: {
-      revenue: {
-        labels: last30Days,
-        automacoes: autoData,
-        campanhas: campData,
-      },
       hourly: {
         labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`),
         values: hourlyValues,

@@ -397,6 +397,16 @@
             font-weight: 600;
         }
 
+        .period-control { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; flex-wrap:wrap; }
+        .period-control .pc-label { font-size:0.72rem; color:var(--text-dim); }
+        .period-pill { border:1px solid rgba(255,255,255,0.08); background:transparent; color:var(--text-dim);
+            border-radius:6px; padding:0.25rem 0.6rem; font-size:0.72rem; cursor:pointer; }
+        .period-pill.active { background:rgba(59,130,246,0.15); color:#60a5fa; border-color:rgba(59,130,246,0.35); }
+        .period-custom { display:none; gap:0.4rem; align-items:center; }
+        .period-custom.open { display:flex; }
+        .period-custom input[type=date] { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08);
+            color:#fff; border-radius:6px; padding:0.25rem 0.4rem; font-size:0.72rem; color-scheme:dark; }
+
         .chart-wrap {
             position: relative;
             height: 280px;
@@ -715,17 +725,40 @@
                 <div class="tab-content active" id="tab-overview">
                     <div class="kpi-grid" id="overview-kpis"></div>
 
-                    <div class="charts-row">
+                    <div class="period-control" id="revenuePeriodControl">
+                        <span class="pc-label">Período:</span>
+                        <button class="period-pill" data-days="7">7d</button>
+                        <button class="period-pill active" data-days="30">30d</button>
+                        <button class="period-pill" data-days="90">90d</button>
+                        <button class="period-pill" data-custom>Personalizado</button>
+                        <span class="period-custom">
+                            <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
+                            <button class="period-pill" data-apply>Aplicar</button>
+                        </span>
+                    </div>
+
+                    <div class="charts-row equal">
                         <div class="chart-card">
                             <div class="chart-header">
                                 <div>
-                                    <div class="chart-title">Faturamento x Tempo</div>
-                                    <div class="chart-subtitle">Automações e Campanhas Detalhada por Email</div>
+                                    <div class="chart-title">Faturamento: Automação x Campanha</div>
+                                    <div class="chart-subtitle">Receita diária atribuída via UTM — medium</div>
                                 </div>
-                                <span class="chart-badge">Últimos 30 dias</span>
                             </div>
-                            <div class="chart-wrap"><canvas id="chartRevenue"></canvas></div>
+                            <div class="chart-wrap"><canvas id="chartAutoCamp"></canvas></div>
                         </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Faturamento: Recuperação x Upsell</div>
+                                    <div class="chart-subtitle">Receita diária por segmento — campanha</div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartRecUpsell"></canvas></div>
+                        </div>
+                    </div>
+
+                    <div class="charts-row" style="grid-template-columns:1fr">
                         <div class="chart-card">
                             <div class="chart-header">
                                 <div>
@@ -785,6 +818,39 @@
                     <div style="margin-top:1rem; padding:1rem; background:var(--accent-subtle); border-radius:var(--radius); color:var(--text-dim); font-size:0.85rem">
                         <i class="fas fa-info-circle" style="margin-right:0.5rem"></i>
                         Métricas agregadas entre <strong><span id="email-clients-count">0</span> cliente(s)</strong> com ActiveCampaign conectado.
+                    </div>
+
+                    <div class="period-control" id="revenuePeriodControlEmail" style="margin-top:1.5rem">
+                        <span class="pc-label">Período:</span>
+                        <button class="period-pill" data-days="7">7d</button>
+                        <button class="period-pill active" data-days="30">30d</button>
+                        <button class="period-pill" data-days="90">90d</button>
+                        <button class="period-pill" data-custom>Personalizado</button>
+                        <span class="period-custom">
+                            <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
+                            <button class="period-pill" data-apply>Aplicar</button>
+                        </span>
+                    </div>
+
+                    <div class="charts-row equal" style="margin-top:0.75rem">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Faturamento: Automação x Campanha</div>
+                                    <div class="chart-subtitle">Receita diária atribuída via UTM — medium (email)</div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartAutoCampEmail"></canvas></div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Faturamento: Recuperação x Upsell</div>
+                                    <div class="chart-subtitle">Receita diária por segmento — campanha (email)</div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="chartRecUpsellEmail"></canvas></div>
+                        </div>
                     </div>
                 </div>
 
@@ -951,6 +1017,134 @@
         Chart.defaults.plugins.legend.labels.usePointStyle = true;
         Chart.defaults.plugins.legend.labels.pointStyleWidth = 8;
 
+        // ── Revenue charts (Fase D.1) ──
+        const __overviewCharts = { autoCamp: null, recUpsell: null };
+        const __emailCharts = { autoCamp: null, recUpsell: null };
+
+        function revenueChartOptions() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    y: {
+                        grid: { color: 'rgba(26, 34, 54, 0.6)' },
+                        ticks: { callback: v => 'R$ ' + Number(v).toLocaleString('pt-BR') },
+                    },
+                    x: { grid: { display: false } },
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.label + ': R$ ' + ctx.parsed.y.toLocaleString('pt-BR'),
+                        },
+                    },
+                },
+            };
+        }
+
+        function datasetsAutoCamp(d) {
+            return [
+                { label: 'Total do cliente', data: d.total, borderColor: '#64748b', borderDash: [6, 4],
+                    borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3 },
+                { label: 'Automação', data: d.automacao, borderColor: '#60a5fa',
+                    backgroundColor: 'rgba(96,165,250,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+                { label: 'Campanha', data: d.campanha, borderColor: '#34d399',
+                    backgroundColor: 'rgba(52,211,153,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+            ];
+        }
+
+        function datasetsRecUpsell(d) {
+            return [
+                { label: 'Total do cliente', data: d.total, borderColor: '#64748b', borderDash: [6, 4],
+                    borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3 },
+                { label: 'Recuperação', data: d.recuperacao, borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245,158,11,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+                { label: 'Upsell', data: d.upsell, borderColor: '#a78bfa',
+                    backgroundColor: 'rgba(167,139,250,0.08)', fill: true, tension: 0.3, pointRadius: 2 },
+            ];
+        }
+
+        function updateRevenueCharts(d, canvasAuto, canvasRec, refs) {
+            const opts = revenueChartOptions();
+            if (!refs.autoCamp) {
+                refs.autoCamp = new Chart(canvasAuto, {
+                    type: 'line',
+                    data: { labels: d.labels, datasets: datasetsAutoCamp(d) },
+                    options: opts,
+                });
+                refs.recUpsell = new Chart(canvasRec, {
+                    type: 'line',
+                    data: { labels: d.labels, datasets: datasetsRecUpsell(d) },
+                    options: opts,
+                });
+            } else {
+                refs.autoCamp.data.labels = d.labels;
+                refs.autoCamp.data.datasets = datasetsAutoCamp(d);
+                refs.autoCamp.update();
+                refs.recUpsell.data.labels = d.labels;
+                refs.recUpsell.data.datasets = datasetsRecUpsell(d);
+                refs.recUpsell.update();
+            }
+        }
+
+        function initPeriodControl(container, onChange) {
+            const state = { days: 30 };
+            const fmt = d => d.toISOString().slice(0, 10);
+            function emit(from, to) { onChange(from, to); }
+            function preset(days) {
+                state.days = days;
+                const to = new Date();
+                const from = new Date();
+                from.setDate(from.getDate() - (days - 1));
+                emit(fmt(from), fmt(to));
+            }
+            container.querySelectorAll('[data-days]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    container.querySelectorAll('.period-pill').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    container.querySelector('.period-custom').classList.remove('open');
+                    preset(parseInt(btn.dataset.days));
+                });
+            });
+            const customBtn = container.querySelector('[data-custom]');
+            customBtn.addEventListener('click', () => {
+                container.querySelectorAll('.period-pill').forEach(b => b.classList.remove('active'));
+                customBtn.classList.add('active');
+                container.querySelector('.period-custom').classList.add('open');
+            });
+            container.querySelector('[data-apply]').addEventListener('click', () => {
+                const from = container.querySelector('[data-from]').value;
+                const to = container.querySelector('[data-to]').value;
+                if (from && to && from <= to) emit(from, to);
+            });
+            preset(30);
+        }
+
+        async function loadRevenueChartsOverview(from, to) {
+            const params = new URLSearchParams({ from, to });
+            const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
+            updateRevenueCharts(
+                d,
+                document.getElementById('chartAutoCamp'),
+                document.getElementById('chartRecUpsell'),
+                __overviewCharts
+            );
+        }
+
+        async function loadRevenueChartsEmail(from, to) {
+            const params = new URLSearchParams({ from, to, channel: 'email' });
+            const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
+            updateRevenueCharts(
+                d,
+                document.getElementById('chartAutoCampEmail'),
+                document.getElementById('chartRecUpsellEmail'),
+                __emailCharts
+            );
+        }
+
+        initPeriodControl(document.getElementById('revenuePeriodControl'), loadRevenueChartsOverview);
+
         // ── KPI Renderers ──
         function renderKPI(containerId, kpis) {
             const el = document.getElementById(containerId);
@@ -987,47 +1181,6 @@
                     document.getElementById('fn-vendas').textContent = data.funnel.total_vendas.toLocaleString('pt-BR');
                     document.getElementById('fn-ratio').textContent = data.funnel.envios_por_venda.toLocaleString('pt-BR');
                 }
-
-                // Revenue Chart
-                new Chart(document.getElementById('chartRevenue'), {
-                    type: 'line',
-                    data: {
-                        labels: data.charts.revenue.labels,
-                        datasets: [
-                            {
-                                label: 'Automações',
-                                data: data.charts.revenue.automacoes,
-                                borderColor: '#004de8',
-                                backgroundColor: 'rgba(0, 77, 232, 0.08)',
-                                fill: true,
-                                tension: 0.35,
-                                borderWidth: 2,
-                                pointRadius: 0,
-                                pointHoverRadius: 5,
-                            },
-                            {
-                                label: 'Campanhas',
-                                data: data.charts.revenue.campanhas,
-                                borderColor: '#00d68f',
-                                backgroundColor: 'rgba(0, 214, 143, 0.05)',
-                                fill: true,
-                                tension: 0.35,
-                                borderWidth: 2,
-                                pointRadius: 0,
-                                pointHoverRadius: 5,
-                            },
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        interaction: { mode: 'index', intersect: false },
-                        scales: {
-                            y: { grid: { color: 'rgba(26, 34, 54, 0.6)' }, ticks: { callback: v => 'R$ ' + (v/1000).toFixed(0) + 'k' } },
-                            x: { grid: { display: false } }
-                        },
-                    }
-                });
 
                 // Hourly Sales
                 new Chart(document.getElementById('chartHourly'), {
@@ -1448,6 +1601,10 @@
                     { label: 'EPC', value: e.epc, icon: 'coins', color: 'green' },
                 ]);
                 document.getElementById('email-clients-count').textContent = data.clients_with_ac || 0;
+                if (!window.__emailChartsInit) {
+                    window.__emailChartsInit = true;
+                    initPeriodControl(document.getElementById('revenuePeriodControlEmail'), loadRevenueChartsEmail);
+                }
             } catch (err) {
                 console.error('Failed to load email dashboard:', err);
                 document.getElementById('email-revenue-kpis').innerHTML = '<div style="color:var(--danger); padding:1rem">Erro ao carregar dados de Email.</div>';
