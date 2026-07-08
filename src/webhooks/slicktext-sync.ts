@@ -227,3 +227,65 @@ export async function syncSlickTextAbandonedCart(
     return { synced: false, reason: err.message };
   }
 }
+
+/**
+ * Vincula kits sem st_list_abandono_id/st_list_compra_id às listas do SlickText
+ * cujo nome segue o padrão "[Produto] [Abandono de Carrinho]" / "[Produto] [Compra Aprovada]".
+ * Não cria nada no SlickText — só lê e persiste o ID localmente (compatível com METRICS_ONLY).
+ * Retorna a lista de kits que continuam sem correspondência (pra sinalizar no dashboard).
+ */
+export async function autoLinkSlickTextLists(
+  st: SlickTextClient,
+  clientId: number
+): Promise<{ linked: number; unmatched: Array<{ kitId: number; kitName: string }> }> {
+  const lists = await st.getLists();
+  const pattern = /^\[(.+?)\]\s*\[(Abandono de Carrinho|Compra Aprovada)\]$/i;
+
+  const abandonoByProduct = new Map<string, number>();
+  const compraByProduct = new Map<string, number>();
+  for (const list of lists) {
+    const m = list.name.match(pattern);
+    if (!m) continue;
+    const product = m[1].trim();
+    const kind = m[2].toLowerCase();
+    if (kind === 'abandono de carrinho') abandonoByProduct.set(product, list.contact_list_id);
+    else compraByProduct.set(product, list.contact_list_id);
+  }
+
+  const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+    `SELECT id, name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+    [clientId]
+  );
+
+  let linked = 0;
+  const unmatched: Array<{ kitId: number; kitName: string }> = [];
+
+  for (const kit of kits) {
+    let abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+    let compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
+
+    if (!abandonoId) {
+      for (const [product, listId] of abandonoByProduct) {
+        if (kit.name.toLowerCase().includes(product.toLowerCase())) { abandonoId = listId; break; }
+      }
+    }
+    if (!compraId) {
+      for (const [product, listId] of compraByProduct) {
+        if (kit.name.toLowerCase().includes(product.toLowerCase())) { compraId = listId; break; }
+      }
+    }
+
+    if (abandonoId !== (kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null)
+        || compraId !== (kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null)) {
+      await query(
+        `UPDATE kits SET st_list_abandono_id = $1, st_list_compra_id = $2 WHERE id = $3`,
+        [abandonoId ? String(abandonoId) : null, compraId ? String(compraId) : null, kit.id]
+      );
+      linked++;
+    }
+
+    if (!abandonoId) unmatched.push({ kitId: kit.id, kitName: kit.name });
+  }
+
+  return { linked, unmatched };
+}

@@ -1875,13 +1875,17 @@
                 // Conversão por Segmento
                 if (data.conversao_por_segmento) {
                     const cs = data.conversao_por_segmento;
+                    const abWarning = cs.carrinho_abandonado.leads_warning;
+                    const abLeadsCell = abWarning
+                        ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-triangle-exclamation" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
+                        : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
                     document.getElementById('convSegmentoBody').innerHTML = [
-                        { seg: 'Carrinho Abandonado', leads: cs.carrinho_abandonado.leads, vendas: cs.carrinho_abandonado.vendas, taxa: cs.carrinho_abandonado.taxa },
-                        { seg: 'Compradores', leads: cs.compradores.leads, vendas: cs.compradores.vendas, taxa: cs.compradores.taxa },
+                        { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxa: cs.carrinho_abandonado.taxa },
+                        { seg: 'Compradores', leadsHtml: cs.compradores.leads.toLocaleString('pt-BR'), vendas: cs.compradores.vendas, taxa: cs.compradores.taxa },
                     ].map(r => `
                         <tr>
                             <td style="font-weight:600">${r.seg}</td>
-                            <td>${r.leads.toLocaleString('pt-BR')}</td>
+                            <td>${r.leadsHtml}</td>
                             <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
                             <td><span class="tag ${r.taxa > 3 ? 'green' : ''}" style="${r.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${r.taxa}%</span></td>
                         </tr>

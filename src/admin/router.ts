@@ -6,6 +6,7 @@ import { logger } from '../utils/logger';
 import { runBootstrap, runKitBootstrap, generateDnsRecords } from '../setup/bootstrap-service';
 import { CartPandaClient } from '../services/cartpanda';
 import { SlickTextClient } from '../services/slicktext';
+import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { env } from '../config/env';
 import {
@@ -1013,6 +1014,39 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ── Conversão por Segmento: leads de abandono (CartPanda evento vs SlickText lista) ──
+  const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
+
+  let abandonoLeads = abandoned;
+  let leadsSource: 'cartpanda_event' | 'slicktext_list' | 'unavailable' = hasCartPanda ? 'cartpanda_event' : 'unavailable';
+  let leadsWarning: string | null = null;
+
+  if (!hasCartPanda) {
+    const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+    );
+    if (client?.st_api_token && client?.st_brand_id) {
+      const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+      const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
+      const kits = await query<{ st_list_abandono_id: string | null }>(
+        `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL`,
+        [clientId]
+      );
+      const counts = await Promise.all(
+        kits.map(k => st.getListContactCount(parseInt(k.st_list_abandono_id!)).catch(() => 0))
+      );
+      abandonoLeads = counts.reduce((a, b) => a + b, 0);
+      leadsSource = 'slicktext_list';
+      if (unmatched.length > 0) {
+        leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
+      }
+    } else {
+      leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado indisponível para este gateway';
+    }
+  }
+
+  const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
+
   // ── Email Marketing KPIs (ActiveCampaign reporting, last 30 days) ──
   const emailMetrics = {
     entrada_contatos: '--' as string,
@@ -1099,11 +1133,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       : 0,
     conversao_por_segmento: {
       carrinho_abandonado: {
-        leads: abandoned,
-        vendas: parseInt(mailxRecoveries?.count || '0'),
-        taxa: abandoned > 0
-          ? parseFloat(((parseInt(mailxRecoveries?.count || '0') / abandoned) * 100).toFixed(2))
+        leads: abandonoLeads,
+        vendas: mailxRecoveryCount,
+        taxa: abandonoLeads > 0
+          ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
           : 0,
+        leads_source: leadsSource,
+        leads_warning: leadsWarning,
       },
       compradores: {
         leads: totalSales,
