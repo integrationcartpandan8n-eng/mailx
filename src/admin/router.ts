@@ -449,7 +449,7 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
   const row = await queryOne<{ aprovado: string; reembolso: string }>(`
     SELECT
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS aprovado,
-      COALESCE(SUM(total_price) FILTER (WHERE event_type IN ('order.refunded', 'order.chargeback')), 0) AS reembolso
+      COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type IN ('order.refunded', 'order.chargeback')), 0) AS reembolso
     FROM webhook_logs
     WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
       ${clientFilter}
