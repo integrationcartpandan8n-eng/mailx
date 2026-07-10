@@ -1022,26 +1022,32 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   let leadsWarning: string | null = null;
 
   if (!hasCartPanda) {
-    const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-    );
-    if (client?.st_api_token && client?.st_brand_id) {
-      const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-      const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
-      const kits = await query<{ st_list_abandono_id: string | null }>(
-        `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL`,
-        [clientId]
+    try {
+      const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+        `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
       );
-      const counts = await Promise.all(
-        kits.map(k => st.getListContactCount(parseInt(k.st_list_abandono_id!)).catch(() => 0))
-      );
-      abandonoLeads = counts.reduce((a, b) => a + b, 0);
-      leadsSource = 'slicktext_list';
-      if (unmatched.length > 0) {
-        leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
+      if (client?.st_api_token && client?.st_brand_id) {
+        const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+        const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
+        const kits = await query<{ st_list_abandono_id: string | null }>(
+          `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL`,
+          [clientId]
+        );
+        const counts = await Promise.all(
+          kits.map(k => st.getListContactCount(parseInt(k.st_list_abandono_id!)).catch(() => 0))
+        );
+        abandonoLeads = counts.reduce((a, b) => a + b, 0);
+        leadsSource = 'slicktext_list';
+        if (unmatched.length > 0) {
+          leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
+        }
+      } else {
+        leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado indisponível para este gateway';
       }
-    } else {
-      leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado indisponível para este gateway';
+    } catch (err: any) {
+      logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
+      leadsSource = 'unavailable';
+      leadsWarning = 'Falha ao consultar SlickText — Leads de Carrinho Abandonado temporariamente indisponível';
     }
   }
 
