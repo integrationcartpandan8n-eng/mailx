@@ -8,7 +8,7 @@ import { CartPandaClient } from '../services/cartpanda';
 import { SlickTextClient } from '../services/slicktext';
 import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
-import { env } from '../config/env';
+import { env, METRICS_ONLY } from '../config/env';
 import {
   SESSION_COOKIE,
   parseCookies,
@@ -1157,6 +1157,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           : 0,
       },
     },
+    metrics_only: METRICS_ONLY,
   });
 }));
 

@@ -1175,7 +1175,8 @@
                 loadClientStats();
 
                 // Render kits
-                renderKits(client.kits || []);
+                window.__clientKits = client.kits || [];
+                renderKits(window.__clientKits);
 
                 // Load stores
                 loadStores();
@@ -1212,18 +1213,17 @@
                     ? `<span style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${k.external_id}</span>`
                     : `<span style="color:var(--text-muted)">—</span>`;
 
+                const enabledCell = window.__metricsOnly
+                    ? `<span style="color:var(--text-dim)">—</span>`
+                    : `<label class="toggle"><input type="checkbox" ${k.enabled ? 'checked' : ''} onchange="toggleKit(${k.id}, this)"><span class="toggle-slider"></span></label>`;
+
                 return `
                 <tr id="kit-row-${k.id}">
                     <td style="color:#fff; font-weight:600">${k.name}</td>
                     <td><span class="platform-badge ${platformClass}">${platformLabel}</span></td>
                     <td>${externalIdHtml}</td>
                     <td>${tagsHtml}</td>
-                    <td>
-                        <label class="toggle">
-                            <input type="checkbox" ${k.enabled ? 'checked' : ''} onchange="toggleKit(${k.id}, this)">
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </td>
+                    <td>${enabledCell}</td>
                     <td><button class="btn btn-danger-sm" onclick="deleteKit(${k.id})"><i class="fas fa-trash"></i></button></td>
                 </tr>`;
             }).join('');
@@ -1661,6 +1661,13 @@
             try {
                 const res = await fetch(`${API}/clientes/${clientId}/stats`);
                 const data = await res.json();
+
+                window.__metricsOnly = !!data.metrics_only;
+                const btnBootstrap = document.getElementById('btnBootstrap');
+                if (btnBootstrap) {
+                    btnBootstrap.style.display = data.metrics_only ? 'none' : '';
+                }
+                if (window.__clientKits) renderKits(window.__clientKits);
 
                 // Render KPIs
                 const kpiGrid = document.getElementById('clientKpis');
