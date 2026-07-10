@@ -41,6 +41,13 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
       }
     }
 
+    // 2.5 — Digistore24 "Test connection": ping sintético sem dado de comprador. Responder OK sem processar.
+    if (params.event === 'connection_test' || params.function_call === 'connection_test') {
+      logger.info(CTX, `Test connection OK (client ${store.clientId})`);
+      res.status(200).send('OK');
+      return;
+    }
+
     const data = normalizePayload(params);
     const isChargeback = params.event === 'chargeback';
     const eventType = isChargeback ? 'order.chargeback' : 'order.refunded';
