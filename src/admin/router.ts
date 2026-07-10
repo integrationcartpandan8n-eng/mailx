@@ -1030,7 +1030,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
         const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
         const kits = await query<{ st_list_abandono_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL`,
+          `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND st_list_abandono_id IS NOT NULL`,
           [clientId]
         );
         const counts = await Promise.all(
@@ -1141,9 +1141,11 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       carrinho_abandonado: {
         leads: abandonoLeads,
         vendas: mailxRecoveryCount,
-        taxa: abandonoLeads > 0
-          ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
-          : 0,
+        taxa: leadsSource === 'slicktext_list'
+          ? null
+          : abandonoLeads > 0
+            ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
+            : 0,
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },
@@ -1397,7 +1399,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       st_list_compra_id: string | null;
       st_list_abandono_id: string | null;
     }>(
-      `SELECT name, st_list_compra_id, st_list_abandono_id FROM kits WHERE client_id = $1 AND enabled = true`,
+      `SELECT name, st_list_compra_id, st_list_abandono_id FROM kits WHERE client_id = $1`,
       [clientId]
     );
 

@@ -253,7 +253,7 @@ export async function autoLinkSlickTextLists(
   }
 
   const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT id, name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+    `SELECT id, name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`,
     [clientId]
   );
 
