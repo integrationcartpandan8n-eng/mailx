@@ -1917,6 +1917,9 @@
                         </tr>
                     `).join('');
                 }
+
+                window.__clientStatsData = data;
+                loadEmailTabStats(data);
             } catch (e) {
                 console.error('Failed to load client stats:', e);
             }
@@ -1948,9 +1951,8 @@
             }
 
             // Load email tab data
-            if (tab === 'email' && !window._emailTabLoaded) {
-                loadEmailTabStats();
-                window._emailTabLoaded = true;
+            if (tab === 'email') {
+                loadEmailTabStats(window.__clientStatsData);
             }
         }
 
@@ -2048,13 +2050,27 @@
         }
 
         // ── Load Email Tab Stats ──
-        function loadEmailTabStats() {
-            // Re-use data from the general stats already loaded
-            const emailTabKpis = document.getElementById('emailTabKpis');
-            const emailMailxKpis = document.getElementById('emailMailxKpis');
-            // These will be populated from the existing loadClientStats data
-            emailTabKpis.innerHTML = document.getElementById('emailKpis').innerHTML;
-            emailMailxKpis.innerHTML = document.getElementById('mailxKpis').innerHTML;
+        function loadEmailTabStats(data) {
+            if (!data) data = window.__clientStatsData;
+            if (!data) return;
+
+            // KPIs de Email Marketing (AC) — clone continua ok, é a mesma fonte
+            document.getElementById('emailTabKpis').innerHTML = document.getElementById('emailKpis').innerHTML;
+
+            // Métricas MailX (Email) — dado real escopado a email, não clone do total geral
+            const em = data.email_mailx || {};
+            document.getElementById('emailMailxKpis').innerHTML = [
+                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || 'R$ 0,00' },
+                { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR') },
+                { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR') },
+                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || 'R$ 0,00' },
+            ].map(k => `
+                <div class="kpi-card">
+                    <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                    <div class="kpi-value">${k.value}</div>
+                    <div class="kpi-label">${k.label}</div>
+                </div>
+            `).join('');
         }
 
         // Init

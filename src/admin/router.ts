@@ -956,6 +956,18 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       AND ${SQL_IS_RECOVERY}
   `, [clientId]);
 
+  const emailMailxData = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+  `, [clientId]);
+  const emailMailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+      AND ${SQL_IS_RECOVERY}
+  `, [clientId]);
+
   // Top 5 products — filtered by client_id
   const topProducts = await query<{ name: string, count: string, revenue: string }>(`
     SELECT 
@@ -1107,6 +1119,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       faturamento_recuperacoes: fmtBRL(parseFloat(mailxRecoveries?.revenue || '0')),
     },
     email: emailMetrics,
+    email_mailx: {
+      faturamento_email: fmtBRL(parseFloat(emailMailxData?.revenue || '0')),
+      vendas_email: parseInt(emailMailxData?.count || '0'),
+      recuperacoes_email: parseInt(emailMailxRecoveries?.count || '0'),
+      faturamento_recuperacoes_email: fmtBRL(parseFloat(emailMailxRecoveries?.revenue || '0')),
+    },
     top_products: topProducts.map(p => ({
       name: p.name,
       sales: parseInt(p.count),
