@@ -686,6 +686,31 @@
             </div>
         </div>
 
+        <!-- ═══ Faturamento Aprovado x Reembolso (só clientes com DS24/ClickBank — CartPanda não rastreia refund) ═══ -->
+        <div id="refundChartSection" style="display:none; margin-bottom:1.25rem">
+            <div class="period-control" id="refundPeriodControl">
+                <span class="pc-label">Período:</span>
+                <button class="period-pill" data-days="7">7d</button>
+                <button class="period-pill active" data-days="30">30d</button>
+                <button class="period-pill" data-days="60">60d</button>
+                <button class="period-pill" data-custom>Personalizado</button>
+                <span class="period-custom">
+                    <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
+                    <button class="period-pill" data-apply>Aplicar</button>
+                </span>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <span style="font-size:0.65rem; color:var(--accent-light); font-weight:600" id="refundPctClient">0.0% reembolso</span>
+                </div>
+                <div class="card-body">
+                    <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Proporção de receita reembolsada no período</div>
+                    <div style="height:220px; position:relative"><canvas id="chartRefund"></canvas></div>
+                </div>
+            </div>
+        </div>
+
         <div style="display:grid; grid-template-columns:1fr; gap:1.25rem; margin-bottom:1.25rem">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
@@ -1656,6 +1681,66 @@
 
         initPeriodControl(document.getElementById('revenuePeriodControl'), loadRevenueChartsClient);
 
+        // ── Refund doughnut chart (Fase D.5) ──
+        const __clientRefundChart = { chart: null };
+
+        function renderRefundChart(d, canvas, ref, pctEl) {
+            const total = d.aprovado + d.reembolso;
+            const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
+            const data = {
+                labels: ['Aprovado', 'Reembolso'],
+                datasets: [{
+                    data: [d.aprovado, d.reembolso],
+                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)'],
+                    borderColor: ['#34d399', '#f87171'],
+                    borderWidth: 1.5,
+                }],
+            };
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, pointStyleWidth: 8 } },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `${ctx.label}: R$ ${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
+                        },
+                    },
+                },
+            };
+            if (!ref.chart) {
+                ref.chart = new Chart(canvas, { type: 'doughnut', data, options });
+            } else {
+                ref.chart.data = data;
+                ref.chart.update();
+            }
+            if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
+            return pctReembolso;
+        }
+
+        async function loadRefundChartClient(from, to) {
+            const params = new URLSearchParams({ from, to, client_id: clientId });
+            const d = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`).then(r => r.json());
+            renderRefundChart(
+                d,
+                document.getElementById('chartRefund'),
+                __clientRefundChart,
+                document.getElementById('refundPctClient')
+            );
+        }
+
+        function initRefundChartForClient(stores) {
+            // CartPanda não tem handler de refund — esconder card inteiro pra não mostrar 0% enganoso
+            const hasRefundTracking = (stores || []).some(s => (s.platform || 'cartpanda') !== 'cartpanda');
+            const section = document.getElementById('refundChartSection');
+            if (!section) return;
+            section.style.display = hasRefundTracking ? '' : 'none';
+            if (hasRefundTracking && !window.__refundPeriodInit) {
+                window.__refundPeriodInit = true;
+                initPeriodControl(document.getElementById('refundPeriodControl'), loadRefundChartClient);
+            }
+        }
+
         // ── Load Per-Client Stats ──
         async function loadClientStats() {
             try {
@@ -1668,6 +1753,7 @@
                     btnBootstrap.style.display = data.metrics_only ? 'none' : '';
                 }
                 if (window.__clientKits) renderKits(window.__clientKits);
+                initRefundChartForClient(data.stores);
 
                 // Render KPIs
                 const kpiGrid = document.getElementById('clientKpis');

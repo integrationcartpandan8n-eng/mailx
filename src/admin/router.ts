@@ -423,6 +423,44 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
   res.json({ labels, total, automacao, campanha, recuperacao, upsell });
 }));
 
+// GET /admin/dashboard/revenue-vs-refund - Approved revenue vs refund totals for doughnut chart
+adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request, res: Response) => {
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const clientId = req.query.client_id as string | undefined;
+
+  if (!from || !to || !DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' });
+    return;
+  }
+
+  const params: (string | number)[] = [from, to];
+  let clientFilter = '';
+  if (clientId) {
+    const cid = parseInt(clientId, 10);
+    if (Number.isNaN(cid)) {
+      res.status(400).json({ error: 'Invalid client_id' });
+      return;
+    }
+    params.push(cid);
+    clientFilter = `AND client_id = $${params.length}`;
+  }
+
+  const row = await queryOne<{ aprovado: string; reembolso: string }>(`
+    SELECT
+      COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS aprovado,
+      COALESCE(SUM(total_price) FILTER (WHERE event_type IN ('order.refunded', 'order.chargeback')), 0) AS reembolso
+    FROM webhook_logs
+    WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
+      ${clientFilter}
+  `, params);
+
+  res.json({
+    aprovado: parseFloat(row?.aprovado || '0'),
+    reembolso: parseFloat(row?.reembolso || '0'),
+  });
+}));
+
 // GET /admin/dashboard/history - Historical KPIs
 adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Response) => {
   // ── Sales totals from webhook data ──

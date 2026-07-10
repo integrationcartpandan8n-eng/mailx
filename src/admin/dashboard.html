@@ -758,6 +758,31 @@
                         </div>
                     </div>
 
+                    <div class="period-control" id="refundPeriodControl">
+                        <span class="pc-label">Período:</span>
+                        <button class="period-pill" data-days="7">7d</button>
+                        <button class="period-pill active" data-days="30">30d</button>
+                        <button class="period-pill" data-days="60">60d</button>
+                        <button class="period-pill" data-custom>Personalizado</button>
+                        <span class="period-custom">
+                            <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
+                            <button class="period-pill" data-apply>Aplicar</button>
+                        </span>
+                    </div>
+
+                    <div class="charts-row" style="grid-template-columns:1fr">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title">Faturamento: Aprovado x Reembolso</div>
+                                    <div class="chart-subtitle">Proporção de receita reembolsada no período</div>
+                                </div>
+                                <span class="chart-badge" id="refundPctOverview">0.0% reembolso</span>
+                            </div>
+                            <div class="chart-wrap sm"><canvas id="chartRefund"></canvas></div>
+                        </div>
+                    </div>
+
                     <div class="charts-row" style="grid-template-columns:1fr">
                         <div class="chart-card">
                             <div class="chart-header">
@@ -1144,6 +1169,56 @@
         }
 
         initPeriodControl(document.getElementById('revenuePeriodControl'), loadRevenueChartsOverview);
+
+        // ── Refund doughnut chart (Fase D.5) ──
+        const __overviewRefundChart = { chart: null };
+
+        function renderRefundChart(d, canvas, ref, pctEl) {
+            const total = d.aprovado + d.reembolso;
+            const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
+            const data = {
+                labels: ['Aprovado', 'Reembolso'],
+                datasets: [{
+                    data: [d.aprovado, d.reembolso],
+                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)'],
+                    borderColor: ['#34d399', '#f87171'],
+                    borderWidth: 1.5,
+                }],
+            };
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, pointStyleWidth: 8 } },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `${ctx.label}: R$ ${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
+                        },
+                    },
+                },
+            };
+            if (!ref.chart) {
+                ref.chart = new Chart(canvas, { type: 'doughnut', data, options });
+            } else {
+                ref.chart.data = data;
+                ref.chart.update();
+            }
+            if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
+            return pctReembolso;
+        }
+
+        async function loadRefundChartOverview(from, to) {
+            const params = new URLSearchParams({ from, to });
+            const d = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`).then(r => r.json());
+            renderRefundChart(
+                d,
+                document.getElementById('chartRefund'),
+                __overviewRefundChart,
+                document.getElementById('refundPctOverview')
+            );
+        }
+
+        initPeriodControl(document.getElementById('refundPeriodControl'), loadRefundChartOverview);
 
         // ── KPI Renderers ──
         function renderKPI(containerId, kpis) {
