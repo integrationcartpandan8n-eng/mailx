@@ -446,10 +446,11 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     clientFilter = `AND client_id = $${params.length}`;
   }
 
-  const row = await queryOne<{ aprovado: string; reembolso: string }>(`
+  const row = await queryOne<{ aprovado: string; reembolso: string; chargeback_custo: string }>(`
     SELECT
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS aprovado,
-      COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type IN ('order.refunded', 'order.chargeback')), 0) AS reembolso
+      COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type = 'order.refunded'), 0) AS reembolso,
+      COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type = 'order.chargeback'), 0) AS chargeback_custo
     FROM webhook_logs
     WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
       ${clientFilter}
@@ -458,6 +459,7 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
   res.json({
     aprovado: parseFloat(row?.aprovado || '0'),
     reembolso: parseFloat(row?.reembolso || '0'),
+    chargeback_custo: parseFloat(row?.chargeback_custo || '0'),
   });
 }));
 

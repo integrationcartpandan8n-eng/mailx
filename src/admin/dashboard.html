@@ -777,7 +777,10 @@
                                     <div class="chart-title">Faturamento: Aprovado x Reembolso</div>
                                     <div class="chart-subtitle">Proporção de receita reembolsada no período</div>
                                 </div>
-                                <span class="chart-badge" id="refundPctOverview">0.0% reembolso</span>
+                                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px">
+                                    <span class="chart-badge" id="refundPctOverview">0.0% reembolso</span>
+                                    <span style="font-size:0.65rem; color:var(--text-dim)" id="chargebackCostOverview"></span>
+                                </div>
                             </div>
                             <div class="chart-wrap sm"><canvas id="chartRefund"></canvas></div>
                         </div>
@@ -1173,15 +1176,16 @@
         // ── Refund doughnut chart (Fase D.5) ──
         const __overviewRefundChart = { chart: null };
 
-        function renderRefundChart(d, canvas, ref, pctEl) {
-            const total = d.aprovado + d.reembolso;
+        function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
+            const chargeback = d.chargeback_custo || 0;
+            const total = d.aprovado + d.reembolso + chargeback;
             const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
             const data = {
-                labels: ['Aprovado', 'Reembolso'],
+                labels: ['Aprovado', 'Reembolso', 'Custo Chargeback'],
                 datasets: [{
-                    data: [d.aprovado, d.reembolso],
-                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)'],
-                    borderColor: ['#34d399', '#f87171'],
+                    data: [d.aprovado, d.reembolso, chargeback],
+                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)', 'rgba(251,191,36,0.85)'],
+                    borderColor: ['#34d399', '#f87171', '#fbbf24'],
                     borderWidth: 1.5,
                 }],
             };
@@ -1204,6 +1208,11 @@
                 ref.chart.update();
             }
             if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
+            if (chargebackEl) {
+                chargebackEl.textContent = chargeback > 0
+                    ? `CB: R$ ${chargeback.toLocaleString('pt-BR')}`
+                    : '';
+            }
             return pctReembolso;
         }
 
@@ -1214,7 +1223,8 @@
                 d,
                 document.getElementById('chartRefund'),
                 __overviewRefundChart,
-                document.getElementById('refundPctOverview')
+                document.getElementById('refundPctOverview'),
+                document.getElementById('chargebackCostOverview')
             );
         }
 

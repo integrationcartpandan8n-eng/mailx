@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "bootstrap": "tsx src/setup/bootstrap.ts",
-    "resync": "tsx src/setup/resync-webhooks.ts"
+    "resync": "tsx src/setup/resync-webhooks.ts",
+    "backfill-refund": "tsx src/setup/backfill-refund-csv.ts"
   },
   "keywords": [],
   "author": "MailX Group",

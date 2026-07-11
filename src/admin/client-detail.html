@@ -702,7 +702,10 @@
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
-                    <span style="font-size:0.65rem; color:var(--accent-light); font-weight:600" id="refundPctClient">0.0% reembolso</span>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px">
+                        <span style="font-size:0.65rem; color:var(--accent-light); font-weight:600" id="refundPctClient">0.0% reembolso</span>
+                        <span style="font-size:0.6rem; color:var(--text-dim)" id="chargebackCostClient"></span>
+                    </div>
                 </div>
                 <div class="card-body">
                     <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Proporção de receita reembolsada no período</div>
@@ -1684,15 +1687,16 @@
         // ── Refund doughnut chart (Fase D.5) ──
         const __clientRefundChart = { chart: null };
 
-        function renderRefundChart(d, canvas, ref, pctEl) {
-            const total = d.aprovado + d.reembolso;
+        function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
+            const chargeback = d.chargeback_custo || 0;
+            const total = d.aprovado + d.reembolso + chargeback;
             const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
             const data = {
-                labels: ['Aprovado', 'Reembolso'],
+                labels: ['Aprovado', 'Reembolso', 'Custo Chargeback'],
                 datasets: [{
-                    data: [d.aprovado, d.reembolso],
-                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)'],
-                    borderColor: ['#34d399', '#f87171'],
+                    data: [d.aprovado, d.reembolso, chargeback],
+                    backgroundColor: ['rgba(52,211,153,0.85)', 'rgba(248,113,113,0.85)', 'rgba(251,191,36,0.85)'],
+                    borderColor: ['#34d399', '#f87171', '#fbbf24'],
                     borderWidth: 1.5,
                 }],
             };
@@ -1715,6 +1719,11 @@
                 ref.chart.update();
             }
             if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
+            if (chargebackEl) {
+                chargebackEl.textContent = chargeback > 0
+                    ? `CB: R$ ${chargeback.toLocaleString('pt-BR')}`
+                    : '';
+            }
             return pctReembolso;
         }
 
@@ -1725,7 +1734,8 @@
                 d,
                 document.getElementById('chartRefund'),
                 __clientRefundChart,
-                document.getElementById('refundPctClient')
+                document.getElementById('refundPctClient'),
+                document.getElementById('chargebackCostClient')
             );
         }
 
