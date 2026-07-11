@@ -1,7 +1,10 @@
 /**
- * Backfill Refund/Chargeback CSV — importa histórico de reembolso/chargeback
- * da Digistore24 (export "Reports → Transactions", filtro refund/chargeback)
- * pra dentro do webhook_logs, com a data real da transação (não a de hoje).
+ * Backfill DS24 Transaction CSV — importa histórico de payment/refund/chargeback
+ * da Digistore24 (export "Reports → Transactions") pra dentro do webhook_logs,
+ * com a data real da transação (não a de hoje).
+ *
+ * Tipos suportados: payment → order.paid, refund → order.refunded,
+ * chargeback alert → order.chargeback (refund request é ignorado como duplicata).
  *
  * Uso:
  *   npm run backfill-refund -- --client-id=5 --file=/caminho/export.csv
@@ -81,6 +84,7 @@ async function main() {
   let imported = 0;
   let importedRefunds = 0;
   let importedChargebacks = 0;
+  let importedPayments = 0;
   let skippedDuplicateRequest = 0;
   let skippedAlreadyExists = 0;
   let skippedUnknown = 0;
@@ -105,6 +109,9 @@ async function main() {
     } else if (type === 'chargeback alert' || type === 'chargeback') {
       eventType = 'order.chargeback';
       amount = Math.abs(parseMoneyField(cols[iEarnings]));
+    } else if (type === 'payment') {
+      eventType = 'order.paid';
+      amount = parseMoneyField(cols[iGross]);
     } else {
       skippedUnknown++;
       logger.warn(CTX, `[skip] tipo desconhecido "${type}" — tx ${transactionId}`);
@@ -148,7 +155,8 @@ async function main() {
 
     imported++;
     if (eventType === 'order.refunded') importedRefunds++;
-    else importedChargebacks++;
+    else if (eventType === 'order.chargeback') importedChargebacks++;
+    else if (eventType === 'order.paid') importedPayments++;
   }
 
   const dataRows = lines.length - 1;
@@ -157,6 +165,7 @@ async function main() {
   logger.info(CTX, `Importados (total):         ${imported}${dryRun ? ' (dry-run, nada gravado)' : ''}`);
   logger.info(CTX, `  └ order.refunded:         ${importedRefunds}`);
   logger.info(CTX, `  └ order.chargeback:       ${importedChargebacks}`);
+  logger.info(CTX, `  └ order.paid:             ${importedPayments}`);
   logger.info(CTX, `Ignorados (refund request): ${skippedDuplicateRequest}`);
   logger.info(CTX, `Já existiam (idempotente):  ${skippedAlreadyExists}`);
   if (skippedUnknown > 0) {
