@@ -593,7 +593,10 @@
                     <div class="card-title"><i class="fas fa-chart-area"></i> Atividade (7 dias)</div>
                 </div>
                 <div class="card-body">
-                    <div class="chart-wrap-sm"><canvas id="chartActivity"></canvas></div>
+                    <div class="chart-wrap-sm" id="activityChartWrap"><canvas id="chartActivity"></canvas></div>
+                    <div id="activityEmpty" style="display:none" class="empty-state">
+                        <i class="fas fa-chart-area"></i>Sem atividade registrada no período
+                    </div>
                 </div>
             </div>
             <div class="card" style="margin-bottom:0">
@@ -800,7 +803,7 @@
                 <div class="card-body" style="padding:0">
                     <table class="kit-table">
                         <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas</th><th>Taxa</th></tr>
+                            <tr><th>Segmento</th><th>Leads</th><th>Vendas MailX</th><th>Taxa</th></tr>
                         </thead>
                         <tbody id="convSegmentoBody">
                             <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
@@ -1881,8 +1884,6 @@
                     { icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso },
                     { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
                     { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
-                    { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx ?? 0 },
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || 'R$ 0,00' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
@@ -1976,6 +1977,8 @@
 
                 // Render activity chart
                 if (data.daily_activity && data.daily_activity.labels.length > 0) {
+                    document.getElementById('activityChartWrap').style.display = 'block';
+                    document.getElementById('activityEmpty').style.display = 'none';
                     new Chart(document.getElementById('chartActivity'), {
                         type: 'line',
                         data: {
@@ -2002,6 +2005,9 @@
                             },
                         }
                     });
+                } else {
+                    document.getElementById('activityChartWrap').style.display = 'none';
+                    document.getElementById('activityEmpty').style.display = 'block';
                 }
 
                 // Funnel (envios por venda)

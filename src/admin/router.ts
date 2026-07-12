@@ -298,7 +298,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
   // Format currency
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     kpis: {
@@ -502,7 +502,7 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
   const months = monthlyActivity.length > 0 ? monthlyActivity.map(m => m.month) : ['Sem dados'];
   const monthsClients = monthlyClients.length > 0 ? monthlyClients.map(m => m.month) : ['Sem dados'];
 
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     sales: {
@@ -584,7 +584,7 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
     clientsWithAcSuccess++;
   }
 
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const emailRev = parseFloat(emailSales?.revenue || '0');
   const ctr = acTotals.send_amt > 0 ? (acTotals.uniquelinkclicks / acTotals.send_amt) * 100 : 0;
   const openRate = acTotals.send_amt > 0 ? (acTotals.uniqueopens / acTotals.send_amt) * 100 : 0;
@@ -654,7 +654,7 @@ adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Respon
     }
   }
 
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     revenue: {
@@ -722,7 +722,7 @@ adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, r
     ORDER BY client_id, DATE_TRUNC('day', created_at)
   `);
 
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Build a map indexed by client_id
   const emailsMap = new Map(emails.map(e => [e.client_id, parseInt(e.emails_disparados)]));
@@ -1139,7 +1139,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // ── Conversion Funnel (envios por venda) ──
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
-  const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // ── Conversão por Segmento: leads de abandono (CartPanda evento vs SlickText lista) ──
   const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
@@ -1696,7 +1696,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         AND ${SQL_IS_RECOVERY}
     `, [clientId]);
 
-    const fmtBRL = (v: number) => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
     const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
 
