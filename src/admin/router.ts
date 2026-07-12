@@ -1262,9 +1262,9 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
       COUNT(*) FILTER (WHERE event_type = 'order.paid')                        AS vendas,
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid'), 0)   AS receita_bruta,
       COUNT(*) FILTER (WHERE event_type = 'order.refunded')                    AS reembolsos,
-      COALESCE(ABS(SUM(total_price)) FILTER (WHERE event_type = 'order.refunded'), 0) AS valor_reembolso,
+      COALESCE(ABS(SUM(total_price) FILTER (WHERE event_type = 'order.refunded')), 0) AS valor_reembolso,
       COUNT(*) FILTER (WHERE event_type = 'order.chargeback')                  AS chargebacks,
-      COALESCE(ABS(SUM(total_price)) FILTER (WHERE event_type = 'order.chargeback'), 0) AS valor_chargeback
+      COALESCE(ABS(SUM(total_price) FILTER (WHERE event_type = 'order.chargeback')), 0) AS valor_chargeback
     FROM webhook_logs
     WHERE
       client_id = $1
