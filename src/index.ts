@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import { env } from './config/env';
@@ -15,6 +16,9 @@ async function main() {
   await initDatabase();
 
   const app = express();
+
+  app.use(compression());
+  app.disable('x-powered-by');
 
   // ── Middleware ──
   app.use(express.json({ limit: '5mb' }));
