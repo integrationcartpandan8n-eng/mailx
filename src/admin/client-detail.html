@@ -624,15 +624,28 @@
             </div>
         </div>
 
-        <!-- ═══ Email Marketing KPIs (pendentes — aguardando integração AC reporting) ═══ -->
+        <!-- ═══ Email Marketing KPIs ═══ -->
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-envelope"></i> KPIs de Email Marketing</div>
-                <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">pendente — activecampaign</span>
             </div>
             <div class="card-body">
-                <div class="kpi-grid" id="emailKpis">
-                    <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                <div class="metric-group" style="margin-bottom:1.25rem">
+                    <h4 style="font-size:0.75rem; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem">Contatos</h4>
+                    <div class="kpi-grid" id="emailContactsKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+                <div class="metric-group">
+                    <h4 style="font-size:0.75rem; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem">
+                        Engajamento <span id="emailEngagementBadge" style="font-size:0.6rem; color:var(--warning); font-weight:600; margin-left:0.5rem; text-transform:uppercase"></span>
+                    </h4>
+                    <div id="emailEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
+                        Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
+                    </div>
+                    <div class="kpi-grid" id="emailEngagementKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -806,8 +819,22 @@
                     <div class="card-title"><i class="fas fa-envelope"></i> Métricas de Email Marketing</div>
                 </div>
                 <div class="card-body">
-                    <div class="kpi-grid" id="emailTabKpis">
-                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    <div class="metric-group" style="margin-bottom:1.25rem">
+                        <h4 style="font-size:0.75rem; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem">Contatos</h4>
+                        <div class="kpi-grid" id="emailTabContactsKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
+                    </div>
+                    <div class="metric-group">
+                        <h4 style="font-size:0.75rem; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.75rem">
+                            Engajamento <span id="emailTabEngagementBadge" style="font-size:0.6rem; color:var(--warning); font-weight:600; margin-left:0.5rem; text-transform:uppercase"></span>
+                        </h4>
+                        <div id="emailTabEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
+                            Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
+                        </div>
+                        <div class="kpi-grid" id="emailTabEngagementKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1187,6 +1214,7 @@
                 const res = await fetch(`${API}/clientes/${clientId}`);
                 if (!res.ok) throw new Error('Client not found');
                 const client = await res.json();
+                window.__clientAcConfigured = !!(client.ac_api_url && client.ac_api_key);
 
                 document.getElementById('clientName').textContent = client.company_name;
                 document.getElementById('clientEmail').textContent = client.contact_email;
@@ -1213,7 +1241,7 @@
                 const acSection = document.getElementById('acCredentialsSection');
                 if (acSection) {
                     document.getElementById('editAcUrl').value = client.ac_api_url || '';
-                    document.getElementById('editAcKey').value = client.ac_api_key || '';
+                    document.getElementById('editAcKey').value = '';
                 }
 
                 // Show SlickText status
@@ -1783,6 +1811,43 @@
             }
         }
 
+        function renderEmailMarketingKpis(data, ids) {
+            const em = data.email || {};
+            const acConfigured = window.__clientAcConfigured;
+            const contactsEl = document.getElementById(ids.contacts);
+            const engagementEl = document.getElementById(ids.engagement);
+            const pendingEl = document.getElementById(ids.pending);
+            const badgeEl = document.getElementById(ids.badge);
+            if (!contactsEl || !engagementEl) return;
+
+            const kpiCard = (k) => `
+                <div class="kpi-card">
+                    <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
+                    <div class="kpi-value">${k.value}</div>
+                    <div class="kpi-label">${k.label}</div>
+                </div>
+            `;
+
+            contactsEl.innerHTML = kpiCard({
+                icon: 'fa-user-plus blue',
+                label: 'Entrada de Contatos',
+                value: em.entrada_contatos || '--',
+            });
+
+            const engagementUnavailable = !acConfigured;
+            if (badgeEl) badgeEl.textContent = engagementUnavailable ? 'Requer ActiveCampaign' : '';
+            if (pendingEl) pendingEl.style.display = engagementUnavailable ? 'block' : 'none';
+
+            const dash = '<span style="color:var(--text-dim); cursor:help" title="Requer integração ActiveCampaign">—</span>';
+            engagementEl.innerHTML = [
+                { icon: 'fa-mouse-pointer green', label: 'CTR', value: engagementUnavailable ? dash : (em.ctr || '—') },
+                { icon: 'fa-envelope-open purple', label: 'Taxa de Abertura', value: engagementUnavailable ? dash : (em.taxa_abertura || '—') },
+                { icon: 'fa-bullseye orange', label: 'CTOR', value: engagementUnavailable ? dash : (em.ctor || '—') },
+                { icon: 'fa-chart-line blue', label: 'RPM', value: engagementUnavailable ? dash : (em.rpm || '—') },
+                { icon: 'fa-coins green', label: 'EPC', value: engagementUnavailable ? dash : (em.epc || '—') },
+            ].map(kpiCard).join('');
+        }
+
         // ── Load Per-Client Stats ──
         function calcTaxa(vendas, leads) {
             const v = parseInt(vendas) || 0;
@@ -1841,23 +1906,15 @@
                     </div>
                 `).join('');
 
-                // Render Email Marketing KPIs (pendentes — ActiveCampaign reporting)
-                const emailGrid = document.getElementById('emailKpis');
-                const em = data.email || {};
-                emailGrid.innerHTML = [
-                    { icon: 'fa-user-plus blue', label: 'Entrada de Contatos', value: em.entrada_contatos || '--' },
-                    { icon: 'fa-mouse-pointer green', label: 'CTR', value: em.ctr || '--' },
-                    { icon: 'fa-envelope-open purple', label: 'Taxa de Abertura', value: em.taxa_abertura || '--' },
-                    { icon: 'fa-bullseye orange', label: 'CTOR', value: em.ctor || '--' },
-                    { icon: 'fa-chart-line blue', label: 'RPM', value: em.rpm || '--' },
-                    { icon: 'fa-coins green', label: 'EPC', value: em.epc || '--' },
-                ].map(k => `
-                    <div class="kpi-card">
-                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
-                    </div>
-                `).join('');
+                window.__clientStatsData = data;
+
+                // Render Email Marketing KPIs (contatos separados de engajamento)
+                renderEmailMarketingKpis(data, {
+                    contacts: 'emailContactsKpis',
+                    engagement: 'emailEngagementKpis',
+                    pending: 'emailEngagementPending',
+                    badge: 'emailEngagementBadge',
+                });
 
                 // Render Top 5 Products chart
                 if (data.top_products && data.top_products.length > 0) {
@@ -2268,8 +2325,13 @@
             if (!data) data = window.__clientStatsData;
             if (!data) return;
 
-            // KPIs de Email Marketing (AC) — clone continua ok, é a mesma fonte
-            document.getElementById('emailTabKpis').innerHTML = document.getElementById('emailKpis').innerHTML;
+            // KPIs de Email Marketing (AC)
+            renderEmailMarketingKpis(data, {
+                contacts: 'emailTabContactsKpis',
+                engagement: 'emailTabEngagementKpis',
+                pending: 'emailTabEngagementPending',
+                badge: 'emailTabEngagementBadge',
+            });
 
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral
             const em = data.email_mailx || {};
