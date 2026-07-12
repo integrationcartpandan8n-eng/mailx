@@ -1274,11 +1274,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       carrinho_abandonado: {
         leads: abandonoLeads,
         vendas: mailxRecoveryCount,
-        taxa: leadsSource === 'slicktext_list'
-          ? null
-          : abandonoLeads > 0
-            ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
-            : 0,
+        taxa: abandonoLeads > 0
+          ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
+          : 0,
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },

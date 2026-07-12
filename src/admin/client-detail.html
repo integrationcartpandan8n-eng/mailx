@@ -1784,6 +1784,14 @@
         }
 
         // ── Load Per-Client Stats ──
+        function calcTaxa(vendas, leads) {
+            const v = parseInt(vendas) || 0;
+            const l = parseInt(leads) || 0;
+            if (l === 0) return '—';
+            const pct = (v / l * 100);
+            return pct < 1 ? pct.toFixed(2) + '%' : pct.toFixed(1) + '%';
+        }
+
         async function loadClientStats() {
             try {
                 const res = await fetch(`${API}/clientes/${clientId}/stats`);
@@ -2014,10 +2022,11 @@
                     const abLeadsCell = abWarning
                         ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-triangle-exclamation" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
                         : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
-                    const abTaxa = cs.carrinho_abandonado.taxa;
-                    const abTaxaCell = abTaxa === null || abTaxa === undefined
-                        ? `<span style="color:var(--text-dim); cursor:help" title="Taxa não comparável: a lista SlickText acumula contatos desde a criação; as vendas refletem apenas o período monitorado via webhook.">—</span>`
-                        : `<span class="tag ${abTaxa > 3 ? 'green' : ''}" style="${abTaxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxa}%</span>`;
+                    const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
+                    const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
+                    const abTaxaCell = abTaxaStr === '—'
+                        ? `<span style="color:var(--text-dim)">—</span>`
+                        : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
                     document.getElementById('convSegmentoBody').innerHTML = [
                         { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
                         { seg: 'Compradores', leadsHtml: cs.compradores.leads.toLocaleString('pt-BR'), vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
