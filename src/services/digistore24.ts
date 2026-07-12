@@ -74,12 +74,6 @@ export function validateSignature(
     signString += `${k}=${v}${passphrase}`;
   }
 
-  logger.warn(CTX, 'DEBUG signature check', {
-    keys,
-    paramsPreview: JSON.stringify(params),
-    signStringMasked: signString.split(passphrase).join('[PASSPHRASE]'),
-  });
-
   const computedSign = crypto
     .createHash('sha512')
     .update(signString, 'utf8')
