@@ -830,7 +830,43 @@ adminRouter.get('/stats', asyncHandler(async (_req: Request, res: Response) => {
 // GET /admin/clientes - List all clients
 adminRouter.get('/clientes', asyncHandler(async (_req: Request, res: Response) => {
   const clients = await query(`
-    SELECT c.*,
+    SELECT
+      c.id,
+      c.company_name,
+      c.cnpj,
+      c.website,
+      c.contact_email,
+      c.contact_whatsapp,
+      c.cartpanda_store_url,
+      CASE
+        WHEN c.cartpanda_api_token IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.cartpanda_api_token) - 6, 0)) || RIGHT(c.cartpanda_api_token, 6)
+        ELSE NULL
+      END AS cartpanda_api_token,
+      c.ac_api_url,
+      CASE
+        WHEN c.ac_api_key IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.ac_api_key) - 6, 0)) || RIGHT(c.ac_api_key, 6)
+        ELSE NULL
+      END AS ac_api_key,
+      c.ac_plan,
+      CASE
+        WHEN c.st_api_token IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.st_api_token) - 6, 0)) || RIGHT(c.st_api_token, 6)
+        ELSE NULL
+      END AS st_api_token,
+      c.st_brand_id,
+      c.dns_registrar,
+      c.dns_manages_own,
+      c.logo_url,
+      c.brand_color_primary,
+      c.brand_color_secondary,
+      c.tone_of_voice,
+      c.google_postmaster_access,
+      c.google_drive_folder_url,
+      c.status,
+      c.created_at,
+      c.updated_at,
       (SELECT json_agg(k.*) FROM kits k WHERE k.client_id = c.id) as kits
     FROM clients c
     ORDER BY c.created_at DESC
@@ -841,7 +877,43 @@ adminRouter.get('/clientes', asyncHandler(async (_req: Request, res: Response) =
 // GET /admin/clientes/:id - Single client
 adminRouter.get('/clientes/:id', asyncHandler(async (req: Request, res: Response) => {
   const clients = await query(`
-    SELECT c.*,
+    SELECT
+      c.id,
+      c.company_name,
+      c.cnpj,
+      c.website,
+      c.contact_email,
+      c.contact_whatsapp,
+      c.cartpanda_store_url,
+      CASE
+        WHEN c.cartpanda_api_token IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.cartpanda_api_token) - 6, 0)) || RIGHT(c.cartpanda_api_token, 6)
+        ELSE NULL
+      END AS cartpanda_api_token,
+      c.ac_api_url,
+      CASE
+        WHEN c.ac_api_key IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.ac_api_key) - 6, 0)) || RIGHT(c.ac_api_key, 6)
+        ELSE NULL
+      END AS ac_api_key,
+      c.ac_plan,
+      CASE
+        WHEN c.st_api_token IS NOT NULL
+        THEN REPEAT('•', GREATEST(LENGTH(c.st_api_token) - 6, 0)) || RIGHT(c.st_api_token, 6)
+        ELSE NULL
+      END AS st_api_token,
+      c.st_brand_id,
+      c.dns_registrar,
+      c.dns_manages_own,
+      c.logo_url,
+      c.brand_color_primary,
+      c.brand_color_secondary,
+      c.tone_of_voice,
+      c.google_postmaster_access,
+      c.google_drive_folder_url,
+      c.status,
+      c.created_at,
+      c.updated_at,
       (SELECT json_agg(k.*) FROM kits k WHERE k.client_id = c.id) as kits
     FROM clients c
     WHERE c.id = $1
