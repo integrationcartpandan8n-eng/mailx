@@ -836,6 +836,38 @@
                     </div>
                 </div>
             </div>
+
+            <div class="section-block" id="sms-granular-section" style="display:none;">
+                <div class="section-header">
+                    <h3>Desempenho por Mensagem de Automação</h3>
+                    <div class="period-tabs" id="sms-granular-period">
+                        <button class="period-btn active" data-period="7">7d</button>
+                        <button class="period-btn" data-period="30">30d</button>
+                        <button class="period-btn" data-period="90">90d</button>
+                    </div>
+                </div>
+
+                <div id="sms-granular-loading" style="display:none;">Carregando...</div>
+                <div id="sms-granular-empty" style="display:none;">Nenhuma venda SMS com rastreio de mensagem neste período.</div>
+
+                <table id="sms-granular-table" class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Mensagem</th>
+                            <th>Tipo</th>
+                            <th>Produto</th>
+                            <th>Vendas</th>
+                            <th>Receita Bruta</th>
+                            <th>Reembolsos</th>
+                            <th>Receita Líquida</th>
+                            <th>% do Total SMS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sms-granular-tbody"></tbody>
+                    <tfoot id="sms-granular-tfoot"></tfoot>
+                </table>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS</div>
@@ -2043,6 +2075,7 @@
             // Load SMS data on first switch
             if (tab === 'sms' && !window._smsLoaded) {
                 loadSmsStats();
+                loadSmsGranular(clientId, 30);
                 window._smsLoaded = true;
             }
 
@@ -2144,6 +2177,82 @@
                     '<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1">Erro ao carregar dados SMS</div>';
             }
         }
+
+        // ── SMS Granular per automation message ──
+        async function loadSmsGranular(clientId, period = 30) {
+            const section = document.getElementById('sms-granular-section');
+            const loading = document.getElementById('sms-granular-loading');
+            const empty   = document.getElementById('sms-granular-empty');
+            const table   = document.getElementById('sms-granular-table');
+            const tbody   = document.getElementById('sms-granular-tbody');
+            const tfoot   = document.getElementById('sms-granular-tfoot');
+
+            loading.style.display = 'block';
+            table.style.display   = 'none';
+            empty.style.display   = 'none';
+            section.style.display = 'none';
+
+            try {
+                const res  = await fetch(`${API}/clientes/${clientId}/sms-granular?period=${period}`);
+                const data = await res.json();
+
+                loading.style.display = 'none';
+
+                if (!data.rows || data.rows.length === 0) {
+                    empty.style.display = 'block';
+                    return;
+                }
+
+                section.style.display = 'block';
+                table.style.display   = 'table';
+
+                const totalReceita = data.total_receita_liquida_sms || 1;
+
+                tbody.innerHTML = data.rows.map(row => {
+                    const pct = totalReceita > 0
+                        ? ((row.receita_liquida / totalReceita) * 100).toFixed(1)
+                        : '0.0';
+
+                    const reembolsoCell = row.reembolsos > 0
+                        ? `<span class="badge-negative">${row.reembolsos}× (-$${row.valor_reembolso.toFixed(2)})</span>`
+                        : `<span class="badge-neutral">—</span>`;
+
+                    return `
+                        <tr>
+                            <td><code>${row.mensagem}</code></td>
+                            <td>${row.tipo_automacao}</td>
+                            <td>${row.produto}</td>
+                            <td>${row.vendas}</td>
+                            <td>$${row.receita_bruta.toFixed(2)}</td>
+                            <td>${reembolsoCell}</td>
+                            <td><strong>$${row.receita_liquida.toFixed(2)}</strong></td>
+                            <td>${pct}%</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                tfoot.innerHTML = `
+                    <tr class="tfoot-total">
+                        <td colspan="3"><strong>Total</strong></td>
+                        <td><strong>${data.total_vendas_sms}</strong></td>
+                        <td colspan="2"></td>
+                        <td><strong>$${data.total_receita_liquida_sms.toFixed(2)}</strong></td>
+                        <td>100%</td>
+                    </tr>
+                `;
+            } catch (e) {
+                console.error('Failed to load SMS granular:', e);
+                loading.style.display = 'none';
+            }
+        }
+
+        document.getElementById('sms-granular-period')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.period-btn');
+            if (!btn) return;
+            document.querySelectorAll('#sms-granular-period .period-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadSmsGranular(clientId, parseInt(btn.dataset.period));
+        });
 
         // ── Load Email Tab Stats ──
         function loadEmailTabStats(data) {

@@ -1222,6 +1222,123 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   });
 }));
 
+function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao: string; produto: string } {
+  const msgMatch = campaign.match(/MS\d{4}[A-Z]/i);
+  const mensagem = msgMatch ? msgMatch[0].toUpperCase() : campaign;
+
+  const beforeMsg = campaign.split(/-MS\d{4}[A-Z]/i)[0] ?? '';
+  const tipo_automacao = beforeMsg
+    .replace(/([A-Z])/g, ' $1')
+    .trim()
+    .replace('Carrinho Abandonado', 'Carrinho Abandonado')
+    .replace('Compra Aprovada', 'Compra Aprovada (Upsell)')
+    || beforeMsg;
+
+  const afterParts = campaign.split(/-MS\d{4}[A-Z]-/i);
+  const produto = afterParts[1]?.split('-')[0] ?? '';
+
+  return { mensagem, tipo_automacao, produto };
+}
+
+// GET /admin/clientes/:id/sms-granular - SMS performance per automation message
+adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const periodRaw = req.query.period as string | undefined;
+  const period = ['7', '30', '90'].includes(periodRaw || '') ? parseInt(periodRaw!) : 30;
+
+  const rawRows = await query<{
+    utm_campaign: string;
+    event_type: string;
+    vendas: string;
+    receita_bruta: string;
+    reembolsos: string;
+    valor_reembolso: string;
+    chargebacks: string;
+    valor_chargeback: string;
+  }>(`
+    SELECT
+      utm_campaign,
+      event_type,
+      COUNT(*) FILTER (WHERE event_type = 'order.paid')                        AS vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid'), 0)   AS receita_bruta,
+      COUNT(*) FILTER (WHERE event_type = 'order.refunded')                    AS reembolsos,
+      COALESCE(ABS(SUM(total_price)) FILTER (WHERE event_type = 'order.refunded'), 0) AS valor_reembolso,
+      COUNT(*) FILTER (WHERE event_type = 'order.chargeback')                  AS chargebacks,
+      COALESCE(ABS(SUM(total_price)) FILTER (WHERE event_type = 'order.chargeback'), 0) AS valor_chargeback
+    FROM webhook_logs
+    WHERE
+      client_id = $1
+      AND utm_medium = 'auto-sms'
+      AND utm_source = 'mailx-sms'
+      AND utm_campaign IS NOT NULL
+      AND utm_campaign NOT ILIKE '%teste%'
+      AND created_at >= NOW() - ($2 || ' days')::INTERVAL
+    GROUP BY utm_campaign, event_type
+    ORDER BY receita_bruta DESC NULLS LAST
+  `, [clientId, String(period)]);
+
+  type SmsGranularRow = {
+    utm_campaign: string;
+    vendas: number;
+    receita_bruta: number;
+    reembolsos: number;
+    valor_reembolso: number;
+    chargebacks: number;
+    valor_chargeback: number;
+    receita_liquida: number;
+    mensagem: string;
+    tipo_automacao: string;
+    produto: string;
+  };
+
+  const byCampaign = new Map<string, SmsGranularRow>();
+
+  for (const row of rawRows) {
+    let agg = byCampaign.get(row.utm_campaign);
+    if (!agg) {
+      const parsed = parseUtmCampaign(row.utm_campaign);
+      agg = {
+        utm_campaign: row.utm_campaign,
+        vendas: 0,
+        receita_bruta: 0,
+        reembolsos: 0,
+        valor_reembolso: 0,
+        chargebacks: 0,
+        valor_chargeback: 0,
+        receita_liquida: 0,
+        mensagem: parsed.mensagem,
+        tipo_automacao: parsed.tipo_automacao,
+        produto: parsed.produto,
+      };
+      byCampaign.set(row.utm_campaign, agg);
+    }
+
+    agg.vendas += parseInt(row.vendas || '0', 10);
+    agg.receita_bruta += parseFloat(row.receita_bruta || '0');
+    agg.reembolsos += parseInt(row.reembolsos || '0', 10);
+    agg.valor_reembolso += parseFloat(row.valor_reembolso || '0');
+    agg.chargebacks += parseInt(row.chargebacks || '0', 10);
+    agg.valor_chargeback += parseFloat(row.valor_chargeback || '0');
+  }
+
+  const rows = Array.from(byCampaign.values())
+    .map((row) => ({
+      ...row,
+      receita_liquida: row.receita_bruta - row.valor_reembolso - row.valor_chargeback,
+    }))
+    .sort((a, b) => b.receita_liquida - a.receita_liquida);
+
+  const total_vendas_sms = rows.reduce((sum, r) => sum + r.vendas, 0);
+  const total_receita_liquida_sms = rows.reduce((sum, r) => sum + r.receita_liquida, 0);
+
+  res.json({
+    period,
+    total_vendas_sms,
+    total_receita_liquida_sms,
+    rows,
+  });
+}));
+
 // ── Kit Management (Post-Setup) ──
 
 // POST /admin/clientes/:id/kits - Add new kit to existing client
