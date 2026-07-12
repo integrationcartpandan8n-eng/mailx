@@ -306,6 +306,9 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       vendas_totais: totalSales.toLocaleString('pt-BR'),
       ticket_medio: fmtBRL(ticketMedio),
       taxa_reembolso: `${taxaReembolso}%`,
+      representatividade: totalRevenue > 0
+        ? `${((mailxRevenue / totalRevenue) * 100).toFixed(1)}%`
+        : '0%',
       faturamento_mailx: fmtBRL(mailxRevenue),
       vendas_mailx: mailxSales.toLocaleString('pt-BR'),
       recuperacoes_mailx: mailxRecoveryCount,
