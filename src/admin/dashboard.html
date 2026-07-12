@@ -1035,6 +1035,10 @@
             // Lazy-load tab data on first activation
             if (id === 'email' && !window.__emailLoaded) { window.__emailLoaded = true; loadEmailDashboard(); }
             if (id === 'sms' && !window.__smsLoaded) { window.__smsLoaded = true; loadSmsDashboard(); }
+            if (id === 'history' && !window.__historyLoaded) { window.__historyLoaded = true; loadHistory(); }
+            if (id === 'pipeline' && !window.__pipelineLoaded) { window.__pipelineLoaded = true; loadClients(); }
+            window.__webhooksTabActive = (id === 'webhooks-tab');
+            if (id === 'webhooks-tab' && !window.__webhooksLoaded) { window.__webhooksLoaded = true; loadWebhooks(); }
         }
 
         // ── Chart.js defaults ──
@@ -1735,10 +1739,11 @@
 
         // ── Init ──
         loadOverview();
-        loadHistory();
         loadClients();
         loadWebhooks();
-        setInterval(loadWebhooks, 10000);
+        setInterval(() => {
+            if (window.__webhooksTabActive) loadWebhooks();
+        }, 10000);
     </script>
 </body>
 </html>
