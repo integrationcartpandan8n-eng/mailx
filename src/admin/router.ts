@@ -74,6 +74,35 @@ const SQL_IS_UPSELL = `COALESCE(utm_campaign, '') ILIKE '%upsell%'`;
 /** Receita normalizada (Fase A garante NUMERIC ou NULL). */
 const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
 
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$',
+  BRL: 'R$',
+  EUR: '€',
+};
+
+function currencySymbol(code: string | null | undefined): string {
+  if (!code) return CURRENCY_SYMBOLS.USD;
+  return CURRENCY_SYMBOLS[code] || `${code} `;
+}
+
+/** Moeda predominante de um cliente: maioria das transações reais, com fallback pro cadastro. */
+async function resolveClientCurrency(clientId: string | number): Promise<string> {
+  const dominant = await queryOne<{ currency: string }>(`
+    SELECT currency, COUNT(*) as cnt
+    FROM webhook_logs
+    WHERE client_id = $1 AND currency IS NOT NULL
+    GROUP BY currency
+    ORDER BY cnt DESC
+    LIMIT 1
+  `, [clientId]);
+  if (dominant?.currency) return dominant.currency;
+
+  const client = await queryOne<{ default_currency: string }>(
+    `SELECT default_currency FROM clients WHERE id = $1`, [clientId]
+  );
+  return client?.default_currency || 'USD';
+}
+
 const DATE_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function parseYmd(s: string): Date {
@@ -298,7 +327,8 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
   // Format currency
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Assume USD — dashboards agregados ainda não têm suporte a multi-moeda (ver client-level fix)
+  const fmtBRL = (v: number) => '$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     kpis: {
@@ -502,7 +532,8 @@ adminRouter.get('/dashboard/history', asyncHandler(async (_req: Request, res: Re
   const months = monthlyActivity.length > 0 ? monthlyActivity.map(m => m.month) : ['Sem dados'];
   const monthsClients = monthlyClients.length > 0 ? monthlyClients.map(m => m.month) : ['Sem dados'];
 
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Assume USD — dashboards agregados ainda não têm suporte a multi-moeda (ver client-level fix)
+  const fmtBRL = (v: number) => '$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     sales: {
@@ -584,7 +615,8 @@ adminRouter.get('/dashboard/email', asyncHandler(async (_req: Request, res: Resp
     clientsWithAcSuccess++;
   }
 
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Assume USD — dashboards agregados ainda não têm suporte a multi-moeda (ver client-level fix)
+  const fmtBRL = (v: number) => '$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const emailRev = parseFloat(emailSales?.revenue || '0');
   const ctr = acTotals.send_amt > 0 ? (acTotals.uniquelinkclicks / acTotals.send_amt) * 100 : 0;
   const openRate = acTotals.send_amt > 0 ? (acTotals.uniqueopens / acTotals.send_amt) * 100 : 0;
@@ -654,7 +686,8 @@ adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Respon
     }
   }
 
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Assume USD — dashboards agregados ainda não têm suporte a multi-moeda (ver client-level fix)
+  const fmtBRL = (v: number) => '$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   res.json({
     revenue: {
@@ -722,7 +755,8 @@ adminRouter.get('/dashboard/pipeline-kpis', asyncHandler(async (_req: Request, r
     ORDER BY client_id, DATE_TRUNC('day', created_at)
   `);
 
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Assume USD — dashboards agregados ainda não têm suporte a multi-moeda (ver client-level fix)
+  const fmtBRL = (v: number) => '$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Build a map indexed by client_id
   const emailsMap = new Map(emails.map(e => [e.client_id, parseInt(e.emails_disparados)]));
@@ -1013,7 +1047,9 @@ adminRouter.get('/clientes/:id/dns', asyncHandler(async (req: Request, res: Resp
 
 // GET /admin/clientes/:id/stats - Per-client KPIs and activity
 adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id;
+  const clientId = req.params.id as string;
+  const currency = await resolveClientCurrency(clientId);
+  const symbol = currencySymbol(currency);
 
   // Get all store slugs for this client to filter webhook_logs
   const stores = await query<{ shop_slug: string, platform: string }>(
@@ -1139,7 +1175,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // ── Conversion Funnel (envios por venda) ──
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
-  const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // ── Conversão por Segmento: leads de abandono (CartPanda evento vs SlickText lista) ──
   const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
@@ -1218,6 +1254,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   }
 
   res.json({
+    currency,
     kpis: {
       faturamento: fmtBRL(totalRevenue),
       vendas: totalSales,
@@ -1313,6 +1350,7 @@ function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao:
 // GET /admin/clientes/:id/sms-granular - SMS performance per automation message
 adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
+  const currency = await resolveClientCurrency(clientId);
   const periodRaw = req.query.period as string | undefined;
   const period = ['7', '30', '90'].includes(periodRaw || '') ? parseInt(periodRaw!) : 30;
 
@@ -1403,6 +1441,7 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
 
   res.json({
     period,
+    currency,
     total_vendas_sms,
     total_receita_liquida_sms,
     rows,
@@ -1608,7 +1647,9 @@ adminRouter.get('/webhooks', asyncHandler(async (req: Request, res: Response) =>
 
 // GET /admin/clientes/:id/sms-stats - Fetch SMS metrics from SlickText API
 adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id;
+  const clientId = req.params.id as string;
+  const currency = await resolveClientCurrency(clientId);
+  const symbol = currencySymbol(currency);
 
   // Get client's SlickText credentials
   const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
@@ -1619,6 +1660,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
   if (!client?.st_api_token || !client?.st_brand_id) {
     res.json({
       configured: false,
+      currency,
       error: 'SlickText not configured for this client',
     });
     return;
@@ -1696,12 +1738,13 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         AND ${SQL_IS_RECOVERY}
     `, [clientId]);
 
-    const fmtBRL = (v: number) => 'R$\u00A0' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
     const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
 
     res.json({
       configured: true,
+      currency,
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
         vendas_sms: parseInt(smsSales?.count || '0'),

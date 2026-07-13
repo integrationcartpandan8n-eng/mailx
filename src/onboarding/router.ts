@@ -88,6 +88,7 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
     google_drive_folder_url,
     st_api_token,
     st_brand_id,
+    default_currency,
   } = req.body;
 
   if (!company_name || !contact_email) {
@@ -103,11 +104,12 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       dns_registrar, dns_login, dns_manages_own,
       logo_url, brand_color_primary, brand_color_secondary, tone_of_voice,
       google_drive_folder_url,
-      st_api_token, st_brand_id
+      st_api_token, st_brand_id,
+      default_currency
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
       $11, $12, $13, $14, $15, $16, $17, $18,
-      $19, $20
+      $19, $20, $21
     ) RETURNING id`,
     [
       company_name, cnpj || null, website || null, contact_email, contact_whatsapp || null,
@@ -117,6 +119,7 @@ onboardingRouter.post('/', asyncHandler(async (req: Request, res: Response) => {
       logo_url || null, brand_color_primary || null, brand_color_secondary || null, tone_of_voice || null,
       google_drive_folder_url || null,
       st_api_token || null, st_brand_id || null,
+      default_currency || 'USD',
     ]
   );
 

@@ -262,6 +262,15 @@
               <input type="tel" name="contact_whatsapp" placeholder="+55 11 99999-9999" />
             </div>
           </div>
+          <div class="field">
+            <label>Moeda padrão</label>
+            <select name="default_currency">
+              <option value="USD" selected>USD — Dólar americano ($)</option>
+              <option value="BRL">BRL — Real brasileiro (R$)</option>
+              <option value="EUR">EUR — Euro (€)</option>
+            </select>
+            <div class="hint">Usada nos dashboards até a primeira venda registrar a moeda real</div>
+          </div>
         </div>
 
         <!-- PLATAFORMA DE VENDAS -->
@@ -319,13 +328,13 @@
         <div class="section">
           <div class="section-title">ActiveCampaign</div>
           <div class="field">
-            <label>API URL <span class="required">*</span></label>
-            <input type="url" name="ac_api_url" required placeholder="https://suaconta.api-us1.com" />
+            <label>API URL</label>
+            <input type="url" name="ac_api_url" placeholder="https://suaconta.api-us1.com" />
             <div class="hint">AC → Settings (⚙️) → Developer → Copiar URL</div>
           </div>
           <div class="field">
-            <label>API Key <span class="required">*</span></label>
-            <input type="password" name="ac_api_key" required placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+            <label>API Key</label>
+            <input type="password" name="ac_api_key" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
             <div class="hint">AC → Settings (⚙️) → Developer → Copiar Key</div>
           </div>
           <div class="field">

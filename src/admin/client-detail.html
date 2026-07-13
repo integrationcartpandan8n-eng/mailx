@@ -2278,6 +2278,9 @@
                 section.style.display = 'block';
                 table.style.display   = 'table';
 
+                const CURRENCY_SYMBOLS = { USD: '$', BRL: 'R$', EUR: '€' };
+                const sym = CURRENCY_SYMBOLS[data.currency] || (data.currency ? data.currency + ' ' : '$');
+
                 const totalReceita = data.total_receita_liquida_sms || 1;
 
                 tbody.innerHTML = data.rows.map(row => {
@@ -2286,7 +2289,7 @@
                         : '0.0';
 
                     const reembolsoCell = row.reembolsos > 0
-                        ? `<span class="badge-negative">${row.reembolsos}× (-$${row.valor_reembolso.toFixed(2)})</span>`
+                        ? `<span class="badge-negative">${row.reembolsos}× (-${sym}${row.valor_reembolso.toFixed(2)})</span>`
                         : `<span class="badge-neutral">—</span>`;
 
                     return `
@@ -2295,9 +2298,9 @@
                             <td>${row.tipo_automacao}</td>
                             <td>${row.produto}</td>
                             <td>${row.vendas}</td>
-                            <td>$${row.receita_bruta.toFixed(2)}</td>
+                            <td>${sym}${row.receita_bruta.toFixed(2)}</td>
                             <td>${reembolsoCell}</td>
-                            <td><strong>$${row.receita_liquida.toFixed(2)}</strong></td>
+                            <td><strong>${sym}${row.receita_liquida.toFixed(2)}</strong></td>
                             <td>${pct}%</td>
                         </tr>
                     `;
@@ -2308,7 +2311,7 @@
                         <td colspan="3"><strong>Total</strong></td>
                         <td><strong>${data.total_vendas_sms}</strong></td>
                         <td colspan="2"></td>
-                        <td><strong>$${data.total_receita_liquida_sms.toFixed(2)}</strong></td>
+                        <td><strong>${sym}${data.total_receita_liquida_sms.toFixed(2)}</strong></td>
                         <td>100%</td>
                     </tr>
                 `;

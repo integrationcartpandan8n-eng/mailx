@@ -151,6 +151,7 @@ export async function initDatabase(): Promise<void> {
         -- SlickText SMS integration columns on clients
         ALTER TABLE clients ADD COLUMN IF NOT EXISTS st_api_token TEXT;
         ALTER TABLE clients ADD COLUMN IF NOT EXISTS st_brand_id VARCHAR(50);
+        ALTER TABLE clients ADD COLUMN IF NOT EXISTS default_currency VARCHAR(3) DEFAULT 'USD';
 
         -- SlickText list IDs on kits (per-product lists)
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_compra_id VARCHAR(50);
