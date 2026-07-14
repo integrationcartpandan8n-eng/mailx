@@ -469,8 +469,9 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
 
   const params: (string | number)[] = [from, to];
   let clientFilter = '';
+  let cid: number | undefined;
   if (clientId) {
-    const cid = parseInt(clientId, 10);
+    cid = parseInt(clientId, 10);
     if (Number.isNaN(cid)) {
       res.status(400).json({ error: 'Invalid client_id' });
       return;
@@ -489,10 +490,13 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
       ${clientFilter}
   `, params);
 
+  const currency = cid ? await resolveClientCurrency(cid) : 'USD';
+
   res.json({
     aprovado: parseFloat(row?.aprovado || '0'),
     reembolso: parseFloat(row?.reembolso || '0'),
     chargeback_custo: parseFloat(row?.chargeback_custo || '0'),
+    currency,
   });
 }));
 

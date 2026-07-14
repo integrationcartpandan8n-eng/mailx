@@ -586,6 +586,34 @@
             </div>
         </div>
 
+        <!-- ═══ Faturamento Aprovado x Reembolso (só clientes com DS24/ClickBank — CartPanda não rastreia refund) ═══ -->
+        <div id="refundChartSection" style="display:none; margin-bottom:1.25rem">
+            <div class="period-control" id="refundPeriodControl">
+                <span class="pc-label">Período:</span>
+                <button class="period-pill" data-days="7">7d</button>
+                <button class="period-pill active" data-days="30">30d</button>
+                <button class="period-pill" data-days="60">60d</button>
+                <button class="period-pill" data-custom>Personalizado</button>
+                <span class="period-custom">
+                    <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
+                    <button class="period-pill" data-apply>Aplicar</button>
+                </span>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px">
+                        <span style="font-size:0.65rem; color:var(--accent-light); font-weight:600" id="refundPctClient">0.0% reembolso</span>
+                        <span style="font-size:0.6rem; color:var(--text-dim)" id="chargebackCostClient"></span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Proporção de receita reembolsada no período</div>
+                    <div style="height:220px; position:relative"><canvas id="chartRefund"></canvas></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ Activity Chart + Recent Webhooks ═══ -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem" id="activity-row">
             <div class="card" style="margin-bottom:0">
@@ -698,34 +726,6 @@
                 <div class="card-body">
                     <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
                     <div style="height:220px; position:relative"><canvas id="chartRecUpsell"></canvas></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ═══ Faturamento Aprovado x Reembolso (só clientes com DS24/ClickBank — CartPanda não rastreia refund) ═══ -->
-        <div id="refundChartSection" style="display:none; margin-bottom:1.25rem">
-            <div class="period-control" id="refundPeriodControl">
-                <span class="pc-label">Período:</span>
-                <button class="period-pill" data-days="7">7d</button>
-                <button class="period-pill active" data-days="30">30d</button>
-                <button class="period-pill" data-days="60">60d</button>
-                <button class="period-pill" data-custom>Personalizado</button>
-                <span class="period-custom">
-                    <input type="date" data-from> <span style="color:var(--text-dim)">→</span> <input type="date" data-to>
-                    <button class="period-pill" data-apply>Aplicar</button>
-                </span>
-            </div>
-            <div class="card" style="margin-bottom:0">
-                <div class="card-header">
-                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
-                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px">
-                        <span style="font-size:0.65rem; color:var(--accent-light); font-weight:600" id="refundPctClient">0.0% reembolso</span>
-                        <span style="font-size:0.6rem; color:var(--text-dim)" id="chargebackCostClient"></span>
-                    </div>
-                </div>
-                <div class="card-body">
-                    <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Proporção de receita reembolsada no período</div>
-                    <div style="height:220px; position:relative"><canvas id="chartRefund"></canvas></div>
                 </div>
             </div>
         </div>
@@ -1751,6 +1751,8 @@
         const __clientRefundChart = { chart: null };
 
         function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
+            const CURRENCY_SYMBOLS = { USD: '$', BRL: 'R$', EUR: '€' };
+            const symbol = CURRENCY_SYMBOLS[d.currency] || (d.currency ? d.currency + ' ' : '$');
             const chargeback = d.chargeback_custo || 0;
             const total = d.aprovado + d.reembolso + chargeback;
             const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
@@ -1767,10 +1769,25 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { position: 'bottom', labels: { usePointStyle: true, pointStyleWidth: 8 } },
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            usePointStyle: true,
+                            pointStyleWidth: 8,
+                            generateLabels: (chart) => {
+                                const ds = chart.data.datasets[0];
+                                return chart.data.labels.map((label, i) => ({
+                                    text: `${label}: ${symbol}${ds.data[i].toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                                    fillStyle: ds.backgroundColor[i],
+                                    strokeStyle: ds.borderColor[i],
+                                    pointStyle: 'circle',
+                                }));
+                            },
+                        },
+                    },
                     tooltip: {
                         callbacks: {
-                            label: ctx => `${ctx.label}: R$ ${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
+                            label: ctx => `${ctx.label}: ${symbol}${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
                         },
                     },
                 },
@@ -1779,12 +1796,13 @@
                 ref.chart = new Chart(canvas, { type: 'doughnut', data, options });
             } else {
                 ref.chart.data = data;
+                ref.chart.options = options;
                 ref.chart.update();
             }
             if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
             if (chargebackEl) {
                 chargebackEl.textContent = chargeback > 0
-                    ? `CB: R$ ${chargeback.toLocaleString('pt-BR')}`
+                    ? `CB: ${symbol}${chargeback.toLocaleString('pt-BR')}`
                     : '';
             }
             return pctReembolso;
