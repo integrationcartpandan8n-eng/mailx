@@ -172,7 +172,7 @@ export async function handleDS24Payment(req: Request, res: Response, _next: Next
     }
 
     logger.info(CTX, `✅ DS24 payment ${data.orderId} processed for ${data.email}`);
-    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true, contactId: contact!.id });
+    res.status(200).send('OK');
   } catch (error: any) {
     logger.error(CTX, 'Failed to process DS24 payment', error.message);
     if (isDatabaseReady()) {

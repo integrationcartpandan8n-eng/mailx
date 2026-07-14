@@ -124,7 +124,7 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     }
 
     logger.info(CTX, `✅ DS24 ${eventType} processed for ${data.email}`);
-    res.status(200).json(METRICS_ONLY ? { ok: true, mode: 'metrics_only' } : { ok: true });
+    res.status(200).send('OK');
   } catch (error: any) {
     logger.error(CTX, 'Failed to process DS24 refund', error.message);
     if (isDatabaseReady()) {
