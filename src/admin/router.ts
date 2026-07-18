@@ -74,6 +74,8 @@ const SQL_IS_UPSELL = `COALESCE(utm_campaign, '') ILIKE '%upsell%'`;
 /** Receita normalizada (Fase A garante NUMERIC ou NULL). */
 const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
 
+const SQL_EXCLUDE_PAUSED_CLIENTS = `client_id NOT IN (SELECT id FROM clients WHERE status = 'paused')`;
+
 const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: '$',
   BRL: 'R$',
@@ -256,6 +258,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       ${SQL_REVENUE} as total_revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
+      AND ${SQL_EXCLUDE_PAUSED_CLIENTS}
   `);
   // MailX attribution: sales where utm contains 'mailx' (case-insensitive)
   const salesDataMailx = await queryOne<{ count: string, total_revenue: string }>(`
@@ -265,6 +268,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND status = 'processed'
       AND ${SQL_IS_MAILX}
+      AND ${SQL_EXCLUDE_PAUSED_CLIENTS}
   `);
   // MailX abandoned cart recoveries: MailX attribution + recovery UTM
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
@@ -274,9 +278,11 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
     WHERE event_type = 'order.paid' AND status = 'processed'
       AND ${SQL_IS_MAILX}
       AND ${SQL_IS_RECOVERY}
+      AND ${SQL_EXCLUDE_PAUSED_CLIENTS}
   `);
   const refundCount = await queryOne<{ count: string }>(`
     SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'order.refunded'
+      AND ${SQL_EXCLUDE_PAUSED_CLIENTS}
   `);
 
   const totalSales = parseInt(salesData?.count || '0');
@@ -293,6 +299,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
     FROM webhook_logs
+    WHERE ${SQL_EXCLUDE_PAUSED_CLIENTS}
     GROUP BY EXTRACT(HOUR FROM created_at)
     ORDER BY EXTRACT(HOUR FROM created_at)
   `);
@@ -309,6 +316,7 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
       ${SQL_REVENUE} as revenue
     FROM webhook_logs 
     WHERE event_type = 'order.paid' AND product_name IS NOT NULL
+      AND ${SQL_EXCLUDE_PAUSED_CLIENTS}
     GROUP BY product_name ORDER BY count DESC LIMIT 5
   `);
 
@@ -316,13 +324,14 @@ adminRouter.get('/dashboard/overview', asyncHandler(async (_req: Request, res: R
   const eventDist = await query<{ event_type: string, count: string }>(`
     SELECT event_type, COUNT(*) as count
     FROM webhook_logs
+    WHERE ${SQL_EXCLUDE_PAUSED_CLIENTS}
     GROUP BY event_type
     ORDER BY count DESC
     LIMIT 5
   `);
 
   // ── Conversion Funnel (envios/cliques por venda) ──
-  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs`);
+  const totalWebhooks = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM webhook_logs WHERE ${SQL_EXCLUDE_PAUSED_CLIENTS}`);
   const totalWh = parseInt(totalWebhooks?.count || '0');
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
@@ -907,6 +916,7 @@ adminRouter.get('/clientes', asyncHandler(async (_req: Request, res: Response) =
       c.updated_at,
       (SELECT json_agg(k.*) FROM kits k WHERE k.client_id = c.id) as kits
     FROM clients c
+    WHERE c.status IS DISTINCT FROM 'paused'
     ORDER BY c.created_at DESC
   `);
   res.json({ count: clients.length, clients });
