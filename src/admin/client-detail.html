@@ -1774,18 +1774,24 @@
                         labels: {
                             usePointStyle: true,
                             pointStyleWidth: 8,
+                            color: '#c9d3e0',
                             generateLabels: (chart) => {
                                 const ds = chart.data.datasets[0];
                                 return chart.data.labels.map((label, i) => ({
                                     text: `${label}: ${symbol}${ds.data[i].toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                                     fillStyle: ds.backgroundColor[i],
                                     strokeStyle: ds.borderColor[i],
+                                    fontColor: '#c9d3e0',
                                     pointStyle: 'circle',
                                 }));
                             },
                         },
                     },
                     tooltip: {
+                        backgroundColor: 'rgba(15, 20, 34, 0.95)',
+                        titleColor: '#fff',
+                        bodyColor: '#e5e9f2',
+                        padding: 10,
                         callbacks: {
                             label: ctx => `${ctx.label}: ${symbol}${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
                         },
@@ -1893,16 +1899,19 @@
 
                 // Render KPIs
                 const kpiGrid = document.getElementById('clientKpis');
-                kpiGrid.innerHTML = [
+                const stores = data.stores || [];
+                const hasCartPandaTracking = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
+                const kpiItems = [
                     { icon: 'fa-sack-dollar green', label: 'Faturamento', value: data.kpis.faturamento },
                     { icon: 'fa-bag-shopping blue', label: 'Vendas', value: data.kpis.vendas },
                     { icon: 'fa-receipt purple', label: 'Ticket Médio', value: data.kpis.ticket_medio },
                     { icon: 'fa-satellite-dish blue', label: 'Webhooks Total', value: data.kpis.webhooks_total },
                     { icon: 'fa-bolt orange', label: 'Webhooks Hoje', value: data.kpis.webhooks_hoje },
-                    { icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso },
+                    ...(hasCartPandaTracking ? [{ icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso }] : []),
                     { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
                     { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
-                ].map(k => `
+                ];
+                kpiGrid.innerHTML = kpiItems.map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                         <div class="kpi-value">${k.value}</div>
@@ -2101,7 +2110,7 @@
                     const cs = data.conversao_por_segmento;
                     const abWarning = cs.carrinho_abandonado.leads_warning;
                     const abLeadsCell = abWarning
-                        ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-triangle-exclamation" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
+                        ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
                         : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
                     const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
                     const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
