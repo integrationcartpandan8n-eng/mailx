@@ -204,6 +204,88 @@
         .kit-table .tag.green { background: var(--success-bg); color: var(--success); }
         .kit-table .tag.gray { background: rgba(255,255,255,0.05); color: var(--text-muted); }
 
+        /* Seção "Desempenho por Mensagem de Automação" */
+        .section-block { margin-bottom: 1.25rem; }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-header h3 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+        }
+
+        .period-tabs { display: flex; gap: 0.4rem; }
+
+        .period-btn {
+            border: 1px solid rgba(255,255,255,0.08);
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 0.72rem;
+            padding: 0.3rem 0.7rem;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .period-btn.active {
+            background: var(--accent-subtle);
+            color: var(--accent-light);
+            border-color: var(--accent-light);
+        }
+
+        #sms-granular-section { overflow-x: auto; }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            white-space: nowrap;
+        }
+
+        .data-table th {
+            text-align: left;
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-table td {
+            padding: 0.65rem 0.75rem;
+            font-size: 0.82rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-table tr:hover td { background: var(--surface-2); }
+
+        .data-table tfoot td {
+            font-weight: 700;
+            border-top: 1px solid var(--border);
+            border-bottom: none;
+        }
+
+        .badge-negative {
+            font-size: 0.72rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            background: var(--danger-bg);
+            color: var(--danger);
+        }
+
+        .badge-neutral {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+        }
+
         .kit-actions-cell { display: flex; gap: 0.5rem; }
 
         /* Toggle switch */
@@ -2319,6 +2401,10 @@
                         ? `<span class="badge-negative">${row.reembolsos}× (-${sym}${row.valor_reembolso.toFixed(2)})</span>`
                         : `<span class="badge-neutral">—</span>`;
 
+                    const pctCell = parseFloat(pct) < 0
+                        ? `<span class="badge-negative">${pct}%</span>`
+                        : `${pct}%`;
+
                     return `
                         <tr>
                             <td><code>${row.mensagem}</code></td>
@@ -2328,7 +2414,7 @@
                             <td>${sym}${row.receita_bruta.toFixed(2)}</td>
                             <td>${reembolsoCell}</td>
                             <td><strong>${sym}${row.receita_liquida.toFixed(2)}</strong></td>
-                            <td>${pct}%</td>
+                            <td>${pctCell}</td>
                         </tr>
                     `;
                 }).join('');

@@ -85,7 +85,7 @@ export function extractDS24Address(params: Record<string, any>): string {
 
 /**
  * Ensure SlickText lists exist for a product.
- * Creates "[Product] — Compra Aprovada" and "[Product] — Abandono de Carrinho" if they don't exist.
+ * Creates "[Product] [Compra Aprovada]" and "[Product] [Abandono de Carrinho]" if they don't exist.
  * Saves list IDs back to the kits table.
  */
 async function ensureSlickTextLists(
@@ -98,7 +98,7 @@ async function ensureSlickTextLists(
   try {
     // Create/find purchase list
     if (!compraListId) {
-      const listName = `[${kit.name}] — Compra Aprovada`;
+      const listName = `[${kit.name}] [Compra Aprovada]`;
       const list = await st.findOrCreateList(listName, `Compradores do produto ${kit.name}`);
       compraListId = list.contact_list_id;
       await query(`UPDATE kits SET st_list_compra_id = $1 WHERE id = $2`, [String(compraListId), kit.id]);
@@ -107,7 +107,7 @@ async function ensureSlickTextLists(
 
     // Create/find abandonment list
     if (!abandonoListId) {
-      const listName = `[${kit.name}] — Abandono de Carrinho`;
+      const listName = `[${kit.name}] [Abandono de Carrinho]`;
       const list = await st.findOrCreateList(listName, `Carrinhos abandonados do produto ${kit.name}`);
       abandonoListId = list.contact_list_id;
       await query(`UPDATE kits SET st_list_abandono_id = $1 WHERE id = $2`, [String(abandonoListId), kit.id]);
