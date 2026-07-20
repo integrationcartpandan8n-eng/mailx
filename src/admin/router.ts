@@ -1249,7 +1249,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         ac.getCampaignsAggregate(30),
         ac.getNewContactsCount(30),
       ]);
-      const mailxRev = parseFloat(mailxData?.revenue || '0');
+      const mailxRev = parseFloat(emailMailxData?.revenue || '0');
       const ctr = agg.send_amt > 0 ? (agg.uniquelinkclicks / agg.send_amt) * 100 : 0;
       const openRate = agg.send_amt > 0 ? (agg.uniqueopens / agg.send_amt) * 100 : 0;
       const ctor = agg.uniqueopens > 0 ? (agg.uniquelinkclicks / agg.uniqueopens) * 100 : 0;
