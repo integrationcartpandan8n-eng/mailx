@@ -461,8 +461,9 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
   const params: (string | number)[] = [from, to];
   const dateFilterSql = createdAtRangeSql(params, hasTime, fromTime, toTime);
   let clientFilter = '';
+  let cid: number | undefined;
   if (clientId) {
-    const cid = parseInt(clientId, 10);
+    cid = parseInt(clientId, 10);
     if (Number.isNaN(cid)) {
       res.status(400).json({ error: 'Invalid client_id' });
       return;
@@ -520,6 +521,8 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
     upsell.push(row ? parseFloat(row.upsell) : 0);
   }
 
+  const currency = cid ? await resolveClientCurrency(cid) : 'USD';
+
   res.json({
     labels,
     total,
@@ -529,6 +532,7 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
     upsell,
     from_time: hasTime ? fromTime : null,
     to_time: hasTime ? toTime : null,
+    currency,
   });
 }));
 

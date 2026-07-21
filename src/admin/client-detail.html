@@ -1237,11 +1237,11 @@
                     <div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.5rem">do faturamento total gerado pela MailX</div>
                     <div style="margin-top:1rem; display:flex; justify-content:center; gap:2rem">
                         <div>
-                            <div style="font-size:0.95rem; font-weight:700; color:var(--success)" id="rep-mailx">R$ 0</div>
+                            <div style="font-size:0.95rem; font-weight:700; color:var(--success)" id="rep-mailx">0</div>
                             <div style="font-size:0.65rem; color:var(--text-muted)">Fat. MailX</div>
                         </div>
                         <div>
-                            <div style="font-size:0.95rem; font-weight:700" id="rep-total">R$ 0</div>
+                            <div style="font-size:0.95rem; font-weight:700" id="rep-total">0</div>
                             <div style="font-size:0.65rem; color:var(--text-muted)">Fat. Total</div>
                         </div>
                     </div>
@@ -1635,6 +1635,11 @@
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
+        }
+
+        const CURRENCY_SYMBOL_MAP = { USD: '$', BRL: 'R$', EUR: '€' };
+        function currencySymbol(code) {
+            return CURRENCY_SYMBOL_MAP[code] || (code ? code + ' ' : '$');
         }
 
         if (!clientId) {
@@ -2088,7 +2093,7 @@
         // ── Revenue charts (Fase D.1) ──
         const __clientCharts = { autoCamp: null, recUpsell: null };
 
-        function revenueChartOptions() {
+        function revenueChartOptions(symbol) {
             return {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -2097,14 +2102,14 @@
                     y: {
                         grid: { color: 'rgba(26, 34, 54, 0.6)' },
                         beginAtZero: true,
-                        ticks: { callback: v => 'R$ ' + Number(v).toLocaleString('pt-BR') },
+                        ticks: { callback: v => symbol + ' ' + Number(v).toLocaleString('pt-BR') },
                     },
                     x: { grid: { display: false } },
                 },
                 plugins: {
                     tooltip: {
                         callbacks: {
-                            label: ctx => ctx.dataset.label + ': R$ ' + ctx.parsed.y.toLocaleString('pt-BR'),
+                            label: ctx => ctx.dataset.label + ': ' + symbol + ' ' + ctx.parsed.y.toLocaleString('pt-BR'),
                         },
                     },
                 },
@@ -2134,7 +2139,8 @@
         }
 
         function updateRevenueCharts(d, canvasAuto, canvasRec, refs) {
-            const opts = revenueChartOptions();
+            const symbol = currencySymbol(d.currency);
+            const opts = revenueChartOptions(symbol);
             if (!refs.autoCamp) {
                 refs.autoCamp = new Chart(canvasAuto, {
                     type: 'line',
@@ -2147,9 +2153,11 @@
                     options: opts,
                 });
             } else {
+                refs.autoCamp.options = opts;
                 refs.autoCamp.data.labels = d.labels;
                 refs.autoCamp.data.datasets = datasetsAutoCamp(d);
                 refs.autoCamp.update();
+                refs.recUpsell.options = opts;
                 refs.recUpsell.data.labels = d.labels;
                 refs.recUpsell.data.datasets = datasetsRecUpsell(d);
                 refs.recUpsell.update();
@@ -2351,8 +2359,7 @@
         const __clientRefundChart = { chart: null };
 
         function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
-            const CURRENCY_SYMBOLS = { USD: '$', BRL: 'R$', EUR: '€' };
-            const symbol = CURRENCY_SYMBOLS[d.currency] || (d.currency ? d.currency + ' ' : '$');
+            const symbol = currencySymbol(d.currency);
             const chargeback = d.chargeback_custo || 0;
             const total = d.aprovado + d.reembolso + chargeback;
             const pctReembolso = total > 0 ? ((d.reembolso / total) * 100).toFixed(1) : '0.0';
@@ -2520,10 +2527,10 @@
                 // Render MailX KPIs
                 const mailxGrid = document.getElementById('mailxKpis');
                 mailxGrid.innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || 'R$ 0,00' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || '$ 0,00' },
                     { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx || 0 },
                     { icon: 'fa-cart-arrow-down orange', label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0 },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || 'R$ 0,00' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
@@ -2581,7 +2588,7 @@
                                     callbacks: {
                                         afterLabel: function(ctx) {
                                             const p = data.top_products[ctx.dataIndex];
-                                            return 'R$ ' + p.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+                                            return currencySymbol(data.currency) + ' ' + p.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
                                         }
                                     }
                                 }
@@ -2808,10 +2815,10 @@
                 // SMS Revenue KPIs (mailxsms UTM-attributed)
                 const r = data.revenue || {};
                 document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || 'R$ 0,00' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00' },
                     { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR') },
                     { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || 'R$ 0,00' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00' },
                 ].map(k => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
@@ -2877,12 +2884,6 @@
         // ── SMS Granular per automation message ──
         window.__smsGranularData = null;
         window.__smsGranularView = 'mensagem';
-
-        const SMS_CURRENCY_SYMBOLS = { USD: '$', BRL: 'R$', EUR: '€' };
-
-        function smsCurrencySymbol(code) {
-            return SMS_CURRENCY_SYMBOLS[code] || (code ? code + ' ' : '$');
-        }
 
         function fmtSmsMoney(sym, value) {
             const abs = Math.abs(value);
@@ -3051,7 +3052,7 @@
             const data = window.__smsGranularData;
             if (!data || !data.rows || data.rows.length === 0) return;
 
-            const sym = smsCurrencySymbol(data.currency);
+            const sym = currencySymbol(data.currency);
             const view = window.__smsGranularView || 'mensagem';
             const subtitle = document.getElementById('sms-granular-subtitle');
             if (subtitle) {
@@ -3133,10 +3134,10 @@
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral
             const em = data.email_mailx || {};
             document.getElementById('emailMailxKpis').innerHTML = [
-                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || 'R$ 0,00' },
+                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || '$ 0,00' },
                 { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR') },
                 { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR') },
-                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || 'R$ 0,00' },
+                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00' },
             ].map(k => `
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
