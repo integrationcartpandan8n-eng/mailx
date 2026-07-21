@@ -465,6 +465,13 @@
 
         .pipeline-list { padding: 0.5rem; max-height: 400px; overflow-y: auto; }
 
+        .pipeline-empty {
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+        }
+
         .client-card {
             background: var(--surface-2);
             border: 1px solid var(--border);
@@ -1476,7 +1483,7 @@
                 ['pending', 'configuring', 'dns_pending', 'active'].forEach(status => {
                     const col = document.getElementById(`col-${status === 'dns_pending' ? 'dns' : status}`);
                     if (col) {
-                        col.querySelector('.pipeline-list').innerHTML = '';
+                        col.querySelector('.pipeline-list').innerHTML = '<div class="pipeline-empty">Nenhum cliente nesta etapa</div>';
                         col.querySelector('.pipeline-count').innerText = '0';
                     }
                 });
@@ -1495,7 +1502,11 @@
                     const count = col.querySelector('.pipeline-count');
                     const k = kpis[c.id] || null;
 
-                    const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${escapeHtml(k.name)}</span>`).join('');
+                    const allKits = c.kits || [];
+                    const visibleKits = allKits.slice(0, 4);
+                    const extraCount = allKits.length - visibleKits.length;
+                    const kitsHtml = visibleKits.map(k => `<span class="tag blue">${escapeHtml(k.name)}</span>`).join('')
+                        + (extraCount > 0 ? `<span class="tag" style="color:var(--text-dim);background:rgba(255,255,255,0.05)">+${extraCount} produtos</span>` : '');
                     const acBadge = c.ac_api_key ? `<span class="tag green">AC ✓</span>` : '';
 
                     let buttons = '';
@@ -1538,8 +1549,9 @@
                             <a href="/admin/client-detail?id=${c.id}" class="btn btn-outline" onclick="event.stopPropagation()"><i class="fas fa-eye"></i> Detalhes</a>
                         </div>
                     `;
+                    if (parseInt(count.innerText, 10) === 0) list.innerHTML = '';
                     list.appendChild(card);
-                    count.innerText = parseInt(count.innerText) + 1;
+                    count.innerText = parseInt(count.innerText, 10) + 1;
 
                     // Render sparkline after card is in DOM
                     if (k && k.sparkline && k.sparkline.labels.length > 0) {
