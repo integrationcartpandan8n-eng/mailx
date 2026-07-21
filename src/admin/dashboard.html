@@ -717,7 +717,7 @@
                     <button class="tab-btn" onclick="switchTab('email')">Email</button>
                     <button class="tab-btn" onclick="switchTab('sms')">SMS</button>
                     <button class="tab-btn" onclick="switchTab('history')">Histórico Importado</button>
-                    <button class="tab-btn" onclick="switchTab('pipeline')">Pipeline</button>
+                    <button class="tab-btn" onclick="switchTab('pipeline')">Clientes</button>
                     <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
                 </div>
 
@@ -1038,7 +1038,7 @@
 
             document.querySelectorAll('.tab-btn').forEach(b => {
                 const tabName = b.textContent.trim();
-                const map = { 'Visão Geral': 'overview', 'Email': 'email', 'SMS': 'sms', 'Histórico Importado': 'history', 'Pipeline': 'pipeline', 'Webhooks': 'webhooks-tab' };
+                const map = { 'Visão Geral': 'overview', 'Email': 'email', 'SMS': 'sms', 'Histórico Importado': 'history', 'Clientes': 'pipeline', 'Webhooks': 'webhooks-tab' };
                 if (map[tabName] === id) b.classList.add('active');
             });
 
@@ -1072,14 +1072,14 @@
                 scales: {
                     y: {
                         grid: { color: 'rgba(26, 34, 54, 0.6)' },
-                        ticks: { callback: v => 'R$ ' + Number(v).toLocaleString('pt-BR') },
+                        ticks: { callback: v => '$ ' + Number(v).toLocaleString('pt-BR') },
                     },
                     x: { grid: { display: false } },
                 },
                 plugins: {
                     tooltip: {
                         callbacks: {
-                            label: ctx => ctx.dataset.label + ': R$ ' + ctx.parsed.y.toLocaleString('pt-BR'),
+                            label: ctx => ctx.dataset.label + ': $ ' + ctx.parsed.y.toLocaleString('pt-BR'),
                         },
                     },
                 },
@@ -1211,7 +1211,7 @@
                     legend: { position: 'bottom', labels: { usePointStyle: true, pointStyleWidth: 8 } },
                     tooltip: {
                         callbacks: {
-                            label: ctx => `${ctx.label}: R$ ${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
+                            label: ctx => `${ctx.label}: $ ${ctx.parsed.toLocaleString('pt-BR')} (${((ctx.parsed / total) * 100 || 0).toFixed(1)}%)`,
                         },
                     },
                 },
@@ -1225,7 +1225,7 @@
             if (pctEl) pctEl.textContent = `${pctReembolso}% reembolso`;
             if (chargebackEl) {
                 chargebackEl.textContent = chargeback > 0
-                    ? `CB: R$ ${chargeback.toLocaleString('pt-BR')}`
+                    ? `CB: $ ${chargeback.toLocaleString('pt-BR')}`
                     : '';
             }
             return pctReembolso;
@@ -1273,7 +1273,7 @@
                     { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue' },
                     { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green' },
                     { label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0, icon: 'cart-arrow-down', color: 'orange' },
-                    { label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || 'R$ 0,00', icon: 'hand-holding-dollar', color: 'green' },
+                    { label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00', icon: 'hand-holding-dollar', color: 'green' },
                 ]);
 
                 // Conversion Funnel
