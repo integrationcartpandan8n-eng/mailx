@@ -106,6 +106,67 @@ async function resolveClientCurrency(clientId: string | number): Promise<string>
 }
 
 const DATE_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_HM_RE = /^\d{2}:\d{2}$/;
+
+function parseOptionalTimeRange(req: Request): {
+  fromTime: string | null;
+  toTime: string | null;
+  hasTime: boolean;
+} {
+  const fromTime = req.query.from_time as string | undefined;
+  const toTime = req.query.to_time as string | undefined;
+  const hasTime = !!(fromTime && toTime && TIME_HM_RE.test(fromTime) && TIME_HM_RE.test(toTime));
+  return {
+    fromTime: hasTime ? fromTime! : null,
+    toTime: hasTime ? toTime! : null,
+    hasTime,
+  };
+}
+
+function validateYmdRange(from: string, to: string): { fromDate: Date; toDate: Date; dayCount: number } | { error: string } {
+  const fromDate = parseYmd(from);
+  const toDate = parseYmd(to);
+  if (fromDate > toDate) {
+    return { error: 'from must be <= to' };
+  }
+  const dayCount = Math.round((toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  if (dayCount > 366) {
+    return { error: 'Date range cannot exceed 366 days' };
+  }
+  return { fromDate, toDate, dayCount };
+}
+
+/** Builds created_at filter using $1=from, $2=to; optionally appends $3/$4 for time. */
+function createdAtRangeSql(
+  params: (string | number)[],
+  hasTime: boolean,
+  fromTime: string | null,
+  toTime: string | null
+): string {
+  if (hasTime && fromTime && toTime) {
+    params.push(fromTime, toTime);
+    return `created_at >= ($1::date + $3::time) AND created_at <= ($2::date + $4::time)`;
+  }
+  return `created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')`;
+}
+
+/** Same as createdAtRangeSql but from/to are at $fromIdx/$toIdx (for sms-granular: $2/$3). */
+function createdAtRangeSqlAt(
+  params: (string | number)[],
+  fromIdx: number,
+  toIdx: number,
+  hasTime: boolean,
+  fromTime: string | null,
+  toTime: string | null
+): string {
+  if (hasTime && fromTime && toTime) {
+    params.push(fromTime, toTime);
+    const tFromIdx = params.length - 1;
+    const tToIdx = params.length;
+    return `created_at >= ($${fromIdx}::date + $${tFromIdx}::time) AND created_at <= ($${toIdx}::date + $${tToIdx}::time)`;
+  }
+  return `created_at >= $${fromIdx}::date AND created_at < ($${toIdx}::date + INTERVAL '1 day')`;
+}
 
 function parseYmd(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
@@ -387,21 +448,18 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
     return;
   }
 
-  const fromDate = parseYmd(from);
-  const toDate = parseYmd(to);
-  if (fromDate > toDate) {
-    res.status(400).json({ error: 'from must be <= to' });
+  const range = validateYmdRange(from, to);
+  if ('error' in range) {
+    res.status(400).json({ error: range.error });
     return;
   }
+  const { fromDate, toDate } = range;
 
-  const dayCount = Math.round((toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-  if (dayCount > 366) {
-    res.status(400).json({ error: 'Date range cannot exceed 366 days' });
-    return;
-  }
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
 
   const channelExtra = channel === 'email' ? `AND NOT ${SQL_IS_SMS}` : '';
   const params: (string | number)[] = [from, to];
+  const dateFilterSql = createdAtRangeSql(params, hasTime, fromTime, toTime);
   let clientFilter = '';
   if (clientId) {
     const cid = parseInt(clientId, 10);
@@ -430,7 +488,7 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
       COALESCE(SUM(total_price) FILTER (WHERE ${SQL_IS_MAILX} AND ${SQL_IS_UPSELL} ${channelExtra}), 0) AS upsell
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND status = 'processed'
-      AND created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
+      AND ${dateFilterSql}
       ${clientFilter}
     GROUP BY DATE(created_at)
     ORDER BY DATE(created_at)
@@ -462,7 +520,16 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
     upsell.push(row ? parseFloat(row.upsell) : 0);
   }
 
-  res.json({ labels, total, automacao, campanha, recuperacao, upsell });
+  res.json({
+    labels,
+    total,
+    automacao,
+    campanha,
+    recuperacao,
+    upsell,
+    from_time: hasTime ? fromTime : null,
+    to_time: hasTime ? toTime : null,
+  });
 }));
 
 // GET /admin/dashboard/revenue-vs-refund - Approved revenue vs refund totals for doughnut chart
@@ -476,7 +543,16 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     return;
   }
 
+  const range = validateYmdRange(from, to);
+  if ('error' in range) {
+    res.status(400).json({ error: range.error });
+    return;
+  }
+
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
+
   const params: (string | number)[] = [from, to];
+  const dateFilterSql = createdAtRangeSql(params, hasTime, fromTime, toTime);
   let clientFilter = '';
   let cid: number | undefined;
   if (clientId) {
@@ -495,7 +571,7 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
       COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type = 'order.refunded'), 0) AS reembolso,
       COALESCE(SUM(ABS(total_price)) FILTER (WHERE event_type = 'order.chargeback'), 0) AS chargeback_custo
     FROM webhook_logs
-    WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')
+    WHERE ${dateFilterSql}
       ${clientFilter}
   `, params);
 
@@ -506,6 +582,8 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     reembolso: parseFloat(row?.reembolso || '0'),
     chargeback_custo: parseFloat(row?.chargeback_custo || '0'),
     currency,
+    from_time: hasTime ? fromTime : null,
+    to_time: hasTime ? toTime : null,
   });
 }));
 
@@ -1365,8 +1443,34 @@ function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao:
 adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
   const currency = await resolveClientCurrency(clientId);
-  const periodRaw = req.query.period as string | undefined;
-  const period = ['7', '30', '90'].includes(periodRaw || '') ? parseInt(periodRaw!) : 30;
+
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const useCustomRange = !!(from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to));
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
+
+  let dateFilterSql: string;
+  const params: (string | number)[] = [clientId];
+  let period: number | null = null;
+  let rangeFrom: string | null = null;
+  let rangeTo: string | null = null;
+
+  if (useCustomRange) {
+    const range = validateYmdRange(from!, to!);
+    if ('error' in range) {
+      res.status(400).json({ error: range.error });
+      return;
+    }
+    rangeFrom = from!;
+    rangeTo = to!;
+    params.push(from!, to!);
+    dateFilterSql = createdAtRangeSqlAt(params, 2, 3, hasTime, fromTime, toTime);
+  } else {
+    const periodRaw = req.query.period as string | undefined;
+    period = ['7', '30', '90'].includes(periodRaw || '') ? parseInt(periodRaw!) : 30;
+    params.push(String(period));
+    dateFilterSql = `created_at >= NOW() - ($2 || ' days')::INTERVAL`;
+  }
 
   const rawRows = await query<{
     utm_campaign: string;
@@ -1394,10 +1498,10 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
       AND utm_source = 'mailx-sms'
       AND utm_campaign IS NOT NULL
       AND utm_campaign NOT ILIKE '%teste%'
-      AND created_at >= NOW() - ($2 || ' days')::INTERVAL
+      AND ${dateFilterSql}
     GROUP BY utm_campaign, event_type
     ORDER BY receita_bruta DESC NULLS LAST
-  `, [clientId, String(period)]);
+  `, params);
 
   type SmsGranularRow = {
     utm_campaign: string;
@@ -1455,6 +1559,10 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
 
   res.json({
     period,
+    from: rangeFrom,
+    to: rangeTo,
+    from_time: hasTime ? fromTime : null,
+    to_time: hasTime ? toTime : null,
     currency,
     total_vendas_sms,
     total_receita_liquida_sms,

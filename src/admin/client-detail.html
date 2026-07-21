@@ -136,6 +136,48 @@
             padding: 0.85rem 1.25rem; margin-bottom: 1.25rem;
             position: sticky; top: 0.5rem; z-index: 10;
         }
+        .gp-pill.custom { display: flex; align-items: center; gap: 0.4rem; }
+
+        .gp-popover {
+            position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 30;
+            background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+            padding: 1rem; width: 330px; box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+            display: none;
+        }
+        .gp-popover.open { display: block; }
+        .gp-pop-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 0.7rem; }
+        .gp-quick { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.9rem; }
+        .gp-quick button { border: 1px solid rgba(255,255,255,0.08); background: var(--surface-3); color: var(--text-dim); font-size: 0.7rem; padding: 0.35rem 0.6rem; border-radius: 6px; cursor: pointer; font-family: inherit; }
+        .gp-quick button:hover { color: var(--text); border-color: var(--accent-light); }
+        .gp-dates { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.9rem; }
+        .gp-date-field { flex: 1; }
+        .gp-date-field label { display: block; font-size: 0.64rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; font-weight: 600; }
+        .gp-date-field input {
+            width: 100%; background: var(--surface-3); border: 1px solid var(--border); color: var(--text);
+            padding: 0.5rem 0.6rem; border-radius: 7px; font-size: 0.78rem; font-family: inherit;
+            color-scheme: dark;
+        }
+        .gp-date-field input:focus { outline: none; border-color: var(--accent-light); }
+        .gp-arrow { color: var(--text-muted); margin-top: 1.1rem; font-size: 0.7rem; }
+        .gp-range-preview { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.9rem; min-height: 1em; }
+        .gp-range-preview b { color: var(--accent-light); }
+        .gp-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+        .gp-btn { font-size: 0.76rem; padding: 0.45rem 0.9rem; border-radius: 7px; cursor: pointer; font-family: inherit; font-weight: 600; border: 1px solid transparent; }
+        .gp-btn.ghost { background: transparent; color: var(--text-dim); border-color: rgba(255,255,255,0.08); }
+        .gp-btn.primary { background: var(--accent); color: #fff; }
+        .gp-btn.primary:disabled { background: var(--surface-3); color: var(--text-muted); cursor: not-allowed; }
+        .gp-time-toggle { background: none; border: none; color: var(--accent-light); font-size: 0.7rem; font-family: inherit; cursor: pointer; padding: 0; margin-bottom: 0.9rem; display: flex; align-items: center; gap: 0.35rem; }
+        .gp-time-toggle:hover { text-decoration: underline; }
+        .gp-time-section { display: none; margin-bottom: 0.9rem; }
+        .gp-time-section.open { display: block; }
+        .gp-time-hint { font-size: 0.64rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .gp-time-fields { display: flex; align-items: center; gap: 0.6rem; }
+        .gp-time-fields input[type="time"] {
+            width: 100%; background: var(--surface-3); border: 1px solid var(--border); color: var(--text);
+            padding: 0.5rem 0.6rem; border-radius: 7px; font-size: 0.78rem; font-family: inherit;
+            color-scheme: dark;
+        }
+        .gp-time-fields input[type="time"]:focus { outline: none; border-color: var(--accent-light); }
         .gp-left { display: flex; align-items: center; gap: 0.6rem; }
         .gp-icon { color: var(--accent-light); font-size: 0.9rem; }
         .gp-label { font-size: 0.78rem; color: var(--text-dim); }
@@ -955,6 +997,54 @@
                 <button type="button" class="gp-pill active" data-days="7">7 dias</button>
                 <button type="button" class="gp-pill" data-days="30">30 dias</button>
                 <button type="button" class="gp-pill" data-days="90">90 dias</button>
+                <button type="button" class="gp-pill custom" id="gpCustomBtn" data-custom>
+                    <i class="fas fa-calendar-week" style="font-size:0.7rem"></i>
+                    <span id="gpCustomLabel">Personalizado</span>
+                </button>
+            </div>
+
+            <div class="gp-popover" id="gpPopover">
+                <div class="gp-pop-title">Atalhos</div>
+                <div class="gp-quick">
+                    <button type="button" data-quick="7">Últimos 7 dias</button>
+                    <button type="button" data-quick="14">Últimos 14 dias</button>
+                    <button type="button" data-quick="30">Últimos 30 dias</button>
+                    <button type="button" data-quick="60">Últimos 60 dias</button>
+                    <button type="button" data-quick="month">Este mês</button>
+                    <button type="button" data-quick="lastmonth">Mês passado</button>
+                </div>
+                <div class="gp-pop-title">Ou escolha as datas</div>
+                <div class="gp-dates">
+                    <div class="gp-date-field">
+                        <label>De</label>
+                        <input type="date" id="gpDateFrom">
+                    </div>
+                    <span class="gp-arrow">→</span>
+                    <div class="gp-date-field">
+                        <label>Até</label>
+                        <input type="date" id="gpDateTo">
+                    </div>
+                </div>
+                <div class="gp-range-preview" id="gpRangePreview"></div>
+                <button type="button" class="gp-time-toggle" id="gpTimeToggle"><i class="fas fa-plus" style="font-size:0.6rem"></i> Adicionar horário</button>
+                <div class="gp-time-section" id="gpTimeSection">
+                    <div class="gp-time-hint">Horário do seu navegador — opcional, deixe em branco pra considerar o dia inteiro</div>
+                    <div class="gp-time-fields">
+                        <div class="gp-date-field">
+                            <label>Hora de</label>
+                            <input type="time" id="gpTimeFrom" step="300">
+                        </div>
+                        <span class="gp-arrow">→</span>
+                        <div class="gp-date-field">
+                            <label>Hora até</label>
+                            <input type="time" id="gpTimeTo" step="300">
+                        </div>
+                    </div>
+                </div>
+                <div class="gp-actions">
+                    <button type="button" class="gp-btn ghost" id="gpCancelBtn">Cancelar</button>
+                    <button type="button" class="gp-btn primary" id="gpApplyBtn">Aplicar</button>
+                </div>
             </div>
         </div>
 
@@ -2056,6 +2146,40 @@
             }
         }
 
+        function fmtYmdLocal(d) {
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+
+        function fmtShortDate(dateStr) {
+            const [, m, d] = dateStr.split('-');
+            const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+            return `${parseInt(d, 10)} ${months[parseInt(m, 10) - 1]}`;
+        }
+
+        function localDateTimeToUtcParts(dateYmd, timeHm) {
+            const [y, m, d] = dateYmd.split('-').map(Number);
+            const [hh, mm] = timeHm.split(':').map(Number);
+            const local = new Date(y, m - 1, d, hh, mm, 0, 0);
+            const iso = local.toISOString();
+            return { date: iso.slice(0, 10), time: iso.slice(11, 16) };
+        }
+
+        function appendPeriodTimeParams(params, fromTime, toTime) {
+            if (fromTime && toTime) {
+                params.set('from_time', fromTime);
+                params.set('to_time', toTime);
+            }
+        }
+
+        function reloadAllCharts(from, to, timeOpts = {}) {
+            loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime);
+            const refundSection = document.getElementById('refundChartSection');
+            if (refundSection && refundSection.style.display !== 'none') {
+                loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime);
+            }
+            loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime });
+        }
+
         function initGlobalPeriodControl() {
             if (window.__globalPeriodInit) return;
             window.__globalPeriodInit = true;
@@ -2063,37 +2187,147 @@
             const container = document.getElementById('globalPeriodControl');
             if (!container) return;
 
-            const fmt = d => d.toISOString().slice(0, 10);
+            const popover = document.getElementById('gpPopover');
+            const customBtn = document.getElementById('gpCustomBtn');
+            const customLabel = document.getElementById('gpCustomLabel');
+            const dateFrom = document.getElementById('gpDateFrom');
+            const dateTo = document.getElementById('gpDateTo');
+            const preview = document.getElementById('gpRangePreview');
+            const timeToggle = document.getElementById('gpTimeToggle');
+            const timeSection = document.getElementById('gpTimeSection');
+            const timeFrom = document.getElementById('gpTimeFrom');
+            const timeTo = document.getElementById('gpTimeTo');
+            const applyBtn = document.getElementById('gpApplyBtn');
 
-            function apply(days) {
+            function setActivePill(activeBtn) {
+                container.querySelectorAll('.gp-pill').forEach(b => b.classList.remove('active'));
+                if (activeBtn) activeBtn.classList.add('active');
+            }
+
+            function applyPreset(days) {
                 window.__globalPeriodDays = days;
                 const to = new Date();
                 const from = new Date();
                 from.setDate(from.getDate() - (days - 1));
-                const fromStr = fmt(from);
-                const toStr = fmt(to);
+                reloadAllCharts(fmtYmdLocal(from), fmtYmdLocal(to));
+            }
 
-                loadRevenueChartsClient(fromStr, toStr);
-                const refundSection = document.getElementById('refundChartSection');
-                if (refundSection && refundSection.style.display !== 'none') {
-                    loadRefundChartClient(fromStr, toStr);
+            function updatePreview() {
+                const from = new Date(dateFrom.value + 'T00:00:00');
+                const to = new Date(dateTo.value + 'T00:00:00');
+                const days = Math.round((to - from) / 86400000) + 1;
+
+                if (!dateFrom.value || !dateTo.value || to < from) {
+                    preview.innerHTML = '<span style="color:var(--danger)">Data final antes da inicial</span>';
+                    applyBtn.disabled = true;
+                    return;
                 }
-                loadSmsGranular(clientId, days);
+
+                const timeOpen = timeSection.classList.contains('open');
+                if (timeOpen && (!timeFrom.value || !timeTo.value)) {
+                    preview.innerHTML = `Período: <b>${days} dias</b> (${fmtShortDate(dateFrom.value)} – ${fmtShortDate(dateTo.value)}) — <span style="color:var(--warning)">preencha os dois horários</span>`;
+                    applyBtn.disabled = true;
+                    return;
+                }
+
+                applyBtn.disabled = false;
+                const timeLabel = (timeOpen && timeFrom.value && timeTo.value)
+                    ? ` · ${timeFrom.value}–${timeTo.value}`
+                    : '';
+                preview.innerHTML = `Período: <b>${days} dias</b> (${fmtShortDate(dateFrom.value)} – ${fmtShortDate(dateTo.value)}${timeLabel})`;
+            }
+
+            function initPopoverDates(fromStr, toStr) {
+                dateFrom.value = fromStr;
+                dateTo.value = toStr;
+                updatePreview();
             }
 
             container.querySelectorAll('[data-days]').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    container.querySelectorAll('.gp-pill').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    apply(parseInt(btn.dataset.days));
+                    setActivePill(btn);
+                    popover.classList.remove('open');
+                    applyPreset(parseInt(btn.dataset.days, 10));
                 });
             });
 
-            apply(7);
+            customBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                popover.classList.toggle('open');
+                if (popover.classList.contains('open') && !dateFrom.value) {
+                    const to = new Date();
+                    const from = new Date();
+                    from.setDate(from.getDate() - 6);
+                    initPopoverDates(fmtYmdLocal(from), fmtYmdLocal(to));
+                }
+            });
+
+            document.getElementById('gpCancelBtn').addEventListener('click', () => popover.classList.remove('open'));
+
+            document.addEventListener('click', (e) => {
+                if (!popover.classList.contains('open')) return;
+                if (popover.contains(e.target) || customBtn.contains(e.target)) return;
+                popover.classList.remove('open');
+            });
+
+            [dateFrom, dateTo, timeFrom, timeTo].forEach(el => el.addEventListener('input', updatePreview));
+
+            timeToggle.addEventListener('click', () => {
+                timeSection.classList.toggle('open');
+                timeToggle.innerHTML = timeSection.classList.contains('open')
+                    ? '<i class="fas fa-minus" style="font-size:0.6rem"></i> Remover horário'
+                    : '<i class="fas fa-plus" style="font-size:0.6rem"></i> Adicionar horário';
+                updatePreview();
+            });
+
+            popover.querySelectorAll('[data-quick]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const q = btn.dataset.quick;
+                    const to = new Date();
+                    let from = new Date();
+                    if (q === 'month') {
+                        from = new Date(to.getFullYear(), to.getMonth(), 1);
+                    } else if (q === 'lastmonth') {
+                        from = new Date(to.getFullYear(), to.getMonth() - 1, 1);
+                        to.setTime(new Date(to.getFullYear(), to.getMonth(), 0).getTime());
+                    } else {
+                        from.setDate(from.getDate() - (parseInt(q, 10) - 1));
+                    }
+                    initPopoverDates(fmtYmdLocal(from), fmtYmdLocal(to));
+                });
+            });
+
+            applyBtn.addEventListener('click', () => {
+                const timeOpen = timeSection.classList.contains('open') && timeFrom.value && timeTo.value;
+                let fromStr = dateFrom.value;
+                let toStr = dateTo.value;
+                let utcFromTime;
+                let utcToTime;
+
+                if (timeOpen) {
+                    const utcStart = localDateTimeToUtcParts(dateFrom.value, timeFrom.value);
+                    const utcEnd = localDateTimeToUtcParts(dateTo.value, timeTo.value);
+                    fromStr = utcStart.date;
+                    toStr = utcEnd.date;
+                    utcFromTime = utcStart.time;
+                    utcToTime = utcEnd.time;
+                    customLabel.textContent = `${fmtShortDate(dateFrom.value)} ${timeFrom.value} – ${fmtShortDate(dateTo.value)} ${timeTo.value}`;
+                } else {
+                    customLabel.textContent = `${fmtShortDate(dateFrom.value)} – ${fmtShortDate(dateTo.value)}`;
+                }
+
+                setActivePill(customBtn);
+                popover.classList.remove('open');
+                window.__globalPeriodDays = null;
+                reloadAllCharts(fromStr, toStr, { fromTime: utcFromTime, toTime: utcToTime });
+            });
+
+            applyPreset(7);
         }
 
-        async function loadRevenueChartsClient(from, to) {
+        async function loadRevenueChartsClient(from, to, fromTime, toTime) {
             const params = new URLSearchParams({ from, to, client_id: clientId });
+            appendPeriodTimeParams(params, fromTime, toTime);
             const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
             updateRevenueCharts(
                 d,
@@ -2170,8 +2404,9 @@
             return pctReembolso;
         }
 
-        async function loadRefundChartClient(from, to) {
+        async function loadRefundChartClient(from, to, fromTime, toTime) {
             const params = new URLSearchParams({ from, to, client_id: clientId });
+            appendPeriodTimeParams(params, fromTime, toTime);
             const d = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`).then(r => r.json());
             renderRefundChart(
                 d,
@@ -2821,7 +3056,7 @@
                 : renderSmsGranularMensagem(data, sym);
         }
 
-        async function loadSmsGranular(clientId, period = 7) {
+        async function loadSmsGranular(clientId, opts = {}) {
             const section = document.getElementById('sms-granular-section');
             const loading = document.getElementById('sms-granular-loading');
             const empty   = document.getElementById('sms-granular-empty');
@@ -2833,7 +3068,16 @@
             section.style.display = 'none';
 
             try {
-                const res  = await fetch(`${API}/clientes/${clientId}/sms-granular?period=${period}`);
+                const params = new URLSearchParams();
+                if (opts.from && opts.to) {
+                    params.set('from', opts.from);
+                    params.set('to', opts.to);
+                } else {
+                    params.set('period', String(opts.days || window.__globalPeriodDays || 7));
+                }
+                appendPeriodTimeParams(params, opts.fromTime, opts.toTime);
+
+                const res  = await fetch(`${API}/clientes/${clientId}/sms-granular?${params}`);
                 const data = await res.json();
 
                 loading.style.display = 'none';
