@@ -1816,15 +1816,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       [clientId]
     );
 
-    const listStats: Array<{
-      product: string;
-      compra_list_id: number | null;
-      compra_contacts: number;
-      abandono_list_id: number | null;
-      abandono_contacts: number;
-    }> = [];
-
-    for (const kit of kits) {
+    const listStats = await Promise.all(kits.map(async (kit) => {
       const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
       const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
 
@@ -1833,14 +1825,14 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         abandonoId ? st.getListContactCount(abandonoId) : Promise.resolve(0),
       ]);
 
-      listStats.push({
+      return {
         product: kit.name,
         compra_list_id: compraId,
         compra_contacts: compraCount,
         abandono_list_id: abandonoId,
         abandono_contacts: abandonoCount,
-      });
-    }
+      };
+    }));
 
     const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
     const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);

@@ -1062,6 +1062,7 @@
         // ── Revenue charts (Fase D.1) ──
         const __overviewCharts = { autoCamp: null, recUpsell: null };
         const __emailCharts = { autoCamp: null, recUpsell: null };
+        window.__dashCharts = window.__dashCharts || {};
 
         function revenueChartOptions() {
             return {
@@ -1283,7 +1284,8 @@
                 }
 
                 // Hourly Sales
-                new Chart(document.getElementById('chartHourly'), {
+                if (window.__dashCharts.hourly) window.__dashCharts.hourly.destroy();
+                window.__dashCharts.hourly = new Chart(document.getElementById('chartHourly'), {
                     type: 'bar',
                     data: {
                         labels: data.charts.hourly.labels,
@@ -1309,7 +1311,8 @@
                 });
 
                 // Top Products
-                new Chart(document.getElementById('chartProducts'), {
+                if (window.__dashCharts.products) window.__dashCharts.products.destroy();
+                window.__dashCharts.products = new Chart(document.getElementById('chartProducts'), {
                     type: 'bar',
                     data: {
                         labels: data.charts.top_products.labels,
@@ -1334,7 +1337,8 @@
                 });
 
                 // Top Tags
-                new Chart(document.getElementById('chartTags'), {
+                if (window.__dashCharts.tags) window.__dashCharts.tags.destroy();
+                window.__dashCharts.tags = new Chart(document.getElementById('chartTags'), {
                     type: 'bar',
                     data: {
                         labels: data.charts.top_event_types.labels,
@@ -1385,7 +1389,8 @@
                 ]);
 
                 // Email Performance Chart
-                new Chart(document.getElementById('chartEmailPerf'), {
+                if (window.__dashCharts.emailPerf) window.__dashCharts.emailPerf.destroy();
+                window.__dashCharts.emailPerf = new Chart(document.getElementById('chartEmailPerf'), {
                     type: 'line',
                     data: {
                         labels: data.charts.email_perf.labels,
@@ -1426,7 +1431,8 @@
                 });
 
                 // Contacts Chart
-                new Chart(document.getElementById('chartContacts'), {
+                if (window.__dashCharts.contacts) window.__dashCharts.contacts.destroy();
+                window.__dashCharts.contacts = new Chart(document.getElementById('chartContacts'), {
                     type: 'bar',
                     data: {
                         labels: data.charts.contacts.labels,
@@ -1740,7 +1746,7 @@
 
         function refreshAll() {
             loadOverview();
-            loadHistory();
+            if (window.__historyLoaded) loadHistory();
             loadClients();
             loadWebhooks();
             if (window.__emailLoaded) loadEmailDashboard();
