@@ -1014,6 +1014,16 @@
     <script>
         const API = '/admin';
 
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         // ── Date header ──
         document.getElementById('topbar-date').textContent =
             new Date().toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1479,7 +1489,7 @@
                     const count = col.querySelector('.pipeline-count');
                     const k = kpis[c.id] || null;
 
-                    const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${k.name}</span>`).join('');
+                    const kitsHtml = (c.kits || []).map(k => `<span class="tag blue">${escapeHtml(k.name)}</span>`).join('');
                     const acBadge = c.ac_api_key ? `<span class="tag green">AC ✓</span>` : '';
 
                     let buttons = '';
@@ -1513,8 +1523,8 @@
                     card.style.cursor = 'pointer';
                     card.onclick = () => window.location.href = `/admin/client-detail?id=${c.id}`;
                     card.innerHTML = `
-                        <div class="client-name">${c.company_name}</div>
-                        <div class="client-email">${c.contact_email}</div>
+                        <div class="client-name">${escapeHtml(c.company_name)}</div>
+                        <div class="client-email">${escapeHtml(c.contact_email)}</div>
                         <div class="client-tags">${kitsHtml} ${acBadge}</div>
                         ${kpisHtml}
                         <div class="client-actions">
@@ -1597,7 +1607,7 @@
                     showModal('✅ Sucesso!', 'Listas e tags criadas no ActiveCampaign.');
                     loadClients();
                 } else {
-                    showModal('❌ Erro', `Falha: ${(data.errors || []).join('<br>')}`);
+                    showModal('❌ Erro', `Falha: ${(data.errors || []).map(escapeHtml).join('<br>')}`);
                 }
             } catch (e) {
                 showModal('Erro Crítico', e.message);

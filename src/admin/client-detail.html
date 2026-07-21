@@ -1627,6 +1627,16 @@
         const clientId = new URLSearchParams(window.location.search).get('id');
         const BASE_URL = window.location.origin;
 
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         if (!clientId) {
             window.location.href = '/admin';
         }
@@ -1672,14 +1682,14 @@
                 document.title = `MailX — ${client.company_name}`;
 
                 document.getElementById('clientInfo').innerHTML = `
-                    <div class="info-item"><label>Empresa</label><span>${client.company_name}</span></div>
-                    <div class="info-item"><label>Email</label><span>${client.contact_email}</span></div>
-                    <div class="info-item"><label>WhatsApp</label><span>${client.contact_whatsapp || '—'}</span></div>
-                    <div class="info-item"><label>CNPJ</label><span>${client.cnpj || '—'}</span></div>
-                    ${client.cartpanda_store_url ? `<div class="info-item"><label>Loja CartPanda</label><span class="mono">${client.cartpanda_store_url}</span></div>` : ''}
-                    <div class="info-item"><label>AC API URL</label><span class="mono" style="font-size:0.72rem">${client.ac_api_url || '<span style="color:var(--danger)">Não configurado</span>'}</span></div>
+                    <div class="info-item"><label>Empresa</label><span>${escapeHtml(client.company_name)}</span></div>
+                    <div class="info-item"><label>Email</label><span>${escapeHtml(client.contact_email)}</span></div>
+                    <div class="info-item"><label>WhatsApp</label><span>${escapeHtml(client.contact_whatsapp) || '—'}</span></div>
+                    <div class="info-item"><label>CNPJ</label><span>${escapeHtml(client.cnpj) || '—'}</span></div>
+                    ${client.cartpanda_store_url ? `<div class="info-item"><label>Loja CartPanda</label><span class="mono">${escapeHtml(client.cartpanda_store_url)}</span></div>` : ''}
+                    <div class="info-item"><label>AC API URL</label><span class="mono" style="font-size:0.72rem">${client.ac_api_url ? escapeHtml(client.ac_api_url) : '<span style="color:var(--danger)">Não configurado</span>'}</span></div>
                     <div class="info-item"><label>AC API Key</label><span class="mono" style="font-size:0.72rem">${client.ac_api_key ? '••••••••' + client.ac_api_key.slice(-6) : '<span style="color:var(--danger)">Não configurada</span>'}</span></div>
-                    <div class="info-item"><label>DNS Registrar</label><span>${client.dns_registrar || '—'}</span></div>
+                    <div class="info-item"><label>DNS Registrar</label><span>${escapeHtml(client.dns_registrar) || '—'}</span></div>
                     <div class="info-item"><label>Criado em</label><span>${new Date(client.created_at).toLocaleDateString('pt-BR')}</span></div>
                 `;
 
@@ -1744,7 +1754,7 @@
                         : `<span class="tag gray">Pendente</span>`;
 
                 const externalIdHtml = k.external_id
-                    ? `<span style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${k.external_id}</span>`
+                    ? `<span style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${escapeHtml(k.external_id)}</span>`
                     : `<span style="color:var(--text-muted)">—</span>`;
 
                 const enabledCell = window.__metricsOnly
@@ -1753,7 +1763,7 @@
 
                 return `
                 <tr id="kit-row-${k.id}">
-                    <td style="color:#fff; font-weight:600">${k.name}</td>
+                    <td style="color:#fff; font-weight:600">${escapeHtml(k.name)}</td>
                     <td><span class="platform-badge ${platformClass}">${platformLabel}</span></td>
                     <td>${externalIdHtml}</td>
                     <td>${tagsHtml}</td>
@@ -2012,7 +2022,7 @@
                     showModal('✅ Bootstrap Completo!', `Listas: ${data.result.listsCreated.length} | Tags: ${data.result.tagsCreated.length}`);
                     loadClient();
                 } else {
-                    showModal('❌ Erro', (data.errors || []).join('<br>'));
+                    showModal('❌ Erro', (data.errors || []).map(escapeHtml).join('<br>'));
                 }
             } catch (e) {
                 showModal('Erro', e.message);
