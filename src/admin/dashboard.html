@@ -328,6 +328,48 @@
             margin-bottom: 0.4rem;
         }
 
+        /* Tooltip de explicação nos KPIs — ícone (ⓘ) ao lado do label */
+        .kpi-tip {
+            display: inline-block;
+            position: relative;
+            cursor: help;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: normal;
+        }
+        .kpi-tip::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: #10131c;
+            color: #fff;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.5rem 0.65rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            line-height: 1.4;
+            text-transform: none;
+            letter-spacing: normal;
+            width: max-content;
+            max-width: 220px;
+            white-space: normal;
+            text-align: left;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease;
+            z-index: 20;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .kpi-tip:hover::after,
+        .kpi-tip:focus::after {
+            opacity: 1;
+        }
+
         .kpi-value {
             font-size: 1.6rem;
             font-weight: 800;
@@ -1258,7 +1300,7 @@
             el.innerHTML = kpis.map(k => `
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.color}"><i class="fas fa-${k.icon}"></i></div>
-                    <div class="kpi-label">${k.label}</div>
+                    <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                     <div class="kpi-value">${k.value}</div>
                     ${k.change ? `<span class="kpi-change ${k.changeDir}">${k.changeDir === 'up' ? '↑' : '↓'} ${k.change}</span>` : ''}
                 </div>
@@ -1272,15 +1314,15 @@
                 const data = await res.json();
 
                 renderKPI('overview-kpis', [
-                    { label: 'Faturamento Aprovado', value: data.kpis.faturamento_aprovado, icon: 'dollar-sign', color: 'green' },
-                    { label: 'Vendas Totais', value: data.kpis.vendas_totais, icon: 'shopping-cart', color: 'blue' },
-                    { label: 'Ticket Médio', value: data.kpis.ticket_medio, icon: 'receipt', color: 'purple' },
-                    { label: 'Taxa de Reembolso', value: data.kpis.taxa_reembolso, icon: 'rotate-left', color: 'red' },
-                    { label: 'Representatividade MailX', value: data.kpis.representatividade || '0%', icon: 'percentage', color: 'purple' },
-                    { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue' },
-                    { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green' },
-                    { label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0, icon: 'cart-arrow-down', color: 'orange' },
-                    { label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00', icon: 'hand-holding-dollar', color: 'green' },
+                    { label: 'Faturamento Aprovado', value: data.kpis.faturamento_aprovado, icon: 'dollar-sign', color: 'green', tip: 'Soma de todas as vendas aprovadas no período, somando todos os clientes e gateways.' },
+                    { label: 'Vendas Totais', value: data.kpis.vendas_totais, icon: 'shopping-cart', color: 'blue', tip: 'Quantidade de pedidos aprovados no período, somando todos os clientes.' },
+                    { label: 'Ticket Médio', value: data.kpis.ticket_medio, icon: 'receipt', color: 'purple', tip: 'Faturamento Aprovado ÷ Vendas Totais do período.' },
+                    { label: 'Taxa de Reembolso', value: data.kpis.taxa_reembolso, icon: 'rotate-left', color: 'red', tip: 'Valor reembolsado ÷ faturamento aprovado no período. Não inclui chargeback.' },
+                    { label: 'Representatividade MailX', value: data.kpis.representatividade || '0%', icon: 'percentage', color: 'purple', tip: 'Quanto do faturamento total veio de envios do MailX (email/SMS): Faturamento MailX ÷ Faturamento Aprovado.' },
+                    { label: 'Faturamento MailX', value: data.kpis.faturamento_mailx, icon: 'envelope-open-text', color: 'blue', tip: 'Faturamento atribuído a UTM de origem MailX (email ou SMS), não ao total do cliente.' },
+                    { label: 'Vendas MailX', value: data.kpis.vendas_mailx, icon: 'paper-plane', color: 'green', tip: 'Quantidade de vendas com UTM de origem MailX.' },
+                    { label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0, icon: 'cart-arrow-down', color: 'orange', tip: 'Dessas vendas MailX, quantas vieram de um fluxo de recuperação de carrinho abandonado.' },
+                    { label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00', icon: 'hand-holding-dollar', color: 'green', tip: 'Faturamento só das recuperações de carrinho abandonado acima.' },
                 ]);
 
                 // Conversion Funnel
@@ -1380,19 +1422,19 @@
                 const data = await res.json();
 
                 renderKPI('history-sales-kpis', [
-                    { label: 'Faturamento', value: data.sales.faturamento, icon: 'sack-dollar', color: 'green' },
-                    { label: 'Comissões MailX', value: data.sales.comissoes_mailx, icon: 'hand-holding-dollar', color: 'blue' },
-                    { label: 'Vendas', value: data.sales.vendas, icon: 'bag-shopping', color: 'purple' },
-                    { label: 'Ticket Médio', value: data.sales.ticket_medio, icon: 'receipt', color: 'orange' },
+                    { label: 'Faturamento', value: data.sales.faturamento, icon: 'sack-dollar', color: 'green', tip: 'Faturamento total do histórico importado (dados de antes do MailX rastrear via webhook).' },
+                    { label: 'Comissões MailX', value: data.sales.comissoes_mailx, icon: 'hand-holding-dollar', color: 'blue', tip: 'Comissão da MailX sobre o faturamento importado, conforme contrato do cliente.' },
+                    { label: 'Vendas', value: data.sales.vendas, icon: 'bag-shopping', color: 'purple', tip: 'Quantidade de vendas no histórico importado.' },
+                    { label: 'Ticket Médio', value: data.sales.ticket_medio, icon: 'receipt', color: 'orange', tip: 'Faturamento ÷ Vendas do histórico importado.' },
                 ]);
 
                 renderKPI('history-email-kpis', [
-                    { label: 'Entrada de Contatos', value: data.email.entrada_contatos, icon: 'user-plus', color: 'blue' },
-                    { label: 'CTR', value: data.email.ctr, icon: 'mouse-pointer', color: 'green' },
-                    { label: 'Taxa de Abertura', value: data.email.taxa_abertura, icon: 'envelope-open', color: 'purple' },
-                    { label: 'CTOR', value: data.email.ctor, icon: 'bullseye', color: 'orange' },
-                    { label: 'RPM', value: data.email.rpm, icon: 'chart-line', color: 'blue' },
-                    { label: 'EPC', value: data.email.epc, icon: 'coins', color: 'green' },
+                    { label: 'Entrada de Contatos', value: data.email.entrada_contatos, icon: 'user-plus', color: 'blue', tip: 'Contatos novos criados no ActiveCampaign no período do histórico.' },
+                    { label: 'CTR', value: data.email.ctr, icon: 'mouse-pointer', color: 'green', tip: 'Click-through rate: % de e-mails enviados que geraram pelo menos 1 clique.' },
+                    { label: 'Taxa de Abertura', value: data.email.taxa_abertura, icon: 'envelope-open', color: 'purple', tip: '% de e-mails enviados que foram abertos pelo menos uma vez.' },
+                    { label: 'CTOR', value: data.email.ctor, icon: 'bullseye', color: 'orange', tip: 'Click-to-open rate: % de quem abriu o e-mail que também clicou em algum link.' },
+                    { label: 'RPM', value: data.email.rpm, icon: 'chart-line', color: 'blue', tip: 'Receita por mil e-mails enviados.' },
+                    { label: 'EPC', value: data.email.epc, icon: 'coins', color: 'green', tip: 'Ganho médio por clique.' },
                 ]);
 
                 // Email Performance Chart
@@ -1704,19 +1746,19 @@
                 const data = await res.json();
                 const r = data.revenue || {};
                 renderKPI('email-revenue-kpis', [
-                    { label: 'Faturamento Email', value: r.faturamento_email, icon: 'envelope-open-text', color: 'blue' },
-                    { label: 'Vendas Email', value: r.vendas_email, icon: 'paper-plane', color: 'green' },
-                    { label: 'Recuperações Email', value: r.recuperacoes_email, icon: 'cart-arrow-down', color: 'orange' },
-                    { label: 'Fat. Recuperações Email', value: r.faturamento_recuperacoes_email, icon: 'hand-holding-dollar', color: 'green' },
+                    { label: 'Faturamento Email', value: r.faturamento_email, icon: 'envelope-open-text', color: 'blue', tip: 'Faturamento com UTM de origem email (mailx), somando todos os clientes.' },
+                    { label: 'Vendas Email', value: r.vendas_email, icon: 'paper-plane', color: 'green', tip: 'Quantidade de vendas atribuídas a email.' },
+                    { label: 'Recuperações Email', value: r.recuperacoes_email, icon: 'cart-arrow-down', color: 'orange', tip: 'Dessas vendas de email, quantas vieram de recuperação de carrinho abandonado.' },
+                    { label: 'Fat. Recuperações Email', value: r.faturamento_recuperacoes_email, icon: 'hand-holding-dollar', color: 'green', tip: 'Faturamento só das recuperações de email acima.' },
                 ]);
                 const e = data.email_kpis || {};
                 renderKPI('email-marketing-kpis', [
-                    { label: 'Entrada de Contatos', value: e.entrada_contatos, icon: 'user-plus', color: 'blue' },
-                    { label: 'CTR', value: e.ctr, icon: 'mouse-pointer', color: 'green' },
-                    { label: 'Taxa de Abertura', value: e.taxa_abertura, icon: 'envelope-open', color: 'purple' },
-                    { label: 'CTOR', value: e.ctor, icon: 'bullseye', color: 'orange' },
-                    { label: 'RPM', value: e.rpm, icon: 'chart-line', color: 'blue' },
-                    { label: 'EPC', value: e.epc, icon: 'coins', color: 'green' },
+                    { label: 'Entrada de Contatos', value: e.entrada_contatos, icon: 'user-plus', color: 'blue', tip: 'Contatos novos no ActiveCampaign, somando todos os clientes com integração conectada.' },
+                    { label: 'CTR', value: e.ctr, icon: 'mouse-pointer', color: 'green', tip: 'Click-through rate agregado: % de e-mails enviados que geraram clique.' },
+                    { label: 'Taxa de Abertura', value: e.taxa_abertura, icon: 'envelope-open', color: 'purple', tip: '% de e-mails enviados que foram abertos, agregado entre clientes.' },
+                    { label: 'CTOR', value: e.ctor, icon: 'bullseye', color: 'orange', tip: 'Click-to-open rate agregado.' },
+                    { label: 'RPM', value: e.rpm, icon: 'chart-line', color: 'blue', tip: 'Receita por mil e-mails enviados, agregado.' },
+                    { label: 'EPC', value: e.epc, icon: 'coins', color: 'green', tip: 'Ganho médio por clique, agregado.' },
                 ]);
                 document.getElementById('email-clients-count').textContent = data.clients_with_ac || 0;
                 if (!window.__emailChartsInit) {
@@ -1736,18 +1778,18 @@
                 const data = await res.json();
                 const r = data.revenue || {};
                 renderKPI('sms-revenue-kpis', [
-                    { label: 'Faturamento SMS', value: r.faturamento_sms, icon: 'comment-dollar', color: 'blue' },
-                    { label: 'Vendas SMS', value: r.vendas_sms, icon: 'paper-plane', color: 'green' },
-                    { label: 'Recuperações SMS', value: r.recuperacoes_sms, icon: 'cart-arrow-down', color: 'orange' },
-                    { label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms, icon: 'hand-holding-dollar', color: 'green' },
+                    { label: 'Faturamento SMS', value: r.faturamento_sms, icon: 'comment-dollar', color: 'blue', tip: 'Faturamento com UTM de origem SMS (mailxsms), somando todos os clientes.' },
+                    { label: 'Vendas SMS', value: r.vendas_sms, icon: 'paper-plane', color: 'green', tip: 'Quantidade de vendas atribuídas a SMS.' },
+                    { label: 'Recuperações SMS', value: r.recuperacoes_sms, icon: 'cart-arrow-down', color: 'orange', tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
+                    { label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms, icon: 'hand-holding-dollar', color: 'green', tip: 'Faturamento só das recuperações SMS acima.' },
                 ]);
                 const s = data.sms_kpis || {};
                 renderKPI('sms-marketing-kpis', [
-                    { label: 'Total Contatos', value: s.total_contatos, icon: 'users', color: 'blue' },
-                    { label: 'Créditos Disponíveis', value: s.creditos_disponiveis, icon: 'coins', color: 'green' },
-                    { label: 'Créditos Usados', value: s.creditos_usados, icon: 'paper-plane', color: 'blue' },
-                    { label: 'Total Créditos', value: s.total_creditos, icon: 'database', color: 'purple' },
-                    { label: 'Listas SMS', value: s.listas_sms, icon: 'list', color: 'orange' },
+                    { label: 'Total Contatos', value: s.total_contatos, icon: 'users', color: 'blue', tip: 'Total de contatos SMS no SlickText, somando todos os clientes conectados.' },
+                    { label: 'Créditos Disponíveis', value: s.creditos_disponiveis, icon: 'coins', color: 'green', tip: 'Créditos de SMS restantes, somando os planos de todos os clientes.' },
+                    { label: 'Créditos Usados', value: s.creditos_usados, icon: 'paper-plane', color: 'blue', tip: 'Créditos já consumidos no ciclo atual.' },
+                    { label: 'Total Créditos', value: s.total_creditos, icon: 'database', color: 'purple', tip: 'Limite total de créditos contratado, somando todos os clientes.' },
+                    { label: 'Listas SMS', value: s.listas_sms, icon: 'list', color: 'orange', tip: 'Quantidade de listas SlickText criadas, somando todos os clientes.' },
                 ]);
                 document.getElementById('sms-clients-count').textContent = data.clients_with_st || 0;
             } catch (err) {
