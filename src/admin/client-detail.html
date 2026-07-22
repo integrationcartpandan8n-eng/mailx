@@ -833,6 +833,48 @@
         .kpi-card .kpi-icon.red { color: var(--danger); }
         .kpi-card .kpi-icon.orange { color: var(--warning); }
 
+        /* Tooltip de explicação nos KPIs — ícone (ⓘ) ao lado do label */
+        .kpi-tip {
+            display: inline-block;
+            position: relative;
+            cursor: help;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: normal;
+        }
+        .kpi-tip::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: #10131c;
+            color: #fff;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.5rem 0.65rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            line-height: 1.4;
+            text-transform: none;
+            letter-spacing: normal;
+            width: max-content;
+            max-width: 220px;
+            white-space: normal;
+            text-align: left;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease;
+            z-index: 20;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .kpi-tip:hover::after,
+        .kpi-tip:focus::after {
+            opacity: 1;
+        }
+
         /* Activity Chart */
         .chart-wrap-sm {
             height: 120px;
@@ -1137,6 +1179,8 @@
                     <div id="emailEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                         Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
                     </div>
+                    <div id="emailEngagementError" style="display:none; padding:0.75rem; background:var(--danger-bg, rgba(239,68,68,0.1)); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--danger)">
+                    </div>
                     <div id="emailEngagementLimited" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                         ⚠ Engajamento sempre mostra os últimos 30 dias — a API do ActiveCampaign não permite escolher um intervalo de datas específico no passado.
                     </div>
@@ -1289,6 +1333,8 @@
                         <div id="emailTabEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                             Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
                         </div>
+                        <div id="emailTabEngagementError" style="display:none; padding:0.75rem; background:var(--danger-bg, rgba(239,68,68,0.1)); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--danger)">
+                        </div>
                         <div id="emailTabEngagementLimited" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                             ⚠ Engajamento sempre mostra os últimos 30 dias — a API do ActiveCampaign não permite escolher um intervalo de datas específico no passado.
                         </div>
@@ -1313,6 +1359,9 @@
 
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
         <div id="tab-content-sms" style="display:none">
+            <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
+                ⚠ Todos os números desta aba (faturamento, vendas, contatos, créditos) são o total vitalício/atual do SlickText — ainda não respeitam o filtro de período selecionado acima.
+            </div>
             <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
@@ -2227,6 +2276,7 @@
                     pending: 'emailEngagementPending',
                     badge: 'emailEngagementBadge',
                     limited: 'emailEngagementLimited',
+                    error: 'emailEngagementError',
                 });
                 loadEmailTabStats(window.__clientStatsData);
             } catch (e) {
@@ -2478,9 +2528,20 @@
             section.style.display = hasRefundTracking ? '' : 'none';
         }
 
+        // Textos explicativos dos KPIs de email — mesmo hint em qualquer lugar que reusar kpiCard()
+        const EMAIL_KPI_HINTS = {
+            'Entrada de Contatos': 'Contatos novos criados no ActiveCampaign no período selecionado.',
+            'CTR': 'Click-through rate: % de e-mails enviados que geraram pelo menos 1 clique.',
+            'Taxa de Abertura': '% de e-mails enviados que foram abertos pelo menos uma vez.',
+            'CTOR': 'Click-to-open rate: % de quem abriu o e-mail que também clicou em algum link.',
+            'RPM': 'Receita por mil e-mails enviados (faturamento MailX ÷ envios × 1000).',
+            'EPC': 'Ganho médio por clique (faturamento MailX ÷ cliques únicos).',
+        };
+
         function renderEmailMarketingKpis(data, ids) {
             const em = data.email || {};
-            const acConfigured = window.__clientAcConfigured;
+            // status vem do backend: 'ok' | 'error' | 'not_configured' — mais preciso que só "tem credencial"
+            const status = em.status || (window.__clientAcConfigured ? 'ok' : 'not_configured');
             const contactsEl = document.getElementById(ids.contacts);
             const engagementEl = document.getElementById(ids.engagement);
             const pendingEl = document.getElementById(ids.pending);
@@ -2491,7 +2552,7 @@
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                     <div class="kpi-value">${k.value}</div>
-                    <div class="kpi-label">${k.label}</div>
+                    <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                 </div>
             `;
 
@@ -2499,24 +2560,34 @@
                 icon: 'fa-user-plus blue',
                 label: 'Entrada de Contatos',
                 value: em.entrada_contatos || '--',
+                tip: EMAIL_KPI_HINTS['Entrada de Contatos'],
             });
 
-            const engagementUnavailable = !acConfigured;
-            if (badgeEl) badgeEl.textContent = engagementUnavailable ? 'Requer ActiveCampaign' : '';
+            const engagementUnavailable = status === 'not_configured';
+            const engagementError = status === 'error';
+            if (badgeEl) badgeEl.textContent = engagementUnavailable ? 'Requer ActiveCampaign' : (engagementError ? 'Erro de conexão' : '');
             if (pendingEl) pendingEl.style.display = engagementUnavailable ? 'block' : 'none';
+
+            const errorEl = ids.error ? document.getElementById(ids.error) : null;
+            if (errorEl) {
+                errorEl.style.display = engagementError ? 'block' : 'none';
+                errorEl.textContent = engagementError ? `⚠ ${em.status_message || 'Erro ao conectar com o ActiveCampaign.'}` : '';
+            }
 
             const limitedEl = ids.limited ? document.getElementById(ids.limited) : null;
             if (limitedEl) {
-                limitedEl.style.display = (!engagementUnavailable && em.ac_period_limited) ? 'block' : 'none';
+                limitedEl.style.display = (status === 'ok' && em.ac_period_limited) ? 'block' : 'none';
             }
 
-            const dash = '<span style="color:var(--text-dim); cursor:help" title="Requer integração ActiveCampaign">—</span>';
+            const dashUnavailable = '<span style="color:var(--text-dim); cursor:help" title="Requer integração ActiveCampaign">—</span>';
+            const dashError = '<span style="color:var(--danger); cursor:help" title="Erro ao conectar com o ActiveCampaign">—</span>';
+            const dash = engagementUnavailable ? dashUnavailable : (engagementError ? dashError : null);
             engagementEl.innerHTML = [
-                { icon: 'fa-mouse-pointer green', label: 'CTR', value: engagementUnavailable ? dash : (em.ctr || '—') },
-                { icon: 'fa-envelope-open purple', label: 'Taxa de Abertura', value: engagementUnavailable ? dash : (em.taxa_abertura || '—') },
-                { icon: 'fa-bullseye orange', label: 'CTOR', value: engagementUnavailable ? dash : (em.ctor || '—') },
-                { icon: 'fa-chart-line blue', label: 'RPM', value: engagementUnavailable ? dash : (em.rpm || '—') },
-                { icon: 'fa-coins green', label: 'EPC', value: engagementUnavailable ? dash : (em.epc || '—') },
+                { icon: 'fa-mouse-pointer green', label: 'CTR', value: dash || (em.ctr || '—'), tip: EMAIL_KPI_HINTS['CTR'] },
+                { icon: 'fa-envelope-open purple', label: 'Taxa de Abertura', value: dash || (em.taxa_abertura || '—'), tip: EMAIL_KPI_HINTS['Taxa de Abertura'] },
+                { icon: 'fa-bullseye orange', label: 'CTOR', value: dash || (em.ctor || '—'), tip: EMAIL_KPI_HINTS['CTOR'] },
+                { icon: 'fa-chart-line blue', label: 'RPM', value: dash || (em.rpm || '—'), tip: EMAIL_KPI_HINTS['RPM'] },
+                { icon: 'fa-coins green', label: 'EPC', value: dash || (em.epc || '—'), tip: EMAIL_KPI_HINTS['EPC'] },
             ].map(kpiCard).join('');
         }
 
@@ -2547,38 +2618,33 @@
                 const kpiGrid = document.getElementById('clientKpis');
                 const stores = data.stores || [];
                 const hasCartPandaTracking = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
-                const kpiItems = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento', value: data.kpis.faturamento },
-                    { icon: 'fa-bag-shopping blue', label: 'Vendas', value: data.kpis.vendas },
-                    { icon: 'fa-receipt purple', label: 'Ticket Médio', value: data.kpis.ticket_medio },
-                    { icon: 'fa-satellite-dish blue', label: 'Webhooks Total', value: data.kpis.webhooks_total },
-                    { icon: 'fa-bolt orange', label: 'Webhooks Hoje', value: data.kpis.webhooks_hoje },
-                    ...(hasCartPandaTracking ? [{ icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso }] : []),
-                    { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos },
-                    { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas },
-                ];
-                kpiGrid.innerHTML = kpiItems.map(k => `
+                const kpiCardTip = (k) => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                         <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
+                        <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                     </div>
-                `).join('');
+                `;
+                const kpiItems = [
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento', value: data.kpis.faturamento, tip: 'Soma de todas as vendas aprovadas no período, de qualquer gateway (CartPanda, Digistore24, ClickBank).' },
+                    { icon: 'fa-bag-shopping blue', label: 'Vendas', value: data.kpis.vendas, tip: 'Quantidade de pedidos aprovados (order.paid) no período.' },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio', value: data.kpis.ticket_medio, tip: 'Faturamento ÷ número de vendas do período.' },
+                    { icon: 'fa-satellite-dish blue', label: 'Webhooks Total', value: data.kpis.webhooks_total, tip: 'Total de eventos recebidos de todos os gateways (venda, reembolso, abandono, cartão recusado etc).' },
+                    { icon: 'fa-bolt orange', label: 'Webhooks Hoje', value: data.kpis.webhooks_hoje, tip: 'Quantos desses eventos chegaram nas últimas 24h — útil pra ver se a integração está ativa.' },
+                    ...(hasCartPandaTracking ? [{ icon: 'fa-check-circle green', label: 'Taxa de Conversão', value: data.kpis.taxa_sucesso, tip: 'Vendas aprovadas ÷ total de tentativas de checkout no CartPanda.' }] : []),
+                    { icon: 'fa-rotate-left red', label: 'Reembolsos', value: data.kpis.reembolsos, tip: 'Quantidade de reembolsos registrados no período (não inclui chargeback).' },
+                    { icon: 'fa-store purple', label: 'Lojas', value: data.kpis.lojas_integradas, tip: 'Quantas lojas/gateways este cliente tem conectados ao MailX.' },
+                ];
+                kpiGrid.innerHTML = kpiItems.map(kpiCardTip).join('');
 
                 // Render MailX KPIs
                 const mailxGrid = document.getElementById('mailxKpis');
                 mailxGrid.innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || '$ 0,00' },
-                    { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx || 0 },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0 },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00' },
-                ].map(k => `
-                    <div class="kpi-card">
-                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
-                    </div>
-                `).join('');
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento MailX', value: data.kpis.faturamento_mailx || '$ 0,00', tip: 'Faturamento atribuído a envios do MailX (UTM de automação/campanha), não ao faturamento total do cliente.' },
+                    { icon: 'fa-bag-shopping blue', label: 'Vendas MailX', value: data.kpis.vendas_mailx || 0, tip: 'Vendas com UTM de origem MailX (email ou SMS), dentro do faturamento total acima.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações', value: data.kpis.recuperacoes_mailx || 0, tip: 'Vendas MailX que vieram de um fluxo de recuperação de carrinho abandonado.' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações', value: data.kpis.faturamento_recuperacoes || '$ 0,00', tip: 'Faturamento só das vendas de recuperação acima.' },
+                ].map(kpiCardTip).join('');
 
                 window.__clientStatsData = data;
 
@@ -2589,6 +2655,7 @@
                     pending: 'emailEngagementPending',
                     badge: 'emailEngagementBadge',
                     limited: 'emailEngagementLimited',
+                    error: 'emailEngagementError',
                 });
 
                 // Render Top 5 Products chart
@@ -2854,20 +2921,22 @@
                     return;
                 }
 
-                // SMS Revenue KPIs (mailxsms UTM-attributed)
-                const r = data.revenue || {};
-                document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00' },
-                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00' },
-                ].map(k => `
+                const smsKpiCardTip = (k) => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                         <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
+                        <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                     </div>
-                `).join('');
+                `;
+
+                // SMS Revenue KPIs (mailxsms UTM-attributed)
+                const r = data.revenue || {};
+                document.getElementById('smsRevenueKpis').innerHTML = [
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms) — total vitalício, ainda não respeita o filtro de período.' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS — total vitalício.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
+                ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
                 const c = data.contacts || {};
@@ -2875,31 +2944,19 @@
                 const brandTotal = c.analytics?.totals?.total ?? 0;
                 const totalContatos = brandTotal || (c.total || 0);
                 document.getElementById('smsContactKpis').innerHTML = [
-                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR') },
-                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR') },
-                ].map(k => `
-                    <div class="kpi-card">
-                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
-                    </div>
-                `).join('');
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: 'Total de contatos SMS da marca no SlickText (independe de período).' },
+                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de compra aprovada, por produto.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de carrinho abandonado, por produto.' },
+                ].map(smsKpiCardTip).join('');
 
                 // Credits/Messages KPIs
                 const credits = data.credits?.usage || {};
                 document.getElementById('smsSendKpis').innerHTML = [
-                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR') },
-                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0 },
-                ].map(k => `
-                    <div class="kpi-card">
-                        <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
-                        <div class="kpi-label">${k.label}</div>
-                    </div>
-                `).join('');
+                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR'), tip: 'Créditos de SMS restantes no plano SlickText do cliente.' },
+                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR'), tip: 'Créditos já consumidos no ciclo atual do plano.' },
+                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR'), tip: 'Limite total de créditos do plano contratado.' },
+                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0, tip: 'Quantidade de listas criadas no SlickText para este cliente.' },
+                ].map(smsKpiCardTip).join('');
 
                 // Lists per product table
                 const listStats = data.lists?.per_product || [];
@@ -3172,6 +3229,7 @@
                 pending: 'emailTabEngagementPending',
                 badge: 'emailTabEngagementBadge',
                 limited: 'emailTabEngagementLimited',
+                error: 'emailTabEngagementError',
             });
 
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral

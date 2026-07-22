@@ -1347,6 +1347,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     rpm: '--' as string,
     epc: '--' as string,
     ac_period_limited: acPeriodLimited,
+    status: 'not_configured' as 'not_configured' | 'error' | 'ok',
+    status_message: 'ActiveCampaign não configurado para este cliente.' as string,
   };
   const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
     `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
@@ -1371,8 +1373,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       emailMetrics.ctor = `${ctor.toFixed(2)}%`;
       emailMetrics.rpm = fmtBRL(rpm);
       emailMetrics.epc = fmtBRL(epc);
+      emailMetrics.status = 'ok';
+      emailMetrics.status_message = '';
     } catch (err: any) {
       logger.warn(CTX, `Failed to fetch AC stats for client ${clientId}: ${err.message}`);
+      emailMetrics.status = 'error';
+      emailMetrics.status_message = 'Erro ao conectar com o ActiveCampaign — verifique as credenciais ou tente novamente em instantes.';
     }
   }
 
