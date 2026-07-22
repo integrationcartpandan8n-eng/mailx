@@ -985,9 +985,6 @@
             </button>
         </div>
 
-        <!-- ═══ TAB: VISÃO GERAL (Email + SMS consolidated) ═══ -->
-        <div id="tab-content-geral">
-
         <div class="global-period-bar" id="globalPeriodControl">
             <div class="gp-left">
                 <i class="fas fa-calendar-days gp-icon"></i>
@@ -1047,6 +1044,9 @@
                 </div>
             </div>
         </div>
+
+        <!-- ═══ TAB: VISÃO GERAL (Email + SMS consolidated) ═══ -->
+        <div id="tab-content-geral">
 
         <!-- ═══ Per-Client KPIs ═══ -->
         <div class="card">
@@ -1136,6 +1136,9 @@
                     </h4>
                     <div id="emailEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                         Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
+                    </div>
+                    <div id="emailEngagementLimited" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
+                        ⚠ Engajamento sempre mostra os últimos 30 dias — a API do ActiveCampaign não permite escolher um intervalo de datas específico no passado.
                     </div>
                     <div class="kpi-grid" id="emailEngagementKpis">
                         <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
@@ -1285,6 +1288,9 @@
                         </h4>
                         <div id="emailTabEngagementPending" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
                             Configure a integração com ActiveCampaign para ver CTR, Taxa de Abertura, CTOR, RPM e EPC.
+                        </div>
+                        <div id="emailTabEngagementLimited" style="display:none; padding:0.75rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:0.75rem; font-size:0.78rem; color:var(--text-dim)">
+                            ⚠ Engajamento sempre mostra os últimos 30 dias — a API do ActiveCampaign não permite escolher um intervalo de datas específico no passado.
                         </div>
                         <div class="kpi-grid" id="emailTabEngagementKpis">
                             <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
@@ -2196,6 +2202,36 @@
                 loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime);
             }
             loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime });
+            reloadClientStatsForPeriod(from, to, timeOpts);
+        }
+
+        async function reloadClientStatsForPeriod(from, to, timeOpts = {}) {
+            try {
+                const params = new URLSearchParams();
+                if (from && to) {
+                    params.set('from', from);
+                    params.set('to', to);
+                }
+                appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
+                const res = await fetch(`${API}/clientes/${clientId}/stats?${params}`);
+                const data = await res.json();
+                if (window.__clientStatsData) {
+                    window.__clientStatsData.email = data.email;
+                    window.__clientStatsData.email_mailx = data.email_mailx;
+                } else {
+                    window.__clientStatsData = data;
+                }
+                renderEmailMarketingKpis(window.__clientStatsData, {
+                    contacts: 'emailContactsKpis',
+                    engagement: 'emailEngagementKpis',
+                    pending: 'emailEngagementPending',
+                    badge: 'emailEngagementBadge',
+                    limited: 'emailEngagementLimited',
+                });
+                loadEmailTabStats(window.__clientStatsData);
+            } catch (e) {
+                console.error('Failed to reload client stats for period:', e);
+            }
         }
 
         function initGlobalPeriodControl() {
@@ -2469,6 +2505,11 @@
             if (badgeEl) badgeEl.textContent = engagementUnavailable ? 'Requer ActiveCampaign' : '';
             if (pendingEl) pendingEl.style.display = engagementUnavailable ? 'block' : 'none';
 
+            const limitedEl = ids.limited ? document.getElementById(ids.limited) : null;
+            if (limitedEl) {
+                limitedEl.style.display = (!engagementUnavailable && em.ac_period_limited) ? 'block' : 'none';
+            }
+
             const dash = '<span style="color:var(--text-dim); cursor:help" title="Requer integração ActiveCampaign">—</span>';
             engagementEl.innerHTML = [
                 { icon: 'fa-mouse-pointer green', label: 'CTR', value: engagementUnavailable ? dash : (em.ctr || '—') },
@@ -2547,6 +2588,7 @@
                     engagement: 'emailEngagementKpis',
                     pending: 'emailEngagementPending',
                     badge: 'emailEngagementBadge',
+                    limited: 'emailEngagementLimited',
                 });
 
                 // Render Top 5 Products chart
@@ -3129,6 +3171,7 @@
                 engagement: 'emailTabEngagementKpis',
                 pending: 'emailTabEngagementPending',
                 badge: 'emailTabEngagementBadge',
+                limited: 'emailTabEngagementLimited',
             });
 
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral

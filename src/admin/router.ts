@@ -1144,8 +1144,26 @@ adminRouter.get('/clientes/:id/dns', asyncHandler(async (req: Request, res: Resp
 // GET /admin/clientes/:id/stats - Per-client KPIs and activity
 adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
   const currency = await resolveClientCurrency(clientId);
   const symbol = currencySymbol(currency);
+
+  let emailDateFilter = '';
+  const emailMailxParams: (string | number)[] = [clientId];
+  let periodFrom: string | undefined;
+  let periodTo: string | undefined;
+
+  if (from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to)) {
+    const range = validateYmdRange(from, to);
+    if (!('error' in range)) {
+      periodFrom = from;
+      periodTo = to;
+      emailMailxParams.push(from, to);
+      emailDateFilter = ` AND ${createdAtRangeSqlAt(emailMailxParams, 2, 3, hasTime, fromTime, toTime)}`;
+    }
+  }
 
   // Get all store slugs for this client to filter webhook_logs
   const stores = await query<{ shop_slug: string, platform: string }>(
@@ -1207,13 +1225,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
-  `, [clientId]);
+      ${emailDateFilter}
+  `, emailMailxParams);
   const emailMailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
       AND ${SQL_IS_RECOVERY}
-  `, [clientId]);
+      ${emailDateFilter}
+  `, emailMailxParams);
 
   // Top 5 products — filtered by client_id
   const topProducts = await query<{ name: string, count: string, revenue: string }>(`
@@ -1312,7 +1332,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
 
-  // ── Email Marketing KPIs (ActiveCampaign reporting, last 30 days) ──
+  // ── Email Marketing KPIs (ActiveCampaign reporting) ──
+  const today = new Date().toISOString().slice(0, 10);
+  const acDaysBack = (periodTo && periodTo === today && periodFrom)
+    ? Math.round((parseYmd(periodTo).getTime() - parseYmd(periodFrom).getTime()) / 86400000) + 1
+    : 30;
+  const acPeriodLimited = !!(periodFrom && periodTo && periodTo !== today);
+
   const emailMetrics = {
     entrada_contatos: '--' as string,
     ctr: '--' as string,
@@ -1320,6 +1346,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ctor: '--' as string,
     rpm: '--' as string,
     epc: '--' as string,
+    ac_period_limited: acPeriodLimited,
   };
   const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
     `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
@@ -1328,8 +1355,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     try {
       const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
       const [agg, newContacts] = await Promise.all([
-        ac.getCampaignsAggregate(30),
-        ac.getNewContactsCount(30),
+        ac.getCampaignsAggregate(acDaysBack),
+        ac.getNewContactsCount(acDaysBack),
       ]);
       const mailxRev = parseFloat(emailMailxData?.revenue || '0');
       const ctr = agg.send_amt > 0 ? (agg.uniquelinkclicks / agg.send_amt) * 100 : 0;
