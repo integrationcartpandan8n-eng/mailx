@@ -1739,8 +1739,8 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
 // GET /admin/clientes/:id/sms-campaign-map - Lista os vínculos manuais utm_campaign -> campaign/workflow_id da SlickText
 adminRouter.get('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const rows = await query<{ utm_campaign: string; slicktext_campaign_id: number; source_type: string }>(
-    `SELECT utm_campaign, slicktext_campaign_id, source_type FROM sms_campaign_map WHERE client_id = $1`,
+  const rows = await query<{ utm_campaign: string; slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null }>(
+    `SELECT utm_campaign, slicktext_campaign_id, source_type, workflow_node_id FROM sms_campaign_map WHERE client_id = $1`,
     [clientId]
   );
   res.json({ mappings: rows });
@@ -1750,10 +1750,15 @@ adminRouter.get('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Reque
 // SlickText. Preenchido manualmente (não há como descobrir isso via API — ver countCampaignMessages).
 // source_type: 'Campaign' (disparo manual em massa) ou 'Workflow' (automação — o caso comum do MailX,
 // confirmado inspecionando o painel da SlickText). Default 'Campaign' por compatibilidade com vínculos antigos.
+// workflow_node_id (opcional): quando o workflow tem VÁRIAS mensagens sequenciais (ex: MS0001A/02A/03A no
+// mesmo fluxo), esse é o ID da mensagem específica dentro do workflow — confirmado via
+// GET /analytics/workflows/{workflow_id}/nodes/{node_id}, que devolve envios/cliques só daquela mensagem,
+// já filtrado por período. Sem isso, a contagem é do workflow inteiro (pode somar várias mensagens juntas).
 adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const { utm_campaign, slicktext_campaign_id, source_type } = req.body;
+  const { utm_campaign, slicktext_campaign_id, source_type, workflow_node_id } = req.body;
   const sourceType = source_type === 'Workflow' ? 'Workflow' : 'Campaign';
+  const nodeId = Number.isInteger(workflow_node_id) ? workflow_node_id : null;
 
   if (!utm_campaign || !Number.isInteger(slicktext_campaign_id)) {
     res.status(400).json({ error: 'utm_campaign (string) e slicktext_campaign_id (inteiro) são obrigatórios' });
@@ -1761,52 +1766,14 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   }
 
   await query(
-    `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
+    `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
      ON CONFLICT (client_id, utm_campaign)
-     DO UPDATE SET slicktext_campaign_id = $3, source_type = $4, updated_at = NOW()`,
-    [clientId, utm_campaign, slicktext_campaign_id, sourceType]
+     DO UPDATE SET slicktext_campaign_id = $3, source_type = $4, workflow_node_id = $5, updated_at = NOW()`,
+    [clientId, utm_campaign, slicktext_campaign_id, sourceType, nodeId]
   );
 
   res.json({ ok: true });
-}));
-
-// GET /admin/clientes/:id/sms-debug/workflow-analytics/:workflowId - DIAGNÓSTICO: testa várias
-// variantes plausíveis de path pra analytics de workflow na SlickText de uma vez só (evita ida e
-// volta de deploy a cada tentativa). /analytics/workflows/{id} já confirmado 404 — essa versão
-// tenta as próximas candidatas mais prováveis por analogia com o resto da API (/lists/{id}/... etc).
-// Remover depois de confirmado qual (se algum) funciona — não é uma rota de produto.
-adminRouter.get('/clientes/:id/sms-debug/workflow-analytics/:workflowId', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const workflowId = parseInt(req.params.workflowId as string, 10);
-  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-  );
-  if (!client?.st_api_token || !client?.st_brand_id) {
-    res.status(400).json({ error: 'SlickText não configurado para este cliente.' });
-    return;
-  }
-
-  const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-  const candidates = [
-    `/workflows/${workflowId}`,
-    `/workflows/${workflowId}/analytics`,
-    `/workflows/${workflowId}/messages`,
-    `/workflows/${workflowId}/stats`,
-    `/analytics/workflow/${workflowId}`,
-    `/analytics/workflows/${workflowId}/messages`,
-  ];
-
-  const results = await Promise.all(candidates.map(async (path) => {
-    try {
-      const data = await st.rawGet(path);
-      return { path, ok: true, data };
-    } catch (err: any) {
-      return { path, ok: false, status: err.response?.status, error: err.message, data: err.response?.data };
-    }
-  }));
-
-  res.json({ results });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows da SlickText (id + nome) pra
@@ -1844,9 +1811,34 @@ adminRouter.get('/clientes/:id/sms-campaigns', asyncHandler(async (req: Request,
   res.json({ configured: true, campaigns, workflows, error: errors.length ? errors.join('; ') : undefined });
 }));
 
-// GET /admin/clientes/:id/sms-campaign-sends - Conta envios reais de uma mensagem de automação,
-// paginando a API da SlickText. Sob demanda (não entra no /sms-granular) porque pode ser lento
-// pra campanhas com muitas mensagens.
+/**
+ * Resolve o período da request (mesma lógica de resolvePeriodFilter/"Hoje" via CURRENT_DATE)
+ * pro formato de data que a API de analytics da SlickText espera: "YYYY-MM-DD HH:mm:ss".
+ * Sem período ativo (lifetime), usa uma janela bem larga — a SlickText exige start/end.
+ */
+async function resolveSlickTextDateRange(req: Request): Promise<{ start: string; end: string }> {
+  const period = resolvePeriodFilter(req);
+  if (period.isToday) {
+    const todayRow = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+    const today = todayRow?.today || new Date().toISOString().slice(0, 10);
+    return { start: `${today} 00:00:00`, end: `${today} 23:59:59` };
+  }
+  if (period.from && period.to) {
+    return { start: `${period.from} 00:00:00`, end: `${period.to} 23:59:59` };
+  }
+  return { start: '2000-01-01 00:00:00', end: '2100-01-01 00:00:00' };
+}
+
+// GET /admin/clientes/:id/sms-campaign-sends - Conta envios/cliques reais de uma mensagem de
+// automação no período selecionado, via analytics da SlickText — CONFIRMADO contra a API real
+// (capturado inspecionando o Network da própria tela de Analytics da SlickText):
+//   - workflow_node_id vinculado: GET /analytics/workflows/{workflow_id}/nodes/{node_id} — só
+//     essa mensagem específica dentro do workflow (resolve o caso de várias mensagens
+//     sequenciais compartilhando o mesmo workflow, ex: MS0001A/02A/03A).
+//   - sem workflow_node_id (source_type=Workflow): GET /analytics/workflows?_workflow_id=X —
+//     total do workflow inteiro (pode somar mais de uma mensagem, se houver).
+//   - source_type=Campaign: mantém a contagem antiga via paginação de /messages (a API não tem
+//     um endpoint de analytics equivalente confirmado pra Campaign avulsa ainda).
 adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
   const utmCampaign = req.query.utm_campaign as string | undefined;
@@ -1856,8 +1848,8 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
     return;
   }
 
-  const mapping = await queryOne<{ slicktext_campaign_id: number; source_type: string }>(
-    `SELECT slicktext_campaign_id, source_type FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
+  const mapping = await queryOne<{ slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null }>(
+    `SELECT slicktext_campaign_id, source_type, workflow_node_id FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
     [clientId, utmCampaign]
   );
 
@@ -1874,13 +1866,49 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
     return;
   }
 
+  const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+  const sourceType = mapping.source_type === 'Workflow' ? 'Workflow' : 'Campaign';
+
   try {
-    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-    const sourceType = mapping.source_type === 'Workflow' ? 'Workflow' : 'Campaign';
-    const result = await st.countCampaignMessages(mapping.slicktext_campaign_id, { sourceType });
-    res.json({ linked: true, sourceType, ...result });
+    if (sourceType === 'Workflow') {
+      const { start, end } = await resolveSlickTextDateRange(req);
+      if (mapping.workflow_node_id) {
+        const data = await st.getWorkflowNodeAnalytics(mapping.slicktext_campaign_id, mapping.workflow_node_id, start, end);
+        const t = data?.totals || {};
+        res.json({
+          linked: true,
+          sourceType,
+          scope: 'node',
+          count: t.messages ?? 0,
+          clicks: t.clicks ?? 0,
+          uniqueClicks: t.unique_clicks ?? 0,
+          clicksFieldFound: true,
+          capped: false,
+          pages: 1,
+          nodeName: data?.workflow_node?.name,
+        });
+      } else {
+        const data = await st.getWorkflowAnalytics(mapping.slicktext_campaign_id, start, end);
+        const t = data?.totals || {};
+        res.json({
+          linked: true,
+          sourceType,
+          scope: 'workflow',
+          count: t.messages ?? 0,
+          clicks: t.clicks ?? 0,
+          uniqueClicks: t.unique_clicks ?? 0,
+          clicksFieldFound: true,
+          capped: false,
+          pages: 1,
+          workflowName: data?.workflow?.name,
+        });
+      }
+    } else {
+      const result = await st.countCampaignMessages(mapping.slicktext_campaign_id, { sourceType });
+      res.json({ linked: true, sourceType, scope: 'campaign-pagination', ...result });
+    }
   } catch (err: any) {
-    logger.error(CTX, `Falha ao contar envios de ${mapping.source_type} ${mapping.slicktext_campaign_id} (client ${clientId}): ${err.message}`);
+    logger.error(CTX, `Falha ao contar envios de ${mapping.source_type}${mapping.workflow_node_id ? `/node ${mapping.workflow_node_id}` : ''} ${mapping.slicktext_campaign_id} (client ${clientId}): ${err.message}`);
     res.json({ linked: true, count: null, message: `Erro ao consultar SlickText: ${err.message}` });
   }
 }));

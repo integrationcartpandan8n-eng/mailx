@@ -198,6 +198,13 @@ export async function initDatabase(): Promise<void> {
         -- disparos em massa manuais. slicktext_campaign_id guarda o ID de qualquer um dos
         -- dois tipos; source_type diz qual valor de source usar em GET /messages.
         ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'Campaign';
+
+        -- Confirmado via análise de rede real da SlickText: quando um workflow tem várias
+        -- mensagens sequenciais (ex: MS0001A/02A/03A no mesmo fluxo de abandono), cada uma tem
+        -- seu próprio workflow_node_id, com envios/cliques SEPARADOS e filtráveis por período
+        -- (GET /analytics/workflows/{workflow_id}/nodes/{node_id}). Quando presente, essa coluna
+        -- tem prioridade sobre slicktext_campaign_id (que nesse caso guarda o workflow_id "pai").
+        ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS workflow_node_id INTEGER;
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
