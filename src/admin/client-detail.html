@@ -1738,6 +1738,21 @@
         </div>
     </div>
 
+    <!-- Modal: vincular campanha SlickText -->
+    <div class="modal-overlay" id="linkCampaignModal">
+        <div class="modal">
+            <h3><i class="fas fa-link" style="color:var(--accent-light); margin-right:0.4rem"></i>Vincular campanha SlickText</h3>
+            <p style="margin-bottom:0.5rem" id="linkCampaignMessageLabel"></p>
+            <p>Informe o <b>campaign_id</b> numérico da SlickText que corresponde a esta mensagem, pra contar envios e cliques reais.</p>
+            <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 3333" class="gp-date-field-input" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit; margin-top:0.75rem">
+            <div id="linkCampaignError" style="display:none; color:var(--danger); font-size:0.75rem; margin-top:0.5rem"></div>
+            <div class="modal-actions">
+                <button class="btn btn-outline" onclick="closeLinkCampaignModal()">Cancelar</button>
+                <button class="btn btn-accent" onclick="submitLinkCampaign()">Vincular</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API = '/admin';
         const clientId = new URLSearchParams(window.location.search).get('id');
@@ -3235,12 +3250,38 @@
             if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign, vendas);
         }
 
-        async function linkSmsCampaign(utmCampaign) {
-            const idStr = prompt('ID da campanha na SlickText (campaign_id numérico) pra vincular a esta mensagem:');
-            if (!idStr) return;
+        window.__linkCampaignTarget = null;
+
+        function linkSmsCampaign(utmCampaign) {
+            window.__linkCampaignTarget = utmCampaign;
+            const label = document.getElementById('linkCampaignMessageLabel');
+            const input = document.getElementById('linkCampaignInput');
+            const err = document.getElementById('linkCampaignError');
+            if (label) label.innerHTML = `Mensagem: <b>${escapeHtml(utmCampaign)}</b>`;
+            if (err) err.style.display = 'none';
+            if (input) input.value = '';
+            document.getElementById('linkCampaignModal').classList.add('show');
+            setTimeout(() => input?.focus(), 50);
+        }
+
+        function closeLinkCampaignModal() {
+            document.getElementById('linkCampaignModal').classList.remove('show');
+            window.__linkCampaignTarget = null;
+        }
+
+        document.getElementById('linkCampaignInput')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submitLinkCampaign();
+        });
+
+        async function submitLinkCampaign() {
+            const utmCampaign = window.__linkCampaignTarget;
+            if (!utmCampaign) return;
+            const input = document.getElementById('linkCampaignInput');
+            const err = document.getElementById('linkCampaignError');
+            const idStr = (input?.value || '').trim();
             const campaignId = parseInt(idStr, 10);
-            if (!Number.isInteger(campaignId)) {
-                alert('Precisa ser um número inteiro (o campaign_id, ex: 3333).');
+            if (!idStr || !Number.isInteger(campaignId) || String(campaignId) !== idStr) {
+                if (err) { err.textContent = 'Precisa ser um número inteiro (o campaign_id, ex: 3333).'; err.style.display = 'block'; }
                 return;
             }
             try {
@@ -3249,11 +3290,12 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId }),
                 });
+                closeLinkCampaignModal();
                 delete window.__smsSendsCache[utmCampaign];
                 const row = (window.__smsGranularData?.rows || []).find(r => r.utm_campaign === utmCampaign);
                 loadSmsCampaignSends(utmCampaign, row?.vendas || 0);
             } catch (e) {
-                alert('Falha ao salvar o vínculo. Tenta de novo.');
+                if (err) { err.textContent = 'Falha ao salvar o vínculo. Tenta de novo.'; err.style.display = 'block'; }
             }
         }
 
