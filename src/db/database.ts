@@ -179,9 +179,9 @@ export async function initDatabase(): Promise<void> {
           ON webhook_logs (utm_source) WHERE utm_source IS NOT NULL;
 
         -- Mapeamento manual: nossa tag interna de mensagem (ex: "CarrinhoAbandonado-MS0001A-Produto",
-        -- a mesma chave usada no agrupamento do SMS granular) -> campaign_id real da SlickText.
-        -- Não existe forma automática de descobrir isso (a API da SlickText não expõe
-        -- automações/workflows, só campaigns avulsas) — preenchido manualmente uma vez por produto.
+        -- a mesma chave usada no agrupamento do SMS granular) -> campaign_id OU workflow_id real da
+        -- SlickText (ver coluna source_type abaixo). Não existe forma automática de descobrir qual
+        -- workflow/campanha corresponde a qual mensagem — preenchido manualmente uma vez por produto.
         CREATE TABLE IF NOT EXISTS sms_campaign_map (
           id SERIAL PRIMARY KEY,
           client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
@@ -192,6 +192,12 @@ export async function initDatabase(): Promise<void> {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_campaign_map_unique
           ON sms_campaign_map (client_id, utm_campaign);
+
+        -- Confirmado com o Nicollas (inspecionando o painel da SlickText) que as automações
+        -- do MailX sao disparadas via Workflow, nao via Campaign avulsa -- Campaign e so pra
+        -- disparos em massa manuais. slicktext_campaign_id guarda o ID de qualquer um dos
+        -- dois tipos; source_type diz qual valor de source usar em GET /messages.
+        ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'Campaign';
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
