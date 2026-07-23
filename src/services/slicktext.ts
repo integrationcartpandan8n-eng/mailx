@@ -272,25 +272,30 @@ export class SlickTextClient {
   }
 
   /**
-   * Conta o total de mensagens enviadas (e cliques) de uma campanha específica,
-   * paginando GET /messages?source=Campaign&source_id={campaignId}. A API não tem
-   * um campo de "total" pronto — só um booleano hasMore por página — então soma o
-   * tamanho de cada página até acabar ou até o limite de segurança (evita loop
-   * infinito/rate limit caso a paginação real use outro parâmetro do que o
+   * Conta o total de mensagens enviadas (e cliques) de uma campanha OU workflow
+   * específico, paginando GET /messages?source={sourceType}&source_id={id}. Confirmado
+   * (inspecionando o painel da SlickText) que as automações do MailX são disparadas via
+   * Workflow — Campaign é só pra disparos manuais em massa — por isso o source_type é
+   * parametrizável em vez de fixo em 'Campaign'.
+   *
+   * A API não tem um campo de "total" pronto — só um booleano hasMore por página —
+   * então soma o tamanho de cada página até acabar ou até o limite de segurança (evita
+   * loop infinito/rate limit caso a paginação real use outro parâmetro do que o
    * esperado aqui).
    *
    * IMPORTANTE: os nomes de parâmetro de paginação (page/limit) e do campo de
    * clique são best-effort — não testados contra a API real da SlickText em
-   * produção. Validar com uma campanha pequena antes de confiar no número em
-   * campanhas grandes. `clicksFieldFound=false` no retorno avisa quando nenhum
+   * produção. Validar com uma campanha/workflow pequeno antes de confiar no número em
+   * volumes grandes. `clicksFieldFound=false` no retorno avisa quando nenhum
    * campo de clique conhecido apareceu no payload (nesse caso `clicks` é só um
    * chute de 0, não um dado real).
    */
   async countCampaignMessages(
-    campaignId: number,
-    opts: { status?: string; maxPages?: number } = {}
+    sourceId: number,
+    opts: { status?: string; maxPages?: number; sourceType?: 'Campaign' | 'Workflow' } = {}
   ): Promise<{ count: number; clicks: number; clicksFieldFound: boolean; capped: boolean; pages: number }> {
     const maxPages = opts.maxPages ?? 40;
+    const sourceType = opts.sourceType ?? 'Campaign';
     let page = 1;
     let count = 0;
     let clicks = 0;
@@ -298,7 +303,7 @@ export class SlickTextClient {
     let capped = false;
 
     while (page <= maxPages) {
-      const params: any = { source: 'Campaign', source_id: campaignId, page, limit: 100 };
+      const params: any = { source: sourceType, source_id: sourceId, page, limit: 100 };
       if (opts.status) params.status = opts.status;
 
       const res = await this.http.get('/messages', { params });
@@ -316,7 +321,7 @@ export class SlickTextClient {
       page++;
     }
     capped = true;
-    logger.warn(CTX, `countCampaignMessages: atingiu o limite de ${maxPages} páginas pra campaign_id=${campaignId} — número pode estar incompleto`);
+    logger.warn(CTX, `countCampaignMessages: atingiu o limite de ${maxPages} páginas pra ${sourceType.toLowerCase()}_id=${sourceId} — número pode estar incompleto`);
     return { count, clicks, clicksFieldFound, capped, pages: page - 1 };
   }
 
@@ -336,6 +341,23 @@ export class SlickTextClient {
   async getCampaigns(): Promise<{ campaign_id: number; name: string; status?: string; created?: string }[]> {
     const res = await this.http.get('/campaigns');
     return res.data?.data || res.data || [];
+  }
+
+  /**
+   * Lista os workflows cadastrados na marca (id + nome) — confirmado que é onde as
+   * automações do MailX (carrinho abandonado, upsell) realmente vivem, não em Campaigns.
+   * Endpoint/formato ainda best-effort (por analogia a /campaigns) — não confirmado
+   * contra a API real. Se retornar 404, o dropdown do dashboard cai pro modo manual.
+   */
+  async getWorkflows(): Promise<{ workflow_id: number; name: string; status?: string; created?: string }[]> {
+    const res = await this.http.get('/workflows');
+    const raw = res.data?.data || res.data || [];
+    return raw.map((w: any) => ({
+      workflow_id: w.workflow_id ?? w.id,
+      name: w.name,
+      status: w.status,
+      created: w.created,
+    }));
   }
 
   /**

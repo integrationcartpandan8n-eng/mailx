@@ -1741,22 +1741,23 @@
     <!-- Modal: vincular campanha SlickText -->
     <div class="modal-overlay" id="linkCampaignModal">
         <div class="modal">
-            <h3><i class="fas fa-link" style="color:var(--accent-light); margin-right:0.4rem"></i>Vincular campanha SlickText</h3>
+            <h3><i class="fas fa-link" style="color:var(--accent-light); margin-right:0.4rem"></i>Vincular workflow/campanha SlickText</h3>
             <p style="margin-bottom:0.5rem" id="linkCampaignMessageLabel"></p>
-            <p>Selecione a campanha da SlickText que corresponde a esta mensagem, pra contar envios e cliques reais.</p>
+            <p>Selecione o workflow (automação) ou campanha da SlickText que corresponde a esta mensagem, pra contar envios e cliques reais.</p>
 
             <div id="linkCampaignSelectWrap" style="display:none; margin-top:0.75rem">
                 <select id="linkCampaignSelect" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.85rem; font-family:inherit">
                 </select>
                 <div style="margin-top:0.4rem">
-                    <a href="#" onclick="event.preventDefault(); toggleLinkCampaignManual(true)" style="font-size:0.72rem; color:var(--text-dim); text-decoration:underline">Não achei — informar campaign_id manualmente</a>
+                    <a href="#" onclick="event.preventDefault(); toggleLinkCampaignManual(true)" style="font-size:0.72rem; color:var(--text-dim); text-decoration:underline">Não achei — informar o ID manualmente</a>
                 </div>
             </div>
 
-            <div id="linkCampaignLoading" style="display:none; font-size:0.78rem; color:var(--text-dim); margin-top:0.75rem"><i class="fas fa-spinner fa-spin"></i> Carregando campanhas da SlickText...</div>
+            <div id="linkCampaignLoading" style="display:none; font-size:0.78rem; color:var(--text-dim); margin-top:0.75rem"><i class="fas fa-spinner fa-spin"></i> Carregando workflows/campanhas da SlickText...</div>
 
             <div id="linkCampaignManualWrap" style="display:none; margin-top:0.75rem">
-                <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 3333" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit">
+                <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 9361 (o número no final da URL do workflow)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit">
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.35rem">Assume que é um <b>workflow_id</b> (o caso comum das automações). Se for uma campanha avulsa, use o dropdown acima.</div>
                 <div id="linkCampaignManualHint" style="font-size:0.7rem; color:var(--text-muted); margin-top:0.35rem"></div>
             </div>
 
@@ -3226,7 +3227,7 @@
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
             }
             if (cached.linked === false) {
-                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular campanha</button></div>`;
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular</button></div>`;
             }
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
@@ -3266,12 +3267,13 @@
         }
 
         window.__linkCampaignTarget = null;
-        window.__smsCampaignsCache = null; // lista da SlickText (id+nome), buscada 1x por sessão de página
+        window.__smsCampaignsCache = null; // {campaigns, workflows} da SlickText, buscado 1x por sessão de página
 
         function toggleLinkCampaignManual(manual) {
-            const hasCampaigns = !!(window.__smsCampaignsCache && window.__smsCampaignsCache.length > 0);
-            document.getElementById('linkCampaignSelectWrap').style.display = (manual || !hasCampaigns) ? 'none' : 'block';
-            document.getElementById('linkCampaignManualWrap').style.display = (manual || !hasCampaigns) ? 'block' : 'none';
+            const cache = window.__smsCampaignsCache;
+            const hasOptions = !!(cache && ((cache.campaigns || []).length > 0 || (cache.workflows || []).length > 0));
+            document.getElementById('linkCampaignSelectWrap').style.display = (manual || !hasOptions) ? 'none' : 'block';
+            document.getElementById('linkCampaignManualWrap').style.display = (manual || !hasOptions) ? 'block' : 'none';
         }
 
         async function linkSmsCampaign(utmCampaign) {
@@ -3293,26 +3295,30 @@
                 try {
                     const res = await fetch(`${API}/clientes/${clientId}/sms-campaigns`);
                     const data = await res.json();
-                    window.__smsCampaignsCache = data.campaigns || [];
+                    window.__smsCampaignsCache = { campaigns: data.campaigns || [], workflows: data.workflows || [] };
+                    const total = window.__smsCampaignsCache.campaigns.length + window.__smsCampaignsCache.workflows.length;
                     if (!data.configured) {
-                        manualHint.textContent = 'SlickText não configurado — informe o campaign_id manualmente.';
+                        manualHint.textContent = 'SlickText não configurado — informe o ID manualmente.';
                     } else if (data.error) {
-                        manualHint.textContent = `Não foi possível listar as campanhas da SlickText (${data.error}) — informe o campaign_id manualmente.`;
-                    } else if (window.__smsCampaignsCache.length === 0) {
-                        manualHint.textContent = 'Nenhuma campanha encontrada na SlickText — informe o campaign_id manualmente.';
+                        manualHint.textContent = `Não foi possível listar tudo da SlickText (${data.error}) — informe o ID manualmente se não achar na lista.`;
+                    } else if (total === 0) {
+                        manualHint.textContent = 'Nenhuma campanha/workflow encontrado na SlickText — informe o ID manualmente.';
                     }
                 } catch (e) {
-                    window.__smsCampaignsCache = [];
-                    manualHint.textContent = 'Falha ao consultar a SlickText — informe o campaign_id manualmente.';
+                    window.__smsCampaignsCache = { campaigns: [], workflows: [] };
+                    manualHint.textContent = 'Falha ao consultar a SlickText — informe o ID manualmente.';
                 }
                 loading.style.display = 'none';
             }
 
-            const campaigns = window.__smsCampaignsCache || [];
-            if (campaigns.length > 0) {
+            const { campaigns = [], workflows = [] } = window.__smsCampaignsCache || {};
+            if (campaigns.length > 0 || workflows.length > 0) {
                 const select = document.getElementById('linkCampaignSelect');
-                select.innerHTML = '<option value="">— Selecionar campanha —</option>' +
-                    campaigns.map(c => `<option value="${c.campaign_id}">${escapeHtml(c.name || '(sem nome)')} — #${c.campaign_id}</option>`).join('');
+                const campaignOpts = campaigns.map(c => `<option value="Campaign:${c.campaign_id}">${escapeHtml(c.name || '(sem nome)')} — #${c.campaign_id}</option>`).join('');
+                const workflowOpts = workflows.map(w => `<option value="Workflow:${w.workflow_id}">${escapeHtml(w.name || '(sem nome)')} — #${w.workflow_id}</option>`).join('');
+                select.innerHTML = '<option value="">— Selecionar —</option>' +
+                    (workflowOpts ? `<optgroup label="Workflows (automações)">${workflowOpts}</optgroup>` : '') +
+                    (campaignOpts ? `<optgroup label="Campanhas (disparo manual)">${campaignOpts}</optgroup>` : '');
                 toggleLinkCampaignManual(false);
             } else {
                 toggleLinkCampaignManual(true);
@@ -3334,22 +3340,25 @@
             if (!utmCampaign) return;
             const err = document.getElementById('linkCampaignError');
             const usingManual = document.getElementById('linkCampaignManualWrap').style.display !== 'none';
-            let idStr;
+            let sourceType, idStr;
             if (usingManual) {
+                sourceType = 'Workflow'; // caso comum do MailX (automação) — ver countCampaignMessages
                 idStr = (document.getElementById('linkCampaignInput').value || '').trim();
             } else {
-                idStr = document.getElementById('linkCampaignSelect').value;
+                const [type, id] = (document.getElementById('linkCampaignSelect').value || '').split(':');
+                sourceType = type;
+                idStr = id;
             }
             const campaignId = parseInt(idStr, 10);
             if (!idStr || !Number.isInteger(campaignId) || String(campaignId) !== idStr) {
-                if (err) { err.textContent = usingManual ? 'Precisa ser um número inteiro (o campaign_id, ex: 3333).' : 'Selecione uma campanha na lista.'; err.style.display = 'block'; }
+                if (err) { err.textContent = usingManual ? 'Precisa ser um número inteiro (o ID, ex: 3333).' : 'Selecione uma opção na lista.'; err.style.display = 'block'; }
                 return;
             }
             try {
                 await fetch(`${API}/clientes/${clientId}/sms-campaign-map`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId }),
+                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId, source_type: sourceType }),
                 });
                 closeLinkCampaignModal();
                 delete window.__smsSendsCache[utmCampaign];
