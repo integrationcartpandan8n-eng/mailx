@@ -1316,6 +1316,7 @@
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads via SlickText, no período</span>
                 </div>
                 <div class="card-body" style="padding:0">
                     <table class="kit-table">
@@ -2884,9 +2885,13 @@
                     const abTaxaCell = abTaxaStr === '—'
                         ? `<span style="color:var(--text-dim)">—</span>`
                         : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
+                    const compWarning = cs.compradores.leads_warning;
+                    const compLeadsCell = compWarning
+                        ? `${cs.compradores.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${compWarning.replace(/"/g, '&quot;')}"></i>`
+                        : cs.compradores.leads.toLocaleString('pt-BR');
                     document.getElementById('convSegmentoBody').innerHTML = [
                         { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                        { seg: 'Compradores', leadsHtml: cs.compradores.leads.toLocaleString('pt-BR'), vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
+                        { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
                     ].map(r => `
                         <tr>
                             <td style="font-weight:600">${r.seg}</td>

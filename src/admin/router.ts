@@ -1367,40 +1367,62 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // ── Conversão por Segmento: leads de abandono (CartPanda evento vs SlickText lista) ──
-  const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
-
-  let abandonoLeads = abandoned;
-  let leadsSource: 'cartpanda_event' | 'slicktext_list' | 'unavailable' = hasCartPanda ? 'cartpanda_event' : 'unavailable';
+  // ── Conversão por Segmento: leads sempre via SlickText (lista Compra/Abandono), ──
+  // ── escopados ao período selecionado — não mais o total vitalício da lista. ──
+  // Vendas continuam vindo do nosso banco (já são exatas, é conversão real registrada).
+  let abandonoLeads = 0;
+  let compradorLeads = 0;
+  let leadsSource: 'slicktext_list' | 'unavailable' = 'unavailable';
   let leadsWarning: string | null = null;
 
-  if (!hasCartPanda) {
-    try {
-      const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-        `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-      );
-      if (client?.st_api_token && client?.st_brand_id) {
+  {
+    const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+    );
+    if (client?.st_api_token && client?.st_brand_id) {
+      try {
         const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
         const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
-        const kits = await query<{ st_list_abandono_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND st_list_abandono_id IS NOT NULL`,
+        const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`,
           [clientId]
         );
-        const counts = await Promise.all(
-          kits.map(k => st.getListContactCount(parseInt(k.st_list_abandono_id!)).catch(() => 0))
+
+        // "Hoje" não tem from/to em string — pega a data do próprio Postgres pra não
+        // depender do fuso de quem gerou a requisição (mesma lógica do preset "Hoje").
+        let analyticsFrom = periodFrom;
+        let analyticsTo = periodTo;
+        if (period.isToday) {
+          const todayRow = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+          analyticsFrom = todayRow?.today;
+          analyticsTo = todayRow?.today;
+        }
+
+        const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
+        const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+
+        const abandonoCounts = await Promise.all(
+          abandonoIds.map(id => st.getContactAnalytics(analyticsFrom, analyticsTo, parseInt(id))
+            .then(r => st.extractContactAnalyticsTotal(r)).catch(() => 0))
         );
-        abandonoLeads = counts.reduce((a, b) => a + b, 0);
+        const compraCounts = await Promise.all(
+          compraIds.map(id => st.getContactAnalytics(analyticsFrom, analyticsTo, parseInt(id))
+            .then(r => st.extractContactAnalyticsTotal(r)).catch(() => 0))
+        );
+
+        abandonoLeads = abandonoCounts.reduce((a, b) => a + b, 0);
+        compradorLeads = compraCounts.reduce((a, b) => a + b, 0);
         leadsSource = 'slicktext_list';
         if (unmatched.length > 0) {
           leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
         }
-      } else {
-        leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado indisponível para este gateway';
+      } catch (err: any) {
+        logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
+        leadsSource = 'unavailable';
+        leadsWarning = 'Falha ao consultar SlickText — Leads de Carrinho Abandonado e Compradores temporariamente indisponíveis';
       }
-    } catch (err: any) {
-      logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
-      leadsSource = 'unavailable';
-      leadsWarning = 'Falha ao consultar SlickText — Leads de Carrinho Abandonado temporariamente indisponível';
+    } else {
+      leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado e Compradores indisponíveis';
     }
   }
 
@@ -1536,11 +1558,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         leads_warning: leadsWarning,
       },
       compradores: {
-        leads: totalSales,
+        leads: compradorLeads,
         vendas: parseInt(mailxData?.count || '0'),
-        taxa: totalSales > 0
-          ? parseFloat(((parseInt(mailxData?.count || '0') / totalSales) * 100).toFixed(2))
+        taxa: compradorLeads > 0
+          ? parseFloat(((parseInt(mailxData?.count || '0') / compradorLeads) * 100).toFixed(2))
           : 0,
+        leads_source: leadsSource,
+        leads_warning: leadsWarning,
       },
     },
     metrics_only: METRICS_ONLY,

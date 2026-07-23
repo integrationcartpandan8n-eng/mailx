@@ -205,14 +205,27 @@ export class SlickTextClient {
 
   /**
    * Get contact analytics (total, by status, by source).
+   * `listId` escopa pra uma lista específica em vez do brand inteiro — NÃO confirmado
+   * contra a API real (best-effort, mesma ressalva de countCampaignMessages). Validar
+   * com uma lista pequena antes de confiar no número.
    */
-  async getContactAnalytics(start?: string, end?: string): Promise<any> {
+  async getContactAnalytics(start?: string, end?: string, listId?: number): Promise<any> {
     const params: any = {};
     if (start) params.start = start;
     if (end) params.end = end;
+    if (listId) params.list_id = listId;
 
     const res = await this.http.get('/analytics/contacts', { params });
     return res.data;
+  }
+
+  /**
+   * Total de contatos novos (leads) de uma lista específica num período — usa
+   * getContactAnalytics escopado por list_id. Retorna null se a API não aceitar o
+   * escopo por lista (nesse caso o número viria errado, misturando outras listas).
+   */
+  extractContactAnalyticsTotal(analyticsResponse: any): number {
+    return analyticsResponse?.totals?.total ?? analyticsResponse?.total ?? 0;
   }
 
   /**
