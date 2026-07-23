@@ -366,11 +366,28 @@
 
         .rank-row {
             display: grid;
-            grid-template-columns: 1fr 90px 130px 150px;
+            grid-template-columns: 1fr 110px 90px 130px 150px;
             gap: 1rem;
             align-items: center;
             padding: 0.75rem 1.25rem;
         }
+
+        .rank-envios { font-size: 0.78rem; color: var(--text-dim); text-align: center; }
+        .rank-envios .envios-btn {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--accent-light);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 0.3rem 0.55rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .rank-envios .envios-btn:hover { background: var(--surface-3, var(--surface-2)); }
+        .rank-envios .envios-count { font-weight: 700; color: var(--text); }
+        .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.65rem; }
+        .rank-envios .envios-muted { color: var(--text-muted); font-size: 0.68rem; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -614,6 +631,7 @@
             .summary-strip .cell:last-child { border-bottom: none; }
             .rank-row { grid-template-columns: 1fr 72px 100px; }
             .rank-refund { display: none; }
+            .rank-envios { display: none; }
             .g-row { grid-template-columns: minmax(100px, 1fr) 80px; }
             .g-row .g-bar-track { display: none; }
         }
@@ -3047,6 +3065,83 @@
             return positives.length ? positives[0].receita_liquida : 1;
         }
 
+        // ── Envios por mensagem (SlickText) — sob demanda, cacheado na sessão ──
+        // Não vem junto do /sms-granular porque contar envios pagina a API da SlickText
+        // e pode ser lento; carrega só quando a pessoa pede.
+        window.__smsSendsCache = window.__smsSendsCache || {};
+
+        function utmToDomId(utm) {
+            return 'envios-' + utm.replace(/[^a-zA-Z0-9]/g, '_');
+        }
+
+        function renderEnviosCell(utmCampaign) {
+            const cached = window.__smsSendsCache[utmCampaign];
+            const id = utmToDomId(utmCampaign);
+            if (!cached) {
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}">Ver envios</button></div>`;
+            }
+            if (cached === 'loading') {
+                return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
+            }
+            if (cached.linked === false) {
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular campanha</button></div>`;
+            }
+            if (cached.count == null) {
+                return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
+            }
+            return `<div class="rank-envios" id="${id}">
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}<small>envios${cached.capped ? ' (parcial)' : ''}</small></span>
+            </div>`;
+        }
+
+        async function loadSmsCampaignSends(utmCampaign) {
+            window.__smsSendsCache[utmCampaign] = 'loading';
+            const cell = document.getElementById(utmToDomId(utmCampaign));
+            if (cell) cell.outerHTML = renderEnviosCell(utmCampaign);
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?utm_campaign=${encodeURIComponent(utmCampaign)}`);
+                const data = await res.json();
+                window.__smsSendsCache[utmCampaign] = data;
+            } catch (e) {
+                window.__smsSendsCache[utmCampaign] = { linked: true, count: null, message: 'Falha ao consultar.' };
+            }
+            const cell2 = document.getElementById(utmToDomId(utmCampaign));
+            if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign);
+        }
+
+        async function linkSmsCampaign(utmCampaign) {
+            const idStr = prompt('ID da campanha na SlickText (campaign_id numérico) pra vincular a esta mensagem:');
+            if (!idStr) return;
+            const campaignId = parseInt(idStr, 10);
+            if (!Number.isInteger(campaignId)) {
+                alert('Precisa ser um número inteiro (o campaign_id, ex: 3333).');
+                return;
+            }
+            try {
+                await fetch(`${API}/clientes/${clientId}/sms-campaign-map`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId }),
+                });
+                delete window.__smsSendsCache[utmCampaign];
+                loadSmsCampaignSends(utmCampaign);
+            } catch (e) {
+                alert('Falha ao salvar o vínculo. Tenta de novo.');
+            }
+        }
+
+        document.getElementById('sms-granular-body')?.addEventListener('click', (e) => {
+            const loadBtn = e.target.closest('[data-load-envios]');
+            if (loadBtn) {
+                loadSmsCampaignSends(decodeURIComponent(loadBtn.dataset.loadEnvios));
+                return;
+            }
+            const linkBtn = e.target.closest('[data-link-envios]');
+            if (linkBtn) {
+                linkSmsCampaign(decodeURIComponent(linkBtn.dataset.linkEnvios));
+            }
+        });
+
         function humanizeMsgCode(code) {
             const m = /^MS(\d{4})([A-Z])$/i.exec(code || '');
             if (!m) return { human: code || '—', raw: code || '' };
@@ -3098,6 +3193,7 @@
                                 <div class="msg-sub">${row.tipo_automacao || '—'} · <span class="prod">${row.produto || '—'}</span></div>
                             </div>
                         </div>
+                        ${renderEnviosCell(row.utm_campaign)}
                         <div class="rank-sales"><strong>${row.vendas.toLocaleString('pt-BR')}</strong> vendas</div>
                         <div class="rank-refund">${fmtSmsRefundBadge(sym, row.reembolsos, row.valor_reembolso)}</div>
                         <div class="rank-value">

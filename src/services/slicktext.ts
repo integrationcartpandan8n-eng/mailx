@@ -228,6 +228,46 @@ export class SlickTextClient {
   }
 
   /**
+   * Conta o total de mensagens enviadas por uma campanha específica, paginando
+   * GET /messages?source=Campaign&source_id={campaignId}. A API não tem um campo de
+   * "total" pronto — só um booleano hasMore por página — então soma o tamanho de
+   * cada página até acabar ou até o limite de segurança (evita loop infinito/rate
+   * limit caso a paginação real use outro parâmetro do que o esperado aqui).
+   *
+   * IMPORTANTE: os nomes de parâmetro de paginação (page/limit) são um best-effort
+   * baseado em convenção REST comum — ainda não testado contra a API real da
+   * SlickText em produção. Validar com uma campanha pequena antes de confiar no
+   * número em campanhas grandes.
+   */
+  async countCampaignMessages(
+    campaignId: number,
+    opts: { status?: string; maxPages?: number } = {}
+  ): Promise<{ count: number; capped: boolean; pages: number }> {
+    const maxPages = opts.maxPages ?? 40;
+    let page = 1;
+    let count = 0;
+    let capped = false;
+
+    while (page <= maxPages) {
+      const params: any = { source: 'Campaign', source_id: campaignId, page, limit: 100 };
+      if (opts.status) params.status = opts.status;
+
+      const res = await this.http.get('/messages', { params });
+      const items = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+      count += items.length;
+
+      const hasMore = res.data?.hasMore ?? res.data?.has_more ?? false;
+      if (!hasMore || items.length === 0) {
+        return { count, capped: false, pages: page };
+      }
+      page++;
+    }
+    capped = true;
+    logger.warn(CTX, `countCampaignMessages: atingiu o limite de ${maxPages} páginas pra campaign_id=${campaignId} — número pode estar incompleto`);
+    return { count, capped, pages: page - 1 };
+  }
+
+  /**
    * Message credit analytics — endpoint /analytics/message/credits returns 404.
    * Use getBrandUsage() instead for credit totals.
    */
