@@ -329,6 +329,16 @@ export class SlickTextClient {
   }
 
   /**
+   * Lista as campanhas cadastradas na marca (id + nome), pra preencher o dropdown de
+   * "Vincular campanha" no dashboard sem precisar caçar o campaign_id manualmente
+   * dentro do painel da SlickText.
+   */
+  async getCampaigns(): Promise<{ campaign_id: number; name: string; status?: string; created?: string }[]> {
+    const res = await this.http.get('/campaigns');
+    return res.data?.data || res.data || [];
+  }
+
+  /**
    * Get campaign analytics (all campaigns).
    */
   async getCampaignAnalytics(): Promise<any> {

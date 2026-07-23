@@ -1768,6 +1768,29 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   res.json({ ok: true });
 }));
 
+// GET /admin/clientes/:id/sms-campaigns - Lista as campanhas da SlickText (id + nome) pra
+// preencher o dropdown de "Vincular campanha" — evita o Nicollas ter que caçar o campaign_id
+// manualmente no painel da SlickText.
+adminRouter.get('/clientes/:id/sms-campaigns', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+  );
+  if (!client?.st_api_token || !client?.st_brand_id) {
+    res.json({ configured: false, campaigns: [] });
+    return;
+  }
+
+  try {
+    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+    const campaigns = await st.getCampaigns();
+    res.json({ configured: true, campaigns });
+  } catch (err: any) {
+    logger.error(CTX, `Falha ao listar campanhas da SlickText (client ${clientId}): ${err.message}`);
+    res.status(502).json({ configured: true, campaigns: [], error: `Erro ao consultar SlickText: ${err.message}` });
+  }
+}));
+
 // GET /admin/clientes/:id/sms-campaign-sends - Conta envios reais de uma mensagem de automação,
 // paginando a API da SlickText. Sob demanda (não entra no /sms-granular) porque pode ser lento
 // pra campanhas com muitas mensagens.
