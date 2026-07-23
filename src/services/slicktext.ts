@@ -60,15 +60,6 @@ export class SlickTextClient {
     );
   }
 
-  /**
-   * GET cru pra qualquer path relativo ao brand — usado só pelo endpoint de diagnóstico
-   * pra testar variantes de path sem precisar de um método dedicado por tentativa.
-   */
-  async rawGet(path: string): Promise<any> {
-    const res = await this.http.get(path);
-    return res.data;
-  }
-
   // ── Contacts ──
 
   /**
@@ -386,15 +377,38 @@ export class SlickTextClient {
   }
 
   /**
-   * Analytics de um workflow específico — por analogia a getCampaignAnalyticsById.
-   * A própria SlickText mostra, na tela de Analytics do workflow, envios e cliques
-   * SEPARADOS POR MENSAGEM dentro do workflow (ex: "[01]" e "[01B]" com contagens
-   * diferentes) — se esse endpoint devolver a mesma coisa, é melhor que paginar
-   * /messages (não temos hoje como separar por mensagem/step, só o total do
-   * workflow inteiro). Formato ainda 100% best-effort — não confirmado.
+   * Analytics de um workflow inteiro, filtrado por período — CONFIRMADO contra a API
+   * real (capturado da própria tela de Analytics da SlickText, inspecionando o
+   * Network do navegador). Devolve totals (entrances/messages/clicks/unsubscribes do
+   * workflow inteiro no período) e `links` (cliques por link, cada um com
+   * `_sub_source_id` = o workflow_node_id da mensagem que contém aquele link, e a
+   * `url` já traz o utm_campaign da gente — dá pra casar cliques por mensagem sem
+   * nenhum vínculo manual, quando a mensagem tem link).
+   *
+   * start/end no formato "YYYY-MM-DD HH:mm:ss".
    */
-  async getWorkflowAnalytics(workflowId: number): Promise<any> {
-    const res = await this.http.get(`/analytics/workflows/${workflowId}`);
+  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+    const res = await this.http.get('/analytics/workflows', {
+      params: { _workflow_id: workflowId, start, end, compare: '', frequency: '', timezone, noCache: 0 },
+    });
+    return res.data;
+  }
+
+  /**
+   * Analytics de UMA mensagem específica (nó) dentro de um workflow, filtrado por
+   * período — CONFIRMADO contra a API real (mesma origem do getWorkflowAnalytics).
+   * `totals.messages` = envios dessa mensagem no período; `totals.clicks` = cliques;
+   * `workflow_node.name` = nome legível da mensagem (ex: "[Produto] [Tipo] [01]").
+   * Isso é o que resolve o caso de várias mensagens (MS0001A/02A/03A) dentro do MESMO
+   * workflow — cada uma tem seu próprio workflow_node_id, com números separados de
+   * verdade (não o total do workflow inteiro somado).
+   *
+   * start/end no formato "YYYY-MM-DD HH:mm:ss".
+   */
+  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+    const res = await this.http.get(`/analytics/workflows/${workflowId}/nodes/${nodeId}`, {
+      params: { start, end, compare: '', frequency: '', timezone, noCache: 0 },
+    });
     return res.data;
   }
 
