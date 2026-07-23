@@ -1743,8 +1743,23 @@
         <div class="modal">
             <h3><i class="fas fa-link" style="color:var(--accent-light); margin-right:0.4rem"></i>Vincular campanha SlickText</h3>
             <p style="margin-bottom:0.5rem" id="linkCampaignMessageLabel"></p>
-            <p>Informe o <b>campaign_id</b> numérico da SlickText que corresponde a esta mensagem, pra contar envios e cliques reais.</p>
-            <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 3333" class="gp-date-field-input" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit; margin-top:0.75rem">
+            <p>Selecione a campanha da SlickText que corresponde a esta mensagem, pra contar envios e cliques reais.</p>
+
+            <div id="linkCampaignSelectWrap" style="display:none; margin-top:0.75rem">
+                <select id="linkCampaignSelect" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.85rem; font-family:inherit">
+                </select>
+                <div style="margin-top:0.4rem">
+                    <a href="#" onclick="event.preventDefault(); toggleLinkCampaignManual(true)" style="font-size:0.72rem; color:var(--text-dim); text-decoration:underline">Não achei — informar campaign_id manualmente</a>
+                </div>
+            </div>
+
+            <div id="linkCampaignLoading" style="display:none; font-size:0.78rem; color:var(--text-dim); margin-top:0.75rem"><i class="fas fa-spinner fa-spin"></i> Carregando campanhas da SlickText...</div>
+
+            <div id="linkCampaignManualWrap" style="display:none; margin-top:0.75rem">
+                <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 3333" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit">
+                <div id="linkCampaignManualHint" style="font-size:0.7rem; color:var(--text-muted); margin-top:0.35rem"></div>
+            </div>
+
             <div id="linkCampaignError" style="display:none; color:var(--danger); font-size:0.75rem; margin-top:0.5rem"></div>
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="closeLinkCampaignModal()">Cancelar</button>
@@ -3251,17 +3266,58 @@
         }
 
         window.__linkCampaignTarget = null;
+        window.__smsCampaignsCache = null; // lista da SlickText (id+nome), buscada 1x por sessão de página
 
-        function linkSmsCampaign(utmCampaign) {
+        function toggleLinkCampaignManual(manual) {
+            const hasCampaigns = !!(window.__smsCampaignsCache && window.__smsCampaignsCache.length > 0);
+            document.getElementById('linkCampaignSelectWrap').style.display = (manual || !hasCampaigns) ? 'none' : 'block';
+            document.getElementById('linkCampaignManualWrap').style.display = (manual || !hasCampaigns) ? 'block' : 'none';
+        }
+
+        async function linkSmsCampaign(utmCampaign) {
             window.__linkCampaignTarget = utmCampaign;
             const label = document.getElementById('linkCampaignMessageLabel');
             const input = document.getElementById('linkCampaignInput');
             const err = document.getElementById('linkCampaignError');
+            const loading = document.getElementById('linkCampaignLoading');
+            const manualHint = document.getElementById('linkCampaignManualHint');
             if (label) label.innerHTML = `Mensagem: <b>${escapeHtml(utmCampaign)}</b>`;
             if (err) err.style.display = 'none';
             if (input) input.value = '';
+            document.getElementById('linkCampaignSelectWrap').style.display = 'none';
+            document.getElementById('linkCampaignManualWrap').style.display = 'none';
             document.getElementById('linkCampaignModal').classList.add('show');
-            setTimeout(() => input?.focus(), 50);
+
+            if (window.__smsCampaignsCache === null) {
+                loading.style.display = 'block';
+                try {
+                    const res = await fetch(`${API}/clientes/${clientId}/sms-campaigns`);
+                    const data = await res.json();
+                    window.__smsCampaignsCache = data.campaigns || [];
+                    if (!data.configured) {
+                        manualHint.textContent = 'SlickText não configurado — informe o campaign_id manualmente.';
+                    } else if (data.error) {
+                        manualHint.textContent = `Não foi possível listar as campanhas da SlickText (${data.error}) — informe o campaign_id manualmente.`;
+                    } else if (window.__smsCampaignsCache.length === 0) {
+                        manualHint.textContent = 'Nenhuma campanha encontrada na SlickText — informe o campaign_id manualmente.';
+                    }
+                } catch (e) {
+                    window.__smsCampaignsCache = [];
+                    manualHint.textContent = 'Falha ao consultar a SlickText — informe o campaign_id manualmente.';
+                }
+                loading.style.display = 'none';
+            }
+
+            const campaigns = window.__smsCampaignsCache || [];
+            if (campaigns.length > 0) {
+                const select = document.getElementById('linkCampaignSelect');
+                select.innerHTML = '<option value="">— Selecionar campanha —</option>' +
+                    campaigns.map(c => `<option value="${c.campaign_id}">${escapeHtml(c.name || '(sem nome)')} — #${c.campaign_id}</option>`).join('');
+                toggleLinkCampaignManual(false);
+            } else {
+                toggleLinkCampaignManual(true);
+            }
+            setTimeout(() => (document.getElementById('linkCampaignSelect') || input)?.focus(), 50);
         }
 
         function closeLinkCampaignModal() {
@@ -3276,12 +3332,17 @@
         async function submitLinkCampaign() {
             const utmCampaign = window.__linkCampaignTarget;
             if (!utmCampaign) return;
-            const input = document.getElementById('linkCampaignInput');
             const err = document.getElementById('linkCampaignError');
-            const idStr = (input?.value || '').trim();
+            const usingManual = document.getElementById('linkCampaignManualWrap').style.display !== 'none';
+            let idStr;
+            if (usingManual) {
+                idStr = (document.getElementById('linkCampaignInput').value || '').trim();
+            } else {
+                idStr = document.getElementById('linkCampaignSelect').value;
+            }
             const campaignId = parseInt(idStr, 10);
             if (!idStr || !Number.isInteger(campaignId) || String(campaignId) !== idStr) {
-                if (err) { err.textContent = 'Precisa ser um número inteiro (o campaign_id, ex: 3333).'; err.style.display = 'block'; }
+                if (err) { err.textContent = usingManual ? 'Precisa ser um número inteiro (o campaign_id, ex: 3333).' : 'Selecione uma campanha na lista.'; err.style.display = 'block'; }
                 return;
             }
             try {
