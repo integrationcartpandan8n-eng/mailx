@@ -1301,6 +1301,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       AND ${SQL_IS_RECOVERY}
       ${emailRecPeriod ? `AND ${emailRecPeriod}` : ''}
   `, emailMailxRecParams);
+  const emailMailxUpsellParams: (string | number)[] = [clientId];
+  const emailUpsellPeriod = periodSql(period, emailMailxUpsellParams);
+  const emailMailxUpsell = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+      AND ${SQL_IS_UPSELL}
+      ${emailUpsellPeriod ? `AND ${emailUpsellPeriod}` : ''}
+  `, emailMailxUpsellParams);
 
   // Top 5 products — filtered by client_id + período
   const topProductsParams: (string | number)[] = [clientId];
@@ -1514,8 +1523,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     email_mailx: {
       faturamento_email: fmtBRL(parseFloat(emailMailxData?.revenue || '0')),
       vendas_email: parseInt(emailMailxData?.count || '0'),
+      ticket_medio_email: (() => {
+        const vendasEmail = parseInt(emailMailxData?.count || '0');
+        const revEmail = parseFloat(emailMailxData?.revenue || '0');
+        return fmtBRL(vendasEmail > 0 ? revEmail / vendasEmail : 0);
+      })(),
       recuperacoes_email: parseInt(emailMailxRecoveries?.count || '0'),
       faturamento_recuperacoes_email: fmtBRL(parseFloat(emailMailxRecoveries?.revenue || '0')),
+      vendas_upsell_email: parseInt(emailMailxUpsell?.count || '0'),
+      faturamento_upsell_email: fmtBRL(parseFloat(emailMailxUpsell?.revenue || '0')),
     },
     top_products: topProducts.map(p => ({
       name: p.name,
@@ -2081,10 +2097,23 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         AND ${SQL_IS_RECOVERY}
         ${smsRecPeriod ? `AND ${smsRecPeriod}` : ''}
     `, smsRecParams);
+    const smsUpsellParams: (string | number)[] = [clientId];
+    const smsUpsellPeriod = periodSql(period, smsUpsellParams);
+    const smsUpsell = await queryOne<{ count: string; revenue: string }>(`
+      SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND client_id = $1
+        AND ${SQL_MAILX_SMS}
+        AND ${SQL_IS_UPSELL}
+        ${smsUpsellPeriod ? `AND ${smsUpsellPeriod}` : ''}
+    `, smsUpsellParams);
 
     const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
     const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
+    const smsVendas = parseInt(smsSales?.count || '0');
+    const smsTicketMedio = smsVendas > 0 ? smsRevenue / smsVendas : 0;
+    const smsUpsellRevenue = parseFloat(smsUpsell?.revenue || '0');
 
     res.json({
       configured: true,
@@ -2097,9 +2126,12 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       },
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
-        vendas_sms: parseInt(smsSales?.count || '0'),
+        vendas_sms: smsVendas,
+        ticket_medio_sms: fmtBRL(smsTicketMedio),
         recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),
         faturamento_recuperacoes_sms: fmtBRL(smsRecRevenue),
+        vendas_upsell_sms: parseInt(smsUpsell?.count || '0'),
+        faturamento_upsell_sms: fmtBRL(smsUpsellRevenue),
       },
       contacts: {
         total: totalCompra + totalAbandono,

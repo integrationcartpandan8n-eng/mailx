@@ -3019,13 +3019,16 @@
                     </div>
                 `;
 
-                // SMS Revenue KPIs (mailxsms UTM-attributed)
+                // SMS Revenue KPIs (mailxsms UTM-attributed) — já respeita o período selecionado
                 const r = data.revenue || {};
                 document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms) — total vitalício, ainda não respeita o filtro de período.' },
-                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS — total vitalício.' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms), no período selecionado.' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS, no período selecionado.' },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'Faturamento SMS ÷ Vendas SMS do período.' },
                     { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
                     { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
+                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de um fluxo de upsell.' },
+                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'Faturamento só das vendas de upsell SMS acima.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
@@ -3490,15 +3493,18 @@
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral
             const em = data.email_mailx || {};
             document.getElementById('emailMailxKpis').innerHTML = [
-                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || '$ 0,00' },
-                { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR') },
-                { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR') },
-                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00' },
+                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || '$ 0,00', tip: 'Faturamento com UTM de origem Email, no período selecionado.' },
+                { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a Email, no período selecionado.' },
+                { icon: 'fa-receipt purple', label: 'Ticket Médio Email', value: em.ticket_medio_email || '$ 0,00', tip: 'Faturamento Email ÷ Vendas Email do período.' },
+                { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de recuperação de carrinho abandonado.' },
+                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00', tip: 'Faturamento só das recuperações Email acima.' },
+                { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
+                { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
             ].map(k => `
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                     <div class="kpi-value">${k.value}</div>
-                    <div class="kpi-label">${k.label}</div>
+                    <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                 </div>
             `).join('');
         }
