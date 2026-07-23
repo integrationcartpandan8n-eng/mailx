@@ -168,6 +168,57 @@ function createdAtRangeSqlAt(
   return `created_at >= $${fromIdx}::date AND created_at < ($${toIdx}::date + INTERVAL '1 day')`;
 }
 
+/**
+ * Resolve o período de análise da querystring: preset "Hoje" (?today=1), intervalo
+ * from/to explícito, ou nenhum (lifetime). "Hoje" é resolvido com CURRENT_DATE do
+ * próprio Postgres — de propósito, para não depender do fuso-horário do navegador
+ * de quem está com o filtro aberto (evita "hoje" bater errado por 1 dia).
+ */
+function resolvePeriodFilter(req: Request): {
+  isToday: boolean;
+  from?: string;
+  to?: string;
+  hasTime: boolean;
+  fromTime: string | null;
+  toTime: string | null;
+} {
+  if (req.query.today === '1') {
+    return { isToday: true, hasTime: false, fromTime: null, toTime: null };
+  }
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
+  if (from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to)) {
+    const range = validateYmdRange(from, to);
+    if (!('error' in range)) {
+      return { isToday: false, from, to, hasTime, fromTime, toTime };
+    }
+  }
+  return { isToday: false, hasTime: false, fromTime: null, toTime: null };
+}
+
+/**
+ * Builda a condição `created_at` pro período resolvido acima, empurrando os
+ * params necessários no array recebido (cada chamada usa seu próprio array de
+ * params, já que cada query tem uma base diferente). Retorna '' quando não há
+ * período ativo (comportamento antigo: sem filtro, vitalício).
+ */
+function periodSql(
+  period: ReturnType<typeof resolvePeriodFilter>,
+  params: (string | number)[]
+): string {
+  if (period.isToday) {
+    return `created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'`;
+  }
+  if (period.from && period.to) {
+    params.push(period.from, period.to);
+    const fromIdx = params.length - 1;
+    const toIdx = params.length;
+    return createdAtRangeSqlAt(params, fromIdx, toIdx, period.hasTime, period.fromTime, period.toTime);
+  }
+  return '';
+}
+
 function parseYmd(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d);
@@ -941,6 +992,13 @@ adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Re
 
 // ── Existing API Endpoints ──
 
+// GET /admin/server-today - Data atual segundo o próprio Postgres (evita depender do
+// fuso-horário do navegador de quem está usando o filtro "Hoje").
+adminRouter.get('/server-today', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+  res.json({ date: row?.today });
+}));
+
 // GET /admin/stats - Dashboard counters
 adminRouter.get('/stats', asyncHandler(async (_req: Request, res: Response) => {
   const clientsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
@@ -1144,26 +1202,15 @@ adminRouter.get('/clientes/:id/dns', asyncHandler(async (req: Request, res: Resp
 // GET /admin/clientes/:id/stats - Per-client KPIs and activity
 adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
-  const from = req.query.from as string | undefined;
-  const to = req.query.to as string | undefined;
-  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
   const currency = await resolveClientCurrency(clientId);
   const symbol = currencySymbol(currency);
 
-  let emailDateFilter = '';
-  const emailMailxParams: (string | number)[] = [clientId];
-  let periodFrom: string | undefined;
-  let periodTo: string | undefined;
-
-  if (from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to)) {
-    const range = validateYmdRange(from, to);
-    if (!('error' in range)) {
-      periodFrom = from;
-      periodTo = to;
-      emailMailxParams.push(from, to);
-      emailDateFilter = ` AND ${createdAtRangeSqlAt(emailMailxParams, 2, 3, hasTime, fromTime, toTime)}`;
-    }
-  }
+  // Período de análise: "Hoje" (?today=1), intervalo from/to, ou vitalício (nenhum dos dois).
+  // Aplicado em TODAS as métricas de negócio abaixo — antes só afetava 2-3 gráficos.
+  const period = resolvePeriodFilter(req);
+  const periodFrom = period.from;
+  const periodTo = period.to;
+  const periodActive = period.isToday || !!(period.from && period.to);
 
   // Get all store slugs for this client to filter webhook_logs
   const stores = await query<{ shop_slug: string, platform: string }>(
@@ -1171,83 +1218,106 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     [clientId]
   );
 
-  // Sales KPIs — filtered by client_id
+  // Sales KPIs — filtered by client_id + período
+  const salesParams: (string | number)[] = [clientId];
+  const salesPeriod = periodSql(period, salesParams);
   const salesData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
-  `, [clientId]);
+      ${salesPeriod ? `AND ${salesPeriod}` : ''}
+  `, salesParams);
 
+  const whParams: (string | number)[] = [clientId];
+  const whPeriod = periodSql(period, whParams);
   const totalWebhooks = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1 ${whPeriod ? `AND ${whPeriod}` : ''}`, whParams
   );
+  // "Hoje" é sempre literal (independe do período de análise selecionado) — diagnóstico de saúde da integração.
   const webhooksToday = await queryOne<{ count: string }>(
     `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE AND client_id = $1`, [clientId]
   );
-  const webhooksProcessed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed' AND client_id = $1`, [clientId]
-  );
-  const webhooksFailed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed' AND client_id = $1`, [clientId]
-  );
+  const refundParams: (string | number)[] = [clientId];
+  const refundPeriod = periodSql(period, refundParams);
   const refundCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1
+      ${refundPeriod ? `AND ${refundPeriod}` : ''}`, refundParams
   );
 
   const totalSales = parseInt(salesData?.count || '0');
   const totalRevenue = parseFloat(salesData?.revenue || '0');
   const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
   const totalWh = parseInt(totalWebhooks?.count || '0');
+
+  const abandonedParams: (string | number)[] = [clientId];
+  const abandonedPeriod = periodSql(period, abandonedParams);
   const abandonedCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart' AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart' AND client_id = $1
+      ${abandonedPeriod ? `AND ${abandonedPeriod}` : ''}`, abandonedParams
   );
+  const declinedParams: (string | number)[] = [clientId];
+  const declinedPeriod = periodSql(period, declinedParams);
   const declinedCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'card.declined' AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'card.declined' AND client_id = $1
+      ${declinedPeriod ? `AND ${declinedPeriod}` : ''}`, declinedParams
   );
   const abandoned = parseInt(abandonedCount?.count || '0');
   const declined = parseInt(declinedCount?.count || '0');
   const totalOpps = totalSales + abandoned + declined;
   const successRate = totalOpps > 0 ? ((totalSales / totalOpps) * 100).toFixed(1) : '0';
 
-  // MailX UTM metrics — filtered by client_id
+  // MailX UTM metrics — filtered by client_id + período
+  const mailxParams: (string | number)[] = [clientId];
+  const mailxPeriod = periodSql(period, mailxParams);
   const mailxData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_IS_MAILX}
-  `, [clientId]);
+      ${mailxPeriod ? `AND ${mailxPeriod}` : ''}
+  `, mailxParams);
+  const mailxRecParams: (string | number)[] = [clientId];
+  const mailxRecPeriod = periodSql(period, mailxRecParams);
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_IS_MAILX}
       AND ${SQL_IS_RECOVERY}
-  `, [clientId]);
+      ${mailxRecPeriod ? `AND ${mailxRecPeriod}` : ''}
+  `, mailxRecParams);
 
+  const emailMailxParams: (string | number)[] = [clientId];
+  const emailPeriod = periodSql(period, emailMailxParams);
   const emailMailxData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
-      ${emailDateFilter}
+      ${emailPeriod ? `AND ${emailPeriod}` : ''}
   `, emailMailxParams);
+  const emailMailxRecParams: (string | number)[] = [clientId];
+  const emailRecPeriod = periodSql(period, emailMailxRecParams);
   const emailMailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
       AND ${SQL_IS_RECOVERY}
-      ${emailDateFilter}
-  `, emailMailxParams);
+      ${emailRecPeriod ? `AND ${emailRecPeriod}` : ''}
+  `, emailMailxRecParams);
 
-  // Top 5 products — filtered by client_id
+  // Top 5 products — filtered by client_id + período
+  const topProductsParams: (string | number)[] = [clientId];
+  const topProductsPeriod = periodSql(period, topProductsParams);
   const topProducts = await query<{ name: string, count: string, revenue: string }>(`
-    SELECT 
+    SELECT
       product_name as name,
       COUNT(*) as count,
       ${SQL_REVENUE} as revenue
-    FROM webhook_logs 
+    FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1
       AND product_name IS NOT NULL
+      ${topProductsPeriod ? `AND ${topProductsPeriod}` : ''}
     GROUP BY product_name ORDER BY count DESC LIMIT 5
-  `, [clientId]);
+  `, topProductsParams);
 
-  // Recent webhooks — filtered by client_id
+  // Recent webhooks — feed operacional, sempre os mais recentes (não segue o período de análise)
   const recentWebhooks = await query(`
     SELECT id, event_type, source, status, error, created_at, processed_at
     FROM webhook_logs
@@ -1256,7 +1326,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     LIMIT 10
   `, [clientId]);
 
-  // Daily activity last 7 days — filtered by client_id
+  // Daily activity — últimos 7 dias, diagnóstico de saúde da integração (não segue o período de análise)
   const dailyActivity = await query<{ day: string, count: string }>(`
     SELECT TO_CHAR(created_at, 'DD/MM') as day, COUNT(*) as count
     FROM webhook_logs
@@ -1265,28 +1335,32 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ORDER BY DATE(created_at)
   `, [clientId]);
 
-  // ── Webhooks by hour ──
+  // ── Vendas por Hora — filtered by client_id + período ──
+  const hourlyParams: (string | number)[] = [clientId];
+  const hourlyPeriod = periodSql(period, hourlyParams);
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
     FROM webhook_logs
-    WHERE client_id = $1
+    WHERE client_id = $1 ${hourlyPeriod ? `AND ${hourlyPeriod}` : ''}
     GROUP BY EXTRACT(HOUR FROM created_at)
     ORDER BY EXTRACT(HOUR FROM created_at)
-  `, [clientId]);
+  `, hourlyParams);
   const hourlyValues = Array.from({ length: 24 }, (_, i) => {
     const match = hourlyWebhooks.find(r => parseInt(r.hour) === i);
     return match ? parseInt(match.count) : 0;
   });
 
-  // ── Top 5 Tags (event type distribution) ──
+  // ── Top 5 Tipos de Evento — filtered by client_id + período ──
+  const eventDistParams: (string | number)[] = [clientId];
+  const eventDistPeriod = periodSql(period, eventDistParams);
   const eventDist = await query<{ event_type: string, count: string }>(`
     SELECT event_type, COUNT(*) as count
     FROM webhook_logs
-    WHERE client_id = $1
+    WHERE client_id = $1 ${eventDistPeriod ? `AND ${eventDistPeriod}` : ''}
     GROUP BY event_type
     ORDER BY count DESC
     LIMIT 5
-  `, [clientId]);
+  `, eventDistParams);
 
   // ── Conversion Funnel (envios por venda) ──
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
@@ -1333,11 +1407,20 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
 
   // ── Email Marketing KPIs (ActiveCampaign reporting) ──
+  // API do AC só aceita "N dias atrás de agora" — "Hoje" mapeia certinho (1 dia),
+  // presets/personalizado terminando hoje também; terminando no passado, fica
+  // limitado a 30 dias fixos e avisamos isso (ac_period_limited).
   const today = new Date().toISOString().slice(0, 10);
-  const acDaysBack = (periodTo && periodTo === today && periodFrom)
-    ? Math.round((parseYmd(periodTo).getTime() - parseYmd(periodFrom).getTime()) / 86400000) + 1
-    : 30;
-  const acPeriodLimited = !!(periodFrom && periodTo && periodTo !== today);
+  let acDaysBack = 30;
+  let acPeriodLimited = false;
+  if (period.isToday) {
+    acDaysBack = 1;
+  } else if (periodTo && periodTo === today && periodFrom) {
+    acDaysBack = Math.round((parseYmd(periodTo).getTime() - parseYmd(periodFrom).getTime()) / 86400000) + 1;
+  } else if (periodFrom && periodTo) {
+    acDaysBack = 30;
+    acPeriodLimited = true;
+  }
 
   const emailMetrics = {
     entrada_contatos: '--' as string,
@@ -1384,6 +1467,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   res.json({
     currency,
+    period: {
+      active: periodActive,
+      is_today: period.isToday,
+      from: periodFrom || null,
+      to: periodTo || null,
+    },
     kpis: {
       faturamento: fmtBRL(totalRevenue),
       vendas: totalSales,
@@ -1874,20 +1963,28 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
     const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);
 
-    // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') ──
+    // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') — respeita o período de análise ──
+    const period = resolvePeriodFilter(req);
+    const periodActive = period.isToday || !!(period.from && period.to);
+    const smsSalesParams: (string | number)[] = [clientId];
+    const smsSalesPeriod = periodSql(period, smsSalesParams);
     const smsSales = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
         AND ${SQL_MAILX_SMS}
-    `, [clientId]);
+        ${smsSalesPeriod ? `AND ${smsSalesPeriod}` : ''}
+    `, smsSalesParams);
+    const smsRecParams: (string | number)[] = [clientId];
+    const smsRecPeriod = periodSql(period, smsRecParams);
     const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_RECOVERY}
-    `, [clientId]);
+        ${smsRecPeriod ? `AND ${smsRecPeriod}` : ''}
+    `, smsRecParams);
 
     const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
@@ -1896,6 +1993,12 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     res.json({
       configured: true,
       currency,
+      period: {
+        active: periodActive,
+        is_today: period.isToday,
+        from: period.from || null,
+        to: period.to || null,
+      },
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
         vendas_sms: parseInt(smsSales?.count || '0'),

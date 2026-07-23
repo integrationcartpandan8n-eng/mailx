@@ -1033,6 +1033,7 @@
                 <span class="gp-label">Período de análise — aplica a <b>todos</b> os gráficos desta página</span>
             </div>
             <div class="gp-pills">
+                <button type="button" class="gp-pill" id="gpTodayBtn" data-today title="Hoje até agora — pra bater os valores do dia com o gateway">Hoje</button>
                 <button type="button" class="gp-pill active" data-days="7">7 dias</button>
                 <button type="button" class="gp-pill" data-days="30">30 dias</button>
                 <button type="button" class="gp-pill" data-days="90">90 dias</button>
@@ -1360,7 +1361,7 @@
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
         <div id="tab-content-sms" style="display:none">
             <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
-                ⚠ Todos os números desta aba (faturamento, vendas, contatos, créditos) são o total vitalício/atual do SlickText — ainda não respeitam o filtro de período selecionado acima.
+                ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
             </div>
             <div class="card">
                 <div class="card-header">
@@ -2245,6 +2246,10 @@
         }
 
         function reloadAllCharts(from, to, timeOpts = {}) {
+            // "Hoje" chega aqui com from=to=data atual do SERVIDOR (não do navegador) — ver
+            // applyToday(). Passa como um intervalo normal de 1 dia pra todo widget que já
+            // sabe lidar com from/to; timeOpts.today só liga o branch CURRENT_DATE no backend
+            // pra /stats e /sms-stats (mais direto e sem risco de mismatch de fuso).
             loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime);
             const refundSection = document.getElementById('refundChartSection');
             if (refundSection && refundSection.style.display !== 'none') {
@@ -2252,33 +2257,22 @@
             }
             loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime });
             reloadClientStatsForPeriod(from, to, timeOpts);
+            loadSmsStats(from, to, timeOpts);
         }
 
         async function reloadClientStatsForPeriod(from, to, timeOpts = {}) {
             try {
                 const params = new URLSearchParams();
-                if (from && to) {
+                if (timeOpts.today) {
+                    params.set('today', '1');
+                } else if (from && to) {
                     params.set('from', from);
                     params.set('to', to);
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
                 const res = await fetch(`${API}/clientes/${clientId}/stats?${params}`);
                 const data = await res.json();
-                if (window.__clientStatsData) {
-                    window.__clientStatsData.email = data.email;
-                    window.__clientStatsData.email_mailx = data.email_mailx;
-                } else {
-                    window.__clientStatsData = data;
-                }
-                renderEmailMarketingKpis(window.__clientStatsData, {
-                    contacts: 'emailContactsKpis',
-                    engagement: 'emailEngagementKpis',
-                    pending: 'emailEngagementPending',
-                    badge: 'emailEngagementBadge',
-                    limited: 'emailEngagementLimited',
-                    error: 'emailEngagementError',
-                });
-                loadEmailTabStats(window.__clientStatsData);
+                renderClientStatsData(data);
             } catch (e) {
                 console.error('Failed to reload client stats for period:', e);
             }
@@ -2314,6 +2308,25 @@
                 const from = new Date();
                 from.setDate(from.getDate() - (days - 1));
                 reloadAllCharts(fmtYmdLocal(from), fmtYmdLocal(to));
+            }
+
+            // "Hoje": busca a data atual do próprio servidor (Postgres) em vez de usar o
+            // relógio do navegador — evita bater 1 dia errado por fuso-horário quando quem
+            // está filtrando não está no mesmo fuso do servidor.
+            async function applyToday() {
+                window.__globalPeriodDays = null;
+                const todayBtn = document.getElementById('gpTodayBtn');
+                const originalLabel = todayBtn.textContent;
+                todayBtn.textContent = '...';
+                try {
+                    const res = await fetch(`${API}/server-today`);
+                    const { date } = await res.json();
+                    reloadAllCharts(date, date, { today: true });
+                } catch (e) {
+                    console.error('Failed to resolve server today:', e);
+                } finally {
+                    todayBtn.textContent = originalLabel;
+                }
             }
 
             function updatePreview() {
@@ -2353,6 +2366,13 @@
                     popover.classList.remove('open');
                     applyPreset(parseInt(btn.dataset.days, 10));
                 });
+            });
+
+            const todayBtn = document.getElementById('gpTodayBtn');
+            todayBtn.addEventListener('click', () => {
+                setActivePill(todayBtn);
+                popover.classList.remove('open');
+                applyToday();
             });
 
             customBtn.addEventListener('click', (e) => {
@@ -2600,8 +2620,13 @@
             return pct < 1 ? pct.toFixed(2) + '%' : pct.toFixed(1) + '%';
         }
 
+        window.__clientTabCharts = window.__clientTabCharts || {};
+
         async function loadClientStats() {
             try {
+                // Fetch estrutural (sem período) — só pra stores/kits/metrics_only. Os dados de
+                // negócio (KPIs, gráficos) são carregados logo em seguida por initGlobalPeriodControl(),
+                // que já dispara o preset padrão (7 dias) via applyPreset(7) ao inicializar.
                 const res = await fetch(`${API}/clientes/${clientId}/stats`);
                 const data = await res.json();
 
@@ -2613,7 +2638,13 @@
                 if (window.__clientKits) renderKits(window.__clientKits);
                 initRefundChartForClient(data.stores);
                 initGlobalPeriodControl();
+            } catch (e) {
+                console.error('Failed to load client stats:', e);
+            }
+        }
 
+        function renderClientStatsData(data) {
+            {
                 // Render KPIs
                 const kpiGrid = document.getElementById('clientKpis');
                 const stores = data.stores || [];
@@ -2662,7 +2693,8 @@
                 if (data.top_products && data.top_products.length > 0) {
                     document.getElementById('topProductsChart').style.display = 'block';
                     document.getElementById('topProductsEmpty').style.display = 'none';
-                    new Chart(document.getElementById('chartTopProducts'), {
+                    if (window.__clientTabCharts.topProducts) window.__clientTabCharts.topProducts.destroy();
+                    window.__clientTabCharts.topProducts = new Chart(document.getElementById('chartTopProducts'), {
                         type: 'bar',
                         data: {
                             labels: data.top_products.map(p => p.name),
@@ -2720,7 +2752,8 @@
                 if (data.daily_activity && data.daily_activity.labels.length > 0) {
                     document.getElementById('activityChartWrap').style.display = 'block';
                     document.getElementById('activityEmpty').style.display = 'none';
-                    new Chart(document.getElementById('chartActivity'), {
+                    if (window.__clientTabCharts.activity) window.__clientTabCharts.activity.destroy();
+                    window.__clientTabCharts.activity = new Chart(document.getElementById('chartActivity'), {
                         type: 'line',
                         data: {
                             labels: data.daily_activity.labels,
@@ -2760,7 +2793,8 @@
 
                 // Vendas por Hora
                 if (data.charts && data.charts.hourly) {
-                    new Chart(document.getElementById('chartHourly'), {
+                    if (window.__clientTabCharts.hourly) window.__clientTabCharts.hourly.destroy();
+                    window.__clientTabCharts.hourly = new Chart(document.getElementById('chartHourly'), {
                         type: 'bar',
                         data: {
                             labels: data.charts.hourly.labels,
@@ -2786,7 +2820,8 @@
 
                 // Top 5 Tipos de Evento
                 if (data.charts && data.charts.top_event_types) {
-                    new Chart(document.getElementById('chartTopTags'), {
+                    if (window.__clientTabCharts.topTags) window.__clientTabCharts.topTags.destroy();
+                    window.__clientTabCharts.topTags = new Chart(document.getElementById('chartTopTags'), {
                         type: 'bar',
                         data: {
                             labels: data.charts.top_event_types.labels,
@@ -2861,8 +2896,6 @@
 
                 window.__clientStatsData = data;
                 loadEmailTabStats(data);
-            } catch (e) {
-                console.error('Failed to load client stats:', e);
             }
         }
 
@@ -2885,11 +2918,9 @@
             activeBtn.style.background = 'var(--accent)';
             activeBtn.style.color = '#fff';
 
-            // Load SMS data on first switch
-            if (tab === 'sms' && !window._smsLoaded) {
-                loadSmsStats();
-                window._smsLoaded = true;
-            }
+            // Dados de SMS já são carregados a cada troca de período via reloadAllCharts()
+            // (disparado por initGlobalPeriodControl() no load inicial) — não precisa recarregar
+            // aqui, e recarregar sem período jogaria fora o filtro ativo.
 
             // Load email tab data
             if (tab === 'email') {
@@ -2898,9 +2929,17 @@
         }
 
         // ── Load SMS Stats from SlickText API ──
-        async function loadSmsStats() {
+        async function loadSmsStats(from, to, timeOpts = {}) {
             try {
-                const res = await fetch(`${API}/clientes/${clientId}/sms-stats`);
+                const params = new URLSearchParams();
+                if (timeOpts.today) {
+                    params.set('today', '1');
+                } else if (from && to) {
+                    params.set('from', from);
+                    params.set('to', to);
+                }
+                appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
+                const res = await fetch(`${API}/clientes/${clientId}/sms-stats?${params}`);
                 const data = await res.json();
 
                 if (!data.configured) {
