@@ -60,6 +60,15 @@ export class SlickTextClient {
     );
   }
 
+  /**
+   * GET cru pra qualquer path relativo ao brand — usado só pelo endpoint de diagnóstico
+   * pra testar variantes de path sem precisar de um método dedicado por tentativa.
+   */
+  async rawGet(path: string): Promise<any> {
+    const res = await this.http.get(path);
+    return res.data;
+  }
+
   // ── Contacts ──
 
   /**
