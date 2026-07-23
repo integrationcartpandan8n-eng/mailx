@@ -3107,11 +3107,11 @@
             return 'envios-' + utm.replace(/[^a-zA-Z0-9]/g, '_');
         }
 
-        function renderEnviosCell(utmCampaign) {
+        function renderEnviosCell(utmCampaign, vendas) {
             const cached = window.__smsSendsCache[utmCampaign];
             const id = utmToDomId(utmCampaign);
             if (!cached) {
-                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}">Ver envios</button></div>`;
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}">Ver envios</button></div>`;
             }
             if (cached === 'loading') {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
@@ -3122,15 +3122,20 @@
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
             }
+            // Eficiência por mensagem (doc 3.3): quantos envios pra gerar 1 venda dessa mensagem.
+            const ratio = vendas > 0 ? Math.round(cached.count / vendas) : null;
+            const ratioHtml = ratio != null
+                ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
+                : `<small>envios${cached.capped ? ' (parcial)' : ''}</small>`;
             return `<div class="rank-envios" id="${id}">
-                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}<small>envios${cached.capped ? ' (parcial)' : ''}</small></span>
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}</span>
             </div>`;
         }
 
-        async function loadSmsCampaignSends(utmCampaign) {
+        async function loadSmsCampaignSends(utmCampaign, vendas) {
             window.__smsSendsCache[utmCampaign] = 'loading';
             const cell = document.getElementById(utmToDomId(utmCampaign));
-            if (cell) cell.outerHTML = renderEnviosCell(utmCampaign);
+            if (cell) cell.outerHTML = renderEnviosCell(utmCampaign, vendas);
             try {
                 const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?utm_campaign=${encodeURIComponent(utmCampaign)}`);
                 const data = await res.json();
@@ -3139,7 +3144,7 @@
                 window.__smsSendsCache[utmCampaign] = { linked: true, count: null, message: 'Falha ao consultar.' };
             }
             const cell2 = document.getElementById(utmToDomId(utmCampaign));
-            if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign);
+            if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign, vendas);
         }
 
         async function linkSmsCampaign(utmCampaign) {
@@ -3157,7 +3162,8 @@
                     body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId }),
                 });
                 delete window.__smsSendsCache[utmCampaign];
-                loadSmsCampaignSends(utmCampaign);
+                const row = (window.__smsGranularData?.rows || []).find(r => r.utm_campaign === utmCampaign);
+                loadSmsCampaignSends(utmCampaign, row?.vendas || 0);
             } catch (e) {
                 alert('Falha ao salvar o vínculo. Tenta de novo.');
             }
@@ -3166,7 +3172,7 @@
         document.getElementById('sms-granular-body')?.addEventListener('click', (e) => {
             const loadBtn = e.target.closest('[data-load-envios]');
             if (loadBtn) {
-                loadSmsCampaignSends(decodeURIComponent(loadBtn.dataset.loadEnvios));
+                loadSmsCampaignSends(decodeURIComponent(loadBtn.dataset.loadEnvios), parseInt(loadBtn.dataset.vendas, 10) || 0);
                 return;
             }
             const linkBtn = e.target.closest('[data-link-envios]');
@@ -3305,7 +3311,7 @@
                                 <div class="msg-sub">${row.tipo_automacao || '—'} · <span class="prod">${row.produto || '—'}</span></div>
                             </div>
                         </div>
-                        ${renderEnviosCell(row.utm_campaign)}
+                        ${renderEnviosCell(row.utm_campaign, row.vendas)}
                         <div class="rank-sales"><strong>${row.vendas.toLocaleString('pt-BR')}</strong> vendas</div>
                         <div class="rank-refund">${fmtSmsRefundBadge(sym, row.reembolsos, row.valor_reembolso)}</div>
                         <div class="rank-value">
