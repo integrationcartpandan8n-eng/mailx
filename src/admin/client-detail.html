@@ -393,7 +393,7 @@
 
         .rank-row {
             display: grid;
-            grid-template-columns: 1fr 110px 90px 130px 150px;
+            grid-template-columns: 1fr 130px 90px 130px 150px;
             gap: 1rem;
             align-items: center;
             padding: 0.75rem 1.25rem;
@@ -415,6 +415,8 @@
         .rank-envios .envios-count { font-weight: 700; color: var(--text); }
         .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.65rem; }
         .rank-envios .envios-muted { color: var(--text-muted); font-size: 0.68rem; }
+        .rank-envios .envios-clicks { display: block; font-weight: 500; color: var(--accent-light); font-size: 0.65rem; margin-top: 0.15rem; }
+        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-muted); font-size: 0.62rem; margin-top: 0.15rem; cursor: help; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -3125,13 +3127,22 @@
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
             }
-            // Eficiência por mensagem (doc 3.3): quantos envios pra gerar 1 venda dessa mensagem.
+            // Eficiência por mensagem (doc 3.3): quantos envios/cliques pra gerar 1 venda.
             const ratio = vendas > 0 ? Math.round(cached.count / vendas) : null;
             const ratioHtml = ratio != null
                 ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
                 : `<small>envios${cached.capped ? ' (parcial)' : ''}</small>`;
+
+            let clicksHtml = '';
+            if (cached.clicksFieldFound === false) {
+                clicksHtml = `<small class="envios-clicks-muted" title="A SlickText não retornou nenhum campo de clique reconhecido nessa consulta — validar com o Nicollas.">cliques indisponíveis</small>`;
+            } else if (typeof cached.clicks === 'number') {
+                const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
+                clicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+            }
+
             return `<div class="rank-envios" id="${id}">
-                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}</span>
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}${clicksHtml}</span>
             </div>`;
         }
 

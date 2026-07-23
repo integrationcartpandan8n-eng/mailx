@@ -241,24 +241,60 @@ export class SlickTextClient {
   }
 
   /**
-   * Conta o total de mensagens enviadas por uma campanha específica, paginando
-   * GET /messages?source=Campaign&source_id={campaignId}. A API não tem um campo de
-   * "total" pronto — só um booleano hasMore por página — então soma o tamanho de
-   * cada página até acabar ou até o limite de segurança (evita loop infinito/rate
-   * limit caso a paginação real use outro parâmetro do que o esperado aqui).
+   * Uma mensagem individual tem clique registrado? Confirmado pelo Nicollas que o
+   * clique vem junto do mesmo objeto de mensagem (GET /messages) usado pra contar
+   * envios — mas o nome exato do campo não foi confirmado, então checa os
+   * candidatos mais prováveis defensivamente. Se nenhum bater, undercounta cliques
+   * silenciosamente (fica 0) em vez de quebrar — por isso `clicksFieldFound` no
+   * retorno de countCampaignMessages, pra saber se algum campo foi de fato achado.
+   */
+  private static messageWasClicked(item: any): boolean {
+    if (typeof item?.clicked === 'boolean') return item.clicked;
+    if (typeof item?.link_clicked === 'boolean') return item.link_clicked;
+    if (typeof item?.is_clicked === 'boolean') return item.is_clicked;
+    if (typeof item?.click_count === 'number') return item.click_count > 0;
+    if (typeof item?.clicks === 'number') return item.clicks > 0;
+    if (Array.isArray(item?.links_clicked)) return item.links_clicked.length > 0;
+    if (typeof item?.status === 'string') return /clicked/i.test(item.status);
+    return false;
+  }
+
+  private static hasAnyClickField(item: any): boolean {
+    return (
+      item?.clicked !== undefined ||
+      item?.link_clicked !== undefined ||
+      item?.is_clicked !== undefined ||
+      item?.click_count !== undefined ||
+      item?.clicks !== undefined ||
+      item?.links_clicked !== undefined ||
+      (typeof item?.status === 'string' && /clicked/i.test(item.status))
+    );
+  }
+
+  /**
+   * Conta o total de mensagens enviadas (e cliques) de uma campanha específica,
+   * paginando GET /messages?source=Campaign&source_id={campaignId}. A API não tem
+   * um campo de "total" pronto — só um booleano hasMore por página — então soma o
+   * tamanho de cada página até acabar ou até o limite de segurança (evita loop
+   * infinito/rate limit caso a paginação real use outro parâmetro do que o
+   * esperado aqui).
    *
-   * IMPORTANTE: os nomes de parâmetro de paginação (page/limit) são um best-effort
-   * baseado em convenção REST comum — ainda não testado contra a API real da
-   * SlickText em produção. Validar com uma campanha pequena antes de confiar no
-   * número em campanhas grandes.
+   * IMPORTANTE: os nomes de parâmetro de paginação (page/limit) e do campo de
+   * clique são best-effort — não testados contra a API real da SlickText em
+   * produção. Validar com uma campanha pequena antes de confiar no número em
+   * campanhas grandes. `clicksFieldFound=false` no retorno avisa quando nenhum
+   * campo de clique conhecido apareceu no payload (nesse caso `clicks` é só um
+   * chute de 0, não um dado real).
    */
   async countCampaignMessages(
     campaignId: number,
     opts: { status?: string; maxPages?: number } = {}
-  ): Promise<{ count: number; capped: boolean; pages: number }> {
+  ): Promise<{ count: number; clicks: number; clicksFieldFound: boolean; capped: boolean; pages: number }> {
     const maxPages = opts.maxPages ?? 40;
     let page = 1;
     let count = 0;
+    let clicks = 0;
+    let clicksFieldFound = false;
     let capped = false;
 
     while (page <= maxPages) {
@@ -268,16 +304,20 @@ export class SlickTextClient {
       const res = await this.http.get('/messages', { params });
       const items = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
       count += items.length;
+      for (const item of items) {
+        if (SlickTextClient.hasAnyClickField(item)) clicksFieldFound = true;
+        if (SlickTextClient.messageWasClicked(item)) clicks++;
+      }
 
       const hasMore = res.data?.hasMore ?? res.data?.has_more ?? false;
       if (!hasMore || items.length === 0) {
-        return { count, capped: false, pages: page };
+        return { count, clicks, clicksFieldFound, capped: false, pages: page };
       }
       page++;
     }
     capped = true;
     logger.warn(CTX, `countCampaignMessages: atingiu o limite de ${maxPages} páginas pra campaign_id=${campaignId} — número pode estar incompleto`);
-    return { count, capped, pages: page - 1 };
+    return { count, clicks, clicksFieldFound, capped, pages: page - 1 };
   }
 
   /**
