@@ -1771,12 +1771,11 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   res.json({ ok: true });
 }));
 
-// GET /admin/clientes/:id/sms-debug/workflow-analytics/:workflowId - DIAGNÓSTICO: expõe a resposta
-// crua de GET /analytics/workflows/{id} da SlickText, sem processar nada. Existe só pra confirmar o
-// formato real dessa API antes de confiar nela pra separar envios/cliques por mensagem dentro de um
-// workflow (a tela de Analytics da SlickText já mostra esse detalhamento por mensagem — se esse
-// endpoint devolver o mesmo, é melhor que nosso countCampaignMessages atual, que só soma o total do
-// workflow inteiro). Remover depois de confirmado — não é uma rota de produto.
+// GET /admin/clientes/:id/sms-debug/workflow-analytics/:workflowId - DIAGNÓSTICO: testa várias
+// variantes plausíveis de path pra analytics de workflow na SlickText de uma vez só (evita ida e
+// volta de deploy a cada tentativa). /analytics/workflows/{id} já confirmado 404 — essa versão
+// tenta as próximas candidatas mais prováveis por analogia com o resto da API (/lists/{id}/... etc).
+// Remover depois de confirmado qual (se algum) funciona — não é uma rota de produto.
 adminRouter.get('/clientes/:id/sms-debug/workflow-analytics/:workflowId', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
   const workflowId = parseInt(req.params.workflowId as string, 10);
@@ -1787,13 +1786,27 @@ adminRouter.get('/clientes/:id/sms-debug/workflow-analytics/:workflowId', asyncH
     res.status(400).json({ error: 'SlickText não configurado para este cliente.' });
     return;
   }
-  try {
-    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-    const raw = await st.getWorkflowAnalytics(workflowId);
-    res.json({ ok: true, raw });
-  } catch (err: any) {
-    res.status(502).json({ ok: false, error: err.message, status: err.response?.status, data: err.response?.data });
-  }
+
+  const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+  const candidates = [
+    `/workflows/${workflowId}`,
+    `/workflows/${workflowId}/analytics`,
+    `/workflows/${workflowId}/messages`,
+    `/workflows/${workflowId}/stats`,
+    `/analytics/workflow/${workflowId}`,
+    `/analytics/workflows/${workflowId}/messages`,
+  ];
+
+  const results = await Promise.all(candidates.map(async (path) => {
+    try {
+      const data = await st.rawGet(path);
+      return { path, ok: true, data };
+    } catch (err: any) {
+      return { path, ok: false, status: err.response?.status, error: err.message, data: err.response?.data };
+    }
+  }));
+
+  res.json({ results });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows da SlickText (id + nome) pra
