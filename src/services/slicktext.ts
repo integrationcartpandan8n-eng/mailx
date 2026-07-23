@@ -377,6 +377,19 @@ export class SlickTextClient {
   }
 
   /**
+   * Analytics de um workflow específico — por analogia a getCampaignAnalyticsById.
+   * A própria SlickText mostra, na tela de Analytics do workflow, envios e cliques
+   * SEPARADOS POR MENSAGEM dentro do workflow (ex: "[01]" e "[01B]" com contagens
+   * diferentes) — se esse endpoint devolver a mesma coisa, é melhor que paginar
+   * /messages (não temos hoje como separar por mensagem/step, só o total do
+   * workflow inteiro). Formato ainda 100% best-effort — não confirmado.
+   */
+  async getWorkflowAnalytics(workflowId: number): Promise<any> {
+    const res = await this.http.get(`/analytics/workflows/${workflowId}`);
+    return res.data;
+  }
+
+  /**
    * Get brand usage (credits available/used).
    */
   async getBrandUsage(): Promise<{

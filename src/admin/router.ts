@@ -1771,6 +1771,31 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   res.json({ ok: true });
 }));
 
+// GET /admin/clientes/:id/sms-debug/workflow-analytics/:workflowId - DIAGNÓSTICO: expõe a resposta
+// crua de GET /analytics/workflows/{id} da SlickText, sem processar nada. Existe só pra confirmar o
+// formato real dessa API antes de confiar nela pra separar envios/cliques por mensagem dentro de um
+// workflow (a tela de Analytics da SlickText já mostra esse detalhamento por mensagem — se esse
+// endpoint devolver o mesmo, é melhor que nosso countCampaignMessages atual, que só soma o total do
+// workflow inteiro). Remover depois de confirmado — não é uma rota de produto.
+adminRouter.get('/clientes/:id/sms-debug/workflow-analytics/:workflowId', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const workflowId = parseInt(req.params.workflowId as string, 10);
+  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+  );
+  if (!client?.st_api_token || !client?.st_brand_id) {
+    res.status(400).json({ error: 'SlickText não configurado para este cliente.' });
+    return;
+  }
+  try {
+    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+    const raw = await st.getWorkflowAnalytics(workflowId);
+    res.json({ ok: true, raw });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: err.message, status: err.response?.status, data: err.response?.data });
+  }
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows da SlickText (id + nome) pra
 // preencher o dropdown de "Vincular campanha" — evita ter que caçar o ID manualmente no painel da
 // SlickText. As automações do MailX normalmente são Workflows, não Campaigns avulsas (confirmado
