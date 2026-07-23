@@ -219,6 +219,57 @@ function periodSql(
   return '';
 }
 
+interface SlickTextAccountRef {
+  accountId: number | null; // null = conta principal (clients.st_api_token/st_brand_id)
+  label: string;
+  st_api_token: string;
+  st_brand_id: string;
+}
+
+/**
+ * Um cliente pode rodar SMS por mais de uma conta/marca da SlickText em paralelo pro mesmo
+ * produto (confirmado com o Murilo — ex: dois números de telefone diferentes escalando o
+ * mesmo fluxo). Junta a conta principal (clients.st_api_token/st_brand_id) com as adicionais
+ * (client_slicktext_accounts). Métricas agregadas (contatos, créditos) devem somar todas;
+ * vínculos de mensagem específicos (sms_campaign_map.st_account_id) usam uma só.
+ */
+async function getSlickTextAccounts(clientId: number | string): Promise<SlickTextAccountRef[]> {
+  const client = await queryOne<{ st_api_token: string | null; st_brand_id: string | null }>(
+    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+  );
+  const extra = await query<{ id: number; label: string | null; st_api_token: string; st_brand_id: string }>(
+    `SELECT id, label, st_api_token, st_brand_id FROM client_slicktext_accounts WHERE client_id = $1 ORDER BY id`,
+    [clientId]
+  );
+
+  const accounts: SlickTextAccountRef[] = [];
+  if (client?.st_api_token && client?.st_brand_id) {
+    accounts.push({ accountId: null, label: 'Principal', st_api_token: client.st_api_token, st_brand_id: client.st_brand_id });
+  }
+  for (const row of extra) {
+    accounts.push({ accountId: row.id, label: row.label || `Conta ${row.id}`, st_api_token: row.st_api_token, st_brand_id: row.st_brand_id });
+  }
+  return accounts;
+}
+
+/**
+ * Resolve as credenciais de UMA conta específica (por accountId — null = principal), pra usar
+ * em vínculos de mensagem (sms_campaign_map.st_account_id) onde só uma conta importa.
+ */
+async function getSlickTextAccountById(clientId: number | string, accountId: number | null): Promise<{ st_api_token: string; st_brand_id: string } | null> {
+  if (accountId == null) {
+    const client = await queryOne<{ st_api_token: string | null; st_brand_id: string | null }>(
+      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+    );
+    return client?.st_api_token && client?.st_brand_id ? { st_api_token: client.st_api_token, st_brand_id: client.st_brand_id } : null;
+  }
+  const row = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+    `SELECT st_api_token, st_brand_id FROM client_slicktext_accounts WHERE id = $1 AND client_id = $2`,
+    [accountId, clientId]
+  );
+  return row || null;
+}
+
 function parseYmd(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d);
@@ -806,29 +857,35 @@ adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Respon
       AND ${SQL_IS_RECOVERY}
   `);
 
-  // SlickText aggregated across all clients with credentials
-  const clientsWithSt = await query<{ id: number; st_api_token: string; st_brand_id: string }>(
-    `SELECT id, st_api_token, st_brand_id FROM clients WHERE st_api_token IS NOT NULL AND st_brand_id IS NOT NULL`
-  );
+  // SlickText aggregated across all clients com credenciais — um cliente pode ter mais de uma
+  // conta SlickText rodando em paralelo (ver getSlickTextAccounts), soma todas.
+  const clientIdsWithSt = await query<{ id: number }>(`
+    SELECT id FROM clients WHERE st_api_token IS NOT NULL AND st_brand_id IS NOT NULL
+    UNION
+    SELECT DISTINCT client_id as id FROM client_slicktext_accounts
+  `);
 
   const stTotals = { contacts: 0, total_credits: 0, credits_used: 0, credits_available: 0, lists: 0 };
-  for (const c of clientsWithSt) {
-    try {
-      const st = new SlickTextClient(c.st_api_token, c.st_brand_id);
-      const [contactAnalytics, usage, lists] = await Promise.all([
-        st.getContactAnalytics().catch(() => null),
-        st.getBrandUsage().catch(() => null),
-        st.getLists().catch(() => []),
-      ]);
-      if (contactAnalytics?.totals?.total) stTotals.contacts += contactAnalytics.totals.total;
-      if (usage) {
-        stTotals.total_credits += usage.total_credits || 0;
-        stTotals.credits_used += usage.credits_used || 0;
-        stTotals.credits_available += usage.credits_available || 0;
+  for (const c of clientIdsWithSt) {
+    const clientAccounts = await getSlickTextAccounts(c.id);
+    for (const acc of clientAccounts) {
+      try {
+        const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+        const [contactAnalytics, usage, lists] = await Promise.all([
+          st.getContactAnalytics().catch(() => null),
+          st.getBrandUsage().catch(() => null),
+          st.getLists().catch(() => []),
+        ]);
+        if (contactAnalytics?.totals?.total) stTotals.contacts += contactAnalytics.totals.total;
+        if (usage) {
+          stTotals.total_credits += usage.total_credits || 0;
+          stTotals.credits_used += usage.credits_used || 0;
+          stTotals.credits_available += usage.credits_available || 0;
+        }
+        stTotals.lists += Array.isArray(lists) ? lists.length : 0;
+      } catch (err: any) {
+        logger.warn(CTX, `Dashboard sms: SlickText fetch failed for client ${c.id} (conta ${acc.label}): ${err.message}`);
       }
-      stTotals.lists += Array.isArray(lists) ? lists.length : 0;
-    } catch (err: any) {
-      logger.warn(CTX, `Dashboard sms: SlickText fetch failed for client ${c.id}: ${err.message}`);
     }
   }
 
@@ -849,7 +906,7 @@ adminRouter.get('/dashboard/sms', asyncHandler(async (_req: Request, res: Respon
       total_creditos: stTotals.total_credits.toLocaleString('pt-BR'),
       listas_sms: stTotals.lists.toLocaleString('pt-BR'),
     },
-    clients_with_st: clientsWithSt.length,
+    clients_with_st: clientIdsWithSt.length,
   });
 }));
 
@@ -1164,6 +1221,52 @@ adminRouter.patch('/clientes/:id/st-credentials', asyncHandler(async (req: Reque
     [st_api_token, st_brand_id, req.params.id]
   );
   logger.info(CTX, `Client ${req.params.id} SlickText credentials updated`);
+  res.json({ ok: true });
+}));
+
+// GET /admin/clientes/:id/st-accounts - Lista contas SlickText adicionais do cliente (além da
+// principal, que fica em clients.st_api_token/st_brand_id). Token mascarado na resposta.
+adminRouter.get('/clientes/:id/st-accounts', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const rows = await query<{ id: number; label: string | null; st_brand_id: string; st_api_token: string }>(
+    `SELECT id, label, st_brand_id, st_api_token FROM client_slicktext_accounts WHERE client_id = $1 ORDER BY id`,
+    [clientId]
+  );
+  res.json({
+    accounts: rows.map(r => ({
+      id: r.id,
+      label: r.label,
+      st_brand_id: r.st_brand_id,
+      st_api_token_masked: r.st_api_token ? `${r.st_api_token.slice(0, 6)}...${r.st_api_token.slice(-4)}` : null,
+    })),
+  });
+}));
+
+// POST /admin/clientes/:id/st-accounts - Adiciona uma conta SlickText ADICIONAL pro cliente (o
+// mesmo cliente pode rodar SMS por mais de um número/marca em paralelo pro mesmo produto).
+adminRouter.post('/clientes/:id/st-accounts', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const { label, st_api_token, st_brand_id } = req.body;
+
+  if (!st_api_token || !st_brand_id) {
+    res.status(400).json({ error: 'st_api_token e st_brand_id são obrigatórios' });
+    return;
+  }
+
+  const row = await queryOne<{ id: number }>(
+    `INSERT INTO client_slicktext_accounts (client_id, label, st_api_token, st_brand_id)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [clientId, label || null, st_api_token, st_brand_id]
+  );
+  logger.info(CTX, `Client ${clientId}: conta SlickText adicional criada (id=${row?.id}, brand=${st_brand_id})`);
+  res.json({ ok: true, id: row?.id });
+}));
+
+// DELETE /admin/clientes/:id/st-accounts/:accountId - Remove uma conta SlickText adicional.
+adminRouter.delete('/clientes/:id/st-accounts/:accountId', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const accountId = parseInt(req.params.accountId as string);
+  await query(`DELETE FROM client_slicktext_accounts WHERE id = $1 AND client_id = $2`, [accountId, clientId]);
   res.json({ ok: true });
 }));
 
@@ -1739,8 +1842,8 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
 // GET /admin/clientes/:id/sms-campaign-map - Lista os vínculos manuais utm_campaign -> campaign/workflow_id da SlickText
 adminRouter.get('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const rows = await query<{ utm_campaign: string; slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null }>(
-    `SELECT utm_campaign, slicktext_campaign_id, source_type, workflow_node_id FROM sms_campaign_map WHERE client_id = $1`,
+  const rows = await query<{ utm_campaign: string; slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null; st_account_id: number | null }>(
+    `SELECT utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id FROM sms_campaign_map WHERE client_id = $1`,
     [clientId]
   );
   res.json({ mappings: rows });
@@ -1754,11 +1857,14 @@ adminRouter.get('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Reque
 // mesmo fluxo), esse é o ID da mensagem específica dentro do workflow — confirmado via
 // GET /analytics/workflows/{workflow_id}/nodes/{node_id}, que devolve envios/cliques só daquela mensagem,
 // já filtrado por período. Sem isso, a contagem é do workflow inteiro (pode somar várias mensagens juntas).
+// st_account_id (opcional): qual conta SlickText do cliente esse campaign/workflow_id pertence
+// (null = conta principal) — necessário quando o cliente roda mais de uma conta em paralelo.
 adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
-  const { utm_campaign, slicktext_campaign_id, source_type, workflow_node_id } = req.body;
+  const { utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id } = req.body;
   const sourceType = source_type === 'Workflow' ? 'Workflow' : 'Campaign';
   const nodeId = Number.isInteger(workflow_node_id) ? workflow_node_id : null;
+  const accountId = Number.isInteger(st_account_id) ? st_account_id : null;
 
   if (!utm_campaign || !Number.isInteger(slicktext_campaign_id)) {
     res.status(400).json({ error: 'utm_campaign (string) e slicktext_campaign_id (inteiro) são obrigatórios' });
@@ -1766,49 +1872,51 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   }
 
   await query(
-    `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())
+    `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
      ON CONFLICT (client_id, utm_campaign)
-     DO UPDATE SET slicktext_campaign_id = $3, source_type = $4, workflow_node_id = $5, updated_at = NOW()`,
-    [clientId, utm_campaign, slicktext_campaign_id, sourceType, nodeId]
+     DO UPDATE SET slicktext_campaign_id = $3, source_type = $4, workflow_node_id = $5, st_account_id = $6, updated_at = NOW()`,
+    [clientId, utm_campaign, slicktext_campaign_id, sourceType, nodeId, accountId]
   );
 
   res.json({ ok: true });
 }));
 
-// GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows da SlickText (id + nome) pra
-// preencher o dropdown de "Vincular campanha" — evita ter que caçar o ID manualmente no painel da
-// SlickText. As automações do MailX normalmente são Workflows, não Campaigns avulsas (confirmado
-// inspecionando o painel) — por isso trazemos os dois tipos, o dropdown separa por grupo.
+// GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
+// SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
+// o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
+// produto em paralelo (ver getSlickTextAccounts) — cada item vem marcado com accountId/accountLabel
+// pra saber qual conta usar depois.
 adminRouter.get('/clientes/:id/sms-campaigns', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
-  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-  );
-  if (!client?.st_api_token || !client?.st_brand_id) {
+  const accounts = await getSlickTextAccounts(clientId);
+  if (accounts.length === 0) {
     res.json({ configured: false, campaigns: [], workflows: [] });
     return;
   }
 
-  const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-  const [campaignsResult, workflowsResult] = await Promise.allSettled([
-    st.getCampaigns(),
-    st.getWorkflows(),
-  ]);
-
-  const campaigns = campaignsResult.status === 'fulfilled' ? campaignsResult.value : [];
-  const workflows = workflowsResult.status === 'fulfilled' ? workflowsResult.value : [];
+  const campaigns: any[] = [];
+  const workflows: any[] = [];
   const errors: string[] = [];
-  if (campaignsResult.status === 'rejected') {
-    logger.error(CTX, `Falha ao listar campanhas da SlickText (client ${clientId}): ${campaignsResult.reason?.message}`);
-    errors.push(`campanhas: ${campaignsResult.reason?.message}`);
-  }
-  if (workflowsResult.status === 'rejected') {
-    logger.error(CTX, `Falha ao listar workflows da SlickText (client ${clientId}): ${workflowsResult.reason?.message}`);
-    errors.push(`workflows: ${workflowsResult.reason?.message}`);
-  }
 
-  res.json({ configured: true, campaigns, workflows, error: errors.length ? errors.join('; ') : undefined });
+  await Promise.all(accounts.map(async (acc) => {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const [campaignsResult, workflowsResult] = await Promise.allSettled([st.getCampaigns(), st.getWorkflows()]);
+    if (campaignsResult.status === 'fulfilled') {
+      campaigns.push(...campaignsResult.value.map(c => ({ ...c, accountId: acc.accountId, accountLabel: acc.label })));
+    } else {
+      logger.error(CTX, `Falha ao listar campanhas da SlickText (client ${clientId}, conta ${acc.label}): ${campaignsResult.reason?.message}`);
+      errors.push(`campanhas (${acc.label}): ${campaignsResult.reason?.message}`);
+    }
+    if (workflowsResult.status === 'fulfilled') {
+      workflows.push(...workflowsResult.value.map(w => ({ ...w, accountId: acc.accountId, accountLabel: acc.label })));
+    } else {
+      logger.error(CTX, `Falha ao listar workflows da SlickText (client ${clientId}, conta ${acc.label}): ${workflowsResult.reason?.message}`);
+      errors.push(`workflows (${acc.label}): ${workflowsResult.reason?.message}`);
+    }
+  }));
+
+  res.json({ configured: true, campaigns, workflows, multiAccount: accounts.length > 1, error: errors.length ? errors.join('; ') : undefined });
 }));
 
 /**
@@ -1848,8 +1956,8 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
     return;
   }
 
-  const mapping = await queryOne<{ slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null }>(
-    `SELECT slicktext_campaign_id, source_type, workflow_node_id FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
+  const mapping = await queryOne<{ slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null; st_account_id: number | null }>(
+    `SELECT slicktext_campaign_id, source_type, workflow_node_id, st_account_id FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
     [clientId, utmCampaign]
   );
 
@@ -1858,15 +1966,13 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
     return;
   }
 
-  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-  );
-  if (!client?.st_api_token || !client?.st_brand_id) {
-    res.json({ linked: true, count: null, message: 'SlickText não configurado para este cliente.' });
+  const account = await getSlickTextAccountById(clientId, mapping.st_account_id);
+  if (!account) {
+    res.json({ linked: true, count: null, message: 'SlickText não configurado para esta conta.' });
     return;
   }
 
-  const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+  const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
   const sourceType = mapping.source_type === 'Workflow' ? 'Workflow' : 'Campaign';
 
   try {
@@ -2116,13 +2222,11 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
   const currency = await resolveClientCurrency(clientId);
   const symbol = currencySymbol(currency);
 
-  // Get client's SlickText credentials
-  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`,
-    [clientId]
-  );
+  // Um cliente pode ter mais de uma conta SlickText rodando em paralelo pro mesmo produto
+  // (confirmado com o Murilo) — soma contatos/créditos/listas de todas.
+  const accounts = await getSlickTextAccounts(clientId);
 
-  if (!client?.st_api_token || !client?.st_brand_id) {
+  if (accounts.length === 0) {
     res.json({
       configured: false,
       currency,
@@ -2132,24 +2236,28 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
   }
 
   try {
-    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+    const stClients = accounts.map(acc => new SlickTextClient(acc.st_api_token, acc.st_brand_id));
 
-    // Fetch all data in parallel
-    const [
-      contactAnalytics,
-      messageAnalytics,
-      creditAnalytics,
-      brandUsage,
-      lists,
-    ] = await Promise.all([
-      st.getContactAnalytics().catch(() => null),
-      st.getMessageAnalytics().catch(() => null),
-      st.getCreditAnalytics().catch(() => null),
-      st.getBrandUsage().catch(() => null),
-      st.getLists().catch(() => []),
-    ]);
+    // Fetch all data em paralelo, pra cada conta, e soma
+    const perAccount = await Promise.all(stClients.map(async (st) => ({
+      contactAnalytics: await st.getContactAnalytics().catch(() => null),
+      brandUsage: await st.getBrandUsage().catch(() => null),
+      lists: await st.getLists().catch(() => []),
+    })));
 
-    // Get contact count for each list (product lists)
+    const contactAnalyticsTotal = perAccount.reduce((sum, a) => sum + (a.contactAnalytics?.totals?.total ?? a.contactAnalytics?.total ?? 0), 0);
+    const contactAnalytics = perAccount.some(a => a.contactAnalytics) ? { totals: { total: contactAnalyticsTotal } } : null;
+    const brandUsage = perAccount.some(a => a.brandUsage) ? {
+      total_credits: perAccount.reduce((sum, a) => sum + (a.brandUsage?.total_credits || 0), 0),
+      credits_used: perAccount.reduce((sum, a) => sum + (a.brandUsage?.credits_used || 0), 0),
+      credits_available: perAccount.reduce((sum, a) => sum + (a.brandUsage?.credits_available || 0), 0),
+    } : null;
+    const lists = perAccount.flatMap(a => a.lists);
+    const messageAnalytics = null; // não usado no frontend hoje — ver getMessageAnalytics
+    const creditAnalytics = null; // getCreditAnalytics sempre retorna null (endpoint 404 confirmado)
+
+    // Get contact count for each list (product lists) — tenta em TODAS as contas: um list_id só
+    // é válido numa conta específica, as outras retornam 0 (getListContactCount já engole erro).
     const kits = await query<{
       name: string;
       st_list_compra_id: string | null;
@@ -2163,17 +2271,17 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
       const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
 
-      const [compraCount, abandonoCount] = await Promise.all([
-        compraId ? st.getListContactCount(compraId) : Promise.resolve(0),
-        abandonoId ? st.getListContactCount(abandonoId) : Promise.resolve(0),
+      const [compraCounts, abandonoCounts] = await Promise.all([
+        compraId ? Promise.all(stClients.map(st => st.getListContactCount(compraId))) : Promise.resolve([0]),
+        abandonoId ? Promise.all(stClients.map(st => st.getListContactCount(abandonoId))) : Promise.resolve([0]),
       ]);
 
       return {
         product: kit.name,
         compra_list_id: compraId,
-        compra_contacts: compraCount,
+        compra_contacts: compraCounts.reduce((a, b) => a + b, 0),
         abandono_list_id: abandonoId,
-        abandono_contacts: abandonoCount,
+        abandono_contacts: abandonoCounts.reduce((a, b) => a + b, 0),
       };
     }));
 

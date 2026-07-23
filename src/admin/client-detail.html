@@ -1557,6 +1557,33 @@
                     <button class="btn btn-accent" onclick="saveStCredentials()" style="height:36px">Salvar</button>
                 </div>
             </div>
+
+            <!-- Contas SlickText adicionais — pra quando o mesmo produto roda por mais de um
+                 número/marca em paralelo (confirmado com o Murilo). A conta acima é a "principal". -->
+            <div class="card-body" style="border-top:1px solid var(--border); padding-top:1rem">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.6rem">
+                    <span style="font-size:0.78rem; color:var(--text-dim); font-weight:600">Contas adicionais <span class="kpi-tip" tabindex="0" data-tip="Use isso quando o mesmo cliente roda SMS por mais de um número/marca da SlickText em paralelo pro mesmo produto. Os dados de contatos/créditos somam todas as contas.">ⓘ</span></span>
+                    <button class="btn btn-outline" style="font-size:0.72rem; padding:0.35rem 0.7rem" onclick="toggleForm('stAccountForm')"><i class="fas fa-plus"></i> Adicionar conta</button>
+                </div>
+                <div id="stAccountsList" style="display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.6rem"></div>
+                <div class="inline-form" id="stAccountForm">
+                    <div class="form-row">
+                        <div>
+                            <label>Rótulo (opcional)</label>
+                            <input type="text" id="newStAccountLabel" placeholder="Ex: Florex Health">
+                        </div>
+                        <div>
+                            <label>API Token (Bearer) *</label>
+                            <input type="password" id="newStAccountToken" placeholder="seu-bearer-token-slicktext">
+                        </div>
+                        <div>
+                            <label>Brand ID *</label>
+                            <input type="text" id="newStAccountBrandId" placeholder="30571">
+                        </div>
+                        <button class="btn btn-accent" onclick="addStAccount()" style="height:36px">Adicionar</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Kits / Products -->
@@ -1756,6 +1783,10 @@
             <div id="linkCampaignLoading" style="display:none; font-size:0.78rem; color:var(--text-dim); margin-top:0.75rem"><i class="fas fa-spinner fa-spin"></i> Carregando workflows/campanhas da SlickText...</div>
 
             <div id="linkCampaignManualWrap" style="display:none; margin-top:0.75rem">
+                <div id="linkCampaignManualAccountWrap" style="display:none; margin-bottom:0.5rem">
+                    <label style="font-size:0.72rem; color:var(--text-dim); display:block; margin-bottom:0.3rem">Qual conta SlickText?</label>
+                    <select id="linkCampaignManualAccountSelect" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.55rem 0.7rem; border-radius:8px; font-size:0.82rem; font-family:inherit"></select>
+                </div>
                 <input type="text" inputmode="numeric" id="linkCampaignInput" placeholder="Ex: 9361 (o número no final da URL do workflow)" style="width:100%; background:var(--surface-3); border:1px solid var(--border); color:var(--text); padding:0.6rem 0.75rem; border-radius:8px; font-size:0.9rem; font-family:inherit">
                 <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.35rem">Assume que é um <b>workflow_id</b> (o caso comum das automações). Se for uma campanha avulsa, use o dropdown acima.</div>
                 <div id="linkCampaignManualHint" style="font-size:0.7rem; color:var(--text-muted); margin-top:0.35rem"></div>
@@ -1872,6 +1903,7 @@
                     stBadge.className = 'tag gray';
                     stBrandDisplay.textContent = '';
                 }
+                loadStAccountsList();
 
                 // Load per-client stats
                 loadClientStats();
@@ -2028,6 +2060,80 @@
                 }
             } catch (e) {
                 showModal('Erro', e.message);
+            }
+        }
+
+        // ── Contas SlickText adicionais (mesmo cliente rodando SMS por mais de um número/marca) ──
+        async function loadStAccountsList() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/st-accounts`);
+                const data = await res.json();
+                window.__stAccounts = data.accounts || [];
+                renderStAccountsList();
+            } catch (e) {
+                window.__stAccounts = [];
+            }
+        }
+
+        function renderStAccountsList() {
+            const el = document.getElementById('stAccountsList');
+            if (!el) return;
+            const accounts = window.__stAccounts || [];
+            if (accounts.length === 0) {
+                el.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted)">Nenhuma conta adicional — só a principal acima.</div>';
+                return;
+            }
+            el.innerHTML = accounts.map(a => `
+                <div style="display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.7rem; background:var(--surface-3); border-radius:8px; font-size:0.78rem">
+                    <i class="fas fa-sms" style="color:var(--accent-light)"></i>
+                    <span style="font-weight:600">${escapeHtml(a.label || `Conta ${a.id}`)}</span>
+                    <span style="color:var(--text-dim)">Brand ID: ${escapeHtml(a.st_brand_id)}</span>
+                    <span style="color:var(--text-muted); font-family:monospace">${escapeHtml(a.st_api_token_masked || '')}</span>
+                    <button class="btn btn-outline" style="margin-left:auto; font-size:0.68rem; padding:0.25rem 0.5rem; color:var(--danger)" onclick="deleteStAccount(${a.id})"><i class="fas fa-trash"></i></button>
+                </div>
+            `).join('');
+        }
+
+        async function addStAccount() {
+            const label = document.getElementById('newStAccountLabel').value.trim();
+            const token = document.getElementById('newStAccountToken').value.trim();
+            const brandId = document.getElementById('newStAccountBrandId').value.trim();
+
+            if (!token || !brandId) {
+                alert('Preencha o API Token e o Brand ID da conta adicional.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/st-accounts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: label || null, st_api_token: token, st_brand_id: brandId })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('newStAccountLabel').value = '';
+                    document.getElementById('newStAccountToken').value = '';
+                    document.getElementById('newStAccountBrandId').value = '';
+                    document.getElementById('stAccountForm').classList.remove('show');
+                    window.__smsCampaignsCache = null; // conta mudou — descarta cache do dropdown de vínculo
+                    loadStAccountsList();
+                } else {
+                    alert(data.error || 'Falha ao adicionar conta.');
+                }
+            } catch (e) {
+                alert('Falha ao adicionar conta: ' + e.message);
+            }
+        }
+
+        async function deleteStAccount(accountId) {
+            if (!confirm('Remover essa conta adicional? Vínculos de mensagem que apontam pra ela vão parar de funcionar.')) return;
+            try {
+                await fetch(`${API}/clientes/${clientId}/st-accounts/${accountId}`, { method: 'DELETE' });
+                window.__smsCampaignsCache = null;
+                loadStAccountsList();
+            } catch (e) {
+                alert('Falha ao remover conta: ' + e.message);
             }
         }
 
@@ -3335,7 +3441,7 @@
                 try {
                     const res = await fetch(`${API}/clientes/${clientId}/sms-campaigns`);
                     const data = await res.json();
-                    window.__smsCampaignsCache = { campaigns: data.campaigns || [], workflows: data.workflows || [] };
+                    window.__smsCampaignsCache = { campaigns: data.campaigns || [], workflows: data.workflows || [], multiAccount: !!data.multiAccount };
                     const total = window.__smsCampaignsCache.campaigns.length + window.__smsCampaignsCache.workflows.length;
                     if (!data.configured) {
                         manualHint.textContent = 'SlickText não configurado — informe o ID manualmente.';
@@ -3352,10 +3458,15 @@
             }
 
             const { campaigns = [], workflows = [] } = window.__smsCampaignsCache || {};
+            // accountId vem null (conta principal) ou o id numérico da conta adicional — codifica
+            // como string vazia no value pra dar pra fazer split(':') sem ambiguidade.
+            const accSuffix = (accountId) => accountId == null ? '' : String(accountId);
+            const accLabel = (accountLabel, multi) => multi && accountLabel ? ` (${escapeHtml(accountLabel)})` : '';
             if (campaigns.length > 0 || workflows.length > 0) {
                 const select = document.getElementById('linkCampaignSelect');
-                const campaignOpts = campaigns.map(c => `<option value="Campaign:${c.campaign_id}">${escapeHtml(c.name || '(sem nome)')} — #${c.campaign_id}</option>`).join('');
-                const workflowOpts = workflows.map(w => `<option value="Workflow:${w.workflow_id}">${escapeHtml(w.name || '(sem nome)')} — #${w.workflow_id}</option>`).join('');
+                const multi = !!window.__smsCampaignsCache?.multiAccount;
+                const campaignOpts = campaigns.map(c => `<option value="Campaign:${accSuffix(c.accountId)}:${c.campaign_id}">${escapeHtml(c.name || '(sem nome)')} — #${c.campaign_id}${accLabel(c.accountLabel, multi)}</option>`).join('');
+                const workflowOpts = workflows.map(w => `<option value="Workflow:${accSuffix(w.accountId)}:${w.workflow_id}">${escapeHtml(w.name || '(sem nome)')} — #${w.workflow_id}${accLabel(w.accountLabel, multi)}</option>`).join('');
                 select.innerHTML = '<option value="">— Selecionar —</option>' +
                     (workflowOpts ? `<optgroup label="Workflows (automações)">${workflowOpts}</optgroup>` : '') +
                     (campaignOpts ? `<optgroup label="Campanhas (disparo manual)">${campaignOpts}</optgroup>` : '');
@@ -3363,6 +3474,29 @@
             } else {
                 toggleLinkCampaignManual(true);
             }
+
+            // Modo manual: se tem mais de uma conta, precisa saber qual — monta um seletor a partir
+            // das contas já conhecidas (tags accountId/accountLabel vindas de /sms-campaigns, mais a
+            // lista de contas adicionais carregada em loadStAccountsList).
+            const knownAccounts = new Map();
+            [...campaigns, ...workflows].forEach(item => {
+                const key = item.accountId == null ? 'null' : String(item.accountId);
+                if (!knownAccounts.has(key)) knownAccounts.set(key, { accountId: item.accountId, label: item.accountLabel || 'Principal' });
+            });
+            (window.__stAccounts || []).forEach(a => {
+                if (!knownAccounts.has(String(a.id))) knownAccounts.set(String(a.id), { accountId: a.id, label: a.label || `Conta ${a.id}` });
+            });
+            if (!knownAccounts.has('null')) knownAccounts.set('null', { accountId: null, label: 'Principal' });
+            const accountWrap = document.getElementById('linkCampaignManualAccountWrap');
+            const accountSelect = document.getElementById('linkCampaignManualAccountSelect');
+            if (knownAccounts.size > 1) {
+                accountSelect.innerHTML = [...knownAccounts.values()]
+                    .map(a => `<option value="${accSuffix(a.accountId)}">${escapeHtml(a.label)}</option>`).join('');
+                accountWrap.style.display = 'block';
+            } else {
+                accountWrap.style.display = 'none';
+            }
+
             setTimeout(() => (document.getElementById('linkCampaignSelect') || input)?.focus(), 50);
         }
 
@@ -3380,15 +3514,19 @@
             if (!utmCampaign) return;
             const err = document.getElementById('linkCampaignError');
             const usingManual = document.getElementById('linkCampaignManualWrap').style.display !== 'none';
-            let sourceType, idStr;
+            let sourceType, idStr, accountIdStr;
             if (usingManual) {
                 sourceType = 'Workflow'; // caso comum do MailX (automação) — ver countCampaignMessages
                 idStr = (document.getElementById('linkCampaignInput').value || '').trim();
+                const accountWrap = document.getElementById('linkCampaignManualAccountWrap');
+                accountIdStr = accountWrap.style.display !== 'none' ? document.getElementById('linkCampaignManualAccountSelect').value : '';
             } else {
-                const [type, id] = (document.getElementById('linkCampaignSelect').value || '').split(':');
+                const [type, accId, id] = (document.getElementById('linkCampaignSelect').value || '').split(':');
                 sourceType = type;
+                accountIdStr = accId;
                 idStr = id;
             }
+            const stAccountId = accountIdStr ? parseInt(accountIdStr, 10) : null;
             const campaignId = parseInt(idStr, 10);
             if (!idStr || !Number.isInteger(campaignId) || String(campaignId) !== idStr) {
                 if (err) { err.textContent = usingManual ? 'Precisa ser um número inteiro (o ID, ex: 3333).' : 'Selecione uma opção na lista.'; err.style.display = 'block'; }
@@ -3411,7 +3549,7 @@
                 await fetch(`${API}/clientes/${clientId}/sms-campaign-map`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId, source_type: sourceType, workflow_node_id: workflowNodeId }),
+                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId, source_type: sourceType, workflow_node_id: workflowNodeId, st_account_id: stAccountId }),
                 });
                 closeLinkCampaignModal();
                 delete window.__smsSendsCache[utmCampaign];
