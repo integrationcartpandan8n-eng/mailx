@@ -168,6 +168,57 @@ function createdAtRangeSqlAt(
   return `created_at >= $${fromIdx}::date AND created_at < ($${toIdx}::date + INTERVAL '1 day')`;
 }
 
+/**
+ * Resolve o período de análise da querystring: preset "Hoje" (?today=1), intervalo
+ * from/to explícito, ou nenhum (lifetime). "Hoje" é resolvido com CURRENT_DATE do
+ * próprio Postgres — de propósito, para não depender do fuso-horário do navegador
+ * de quem está com o filtro aberto (evita "hoje" bater errado por 1 dia).
+ */
+function resolvePeriodFilter(req: Request): {
+  isToday: boolean;
+  from?: string;
+  to?: string;
+  hasTime: boolean;
+  fromTime: string | null;
+  toTime: string | null;
+} {
+  if (req.query.today === '1') {
+    return { isToday: true, hasTime: false, fromTime: null, toTime: null };
+  }
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
+  if (from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to)) {
+    const range = validateYmdRange(from, to);
+    if (!('error' in range)) {
+      return { isToday: false, from, to, hasTime, fromTime, toTime };
+    }
+  }
+  return { isToday: false, hasTime: false, fromTime: null, toTime: null };
+}
+
+/**
+ * Builda a condição `created_at` pro período resolvido acima, empurrando os
+ * params necessários no array recebido (cada chamada usa seu próprio array de
+ * params, já que cada query tem uma base diferente). Retorna '' quando não há
+ * período ativo (comportamento antigo: sem filtro, vitalício).
+ */
+function periodSql(
+  period: ReturnType<typeof resolvePeriodFilter>,
+  params: (string | number)[]
+): string {
+  if (period.isToday) {
+    return `created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'`;
+  }
+  if (period.from && period.to) {
+    params.push(period.from, period.to);
+    const fromIdx = params.length - 1;
+    const toIdx = params.length;
+    return createdAtRangeSqlAt(params, fromIdx, toIdx, period.hasTime, period.fromTime, period.toTime);
+  }
+  return '';
+}
+
 function parseYmd(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d);
@@ -941,6 +992,13 @@ adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Re
 
 // ── Existing API Endpoints ──
 
+// GET /admin/server-today - Data atual segundo o próprio Postgres (evita depender do
+// fuso-horário do navegador de quem está usando o filtro "Hoje").
+adminRouter.get('/server-today', asyncHandler(async (_req: Request, res: Response) => {
+  const row = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+  res.json({ date: row?.today });
+}));
+
 // GET /admin/stats - Dashboard counters
 adminRouter.get('/stats', asyncHandler(async (_req: Request, res: Response) => {
   const clientsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
@@ -1144,26 +1202,15 @@ adminRouter.get('/clientes/:id/dns', asyncHandler(async (req: Request, res: Resp
 // GET /admin/clientes/:id/stats - Per-client KPIs and activity
 adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
-  const from = req.query.from as string | undefined;
-  const to = req.query.to as string | undefined;
-  const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
   const currency = await resolveClientCurrency(clientId);
   const symbol = currencySymbol(currency);
 
-  let emailDateFilter = '';
-  const emailMailxParams: (string | number)[] = [clientId];
-  let periodFrom: string | undefined;
-  let periodTo: string | undefined;
-
-  if (from && to && DATE_YMD_RE.test(from) && DATE_YMD_RE.test(to)) {
-    const range = validateYmdRange(from, to);
-    if (!('error' in range)) {
-      periodFrom = from;
-      periodTo = to;
-      emailMailxParams.push(from, to);
-      emailDateFilter = ` AND ${createdAtRangeSqlAt(emailMailxParams, 2, 3, hasTime, fromTime, toTime)}`;
-    }
-  }
+  // Período de análise: "Hoje" (?today=1), intervalo from/to, ou vitalício (nenhum dos dois).
+  // Aplicado em TODAS as métricas de negócio abaixo — antes só afetava 2-3 gráficos.
+  const period = resolvePeriodFilter(req);
+  const periodFrom = period.from;
+  const periodTo = period.to;
+  const periodActive = period.isToday || !!(period.from && period.to);
 
   // Get all store slugs for this client to filter webhook_logs
   const stores = await query<{ shop_slug: string, platform: string }>(
@@ -1171,83 +1218,115 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     [clientId]
   );
 
-  // Sales KPIs — filtered by client_id
+  // Sales KPIs — filtered by client_id + período
+  const salesParams: (string | number)[] = [clientId];
+  const salesPeriod = periodSql(period, salesParams);
   const salesData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
-  `, [clientId]);
+      ${salesPeriod ? `AND ${salesPeriod}` : ''}
+  `, salesParams);
 
+  const whParams: (string | number)[] = [clientId];
+  const whPeriod = periodSql(period, whParams);
   const totalWebhooks = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE client_id = $1 ${whPeriod ? `AND ${whPeriod}` : ''}`, whParams
   );
+  // "Hoje" é sempre literal (independe do período de análise selecionado) — diagnóstico de saúde da integração.
   const webhooksToday = await queryOne<{ count: string }>(
     `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE AND client_id = $1`, [clientId]
   );
-  const webhooksProcessed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'processed' AND client_id = $1`, [clientId]
-  );
-  const webhooksFailed = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE status = 'failed' AND client_id = $1`, [clientId]
-  );
+  const refundParams: (string | number)[] = [clientId];
+  const refundPeriod = periodSql(period, refundParams);
   const refundCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type IN ('order.refunded', 'order.chargeback') AND client_id = $1
+      ${refundPeriod ? `AND ${refundPeriod}` : ''}`, refundParams
   );
 
   const totalSales = parseInt(salesData?.count || '0');
   const totalRevenue = parseFloat(salesData?.revenue || '0');
   const ticketMedio = totalSales > 0 ? totalRevenue / totalSales : 0;
   const totalWh = parseInt(totalWebhooks?.count || '0');
+
+  const abandonedParams: (string | number)[] = [clientId];
+  const abandonedPeriod = periodSql(period, abandonedParams);
   const abandonedCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart' AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'abandoned_cart' AND client_id = $1
+      ${abandonedPeriod ? `AND ${abandonedPeriod}` : ''}`, abandonedParams
   );
+  const declinedParams: (string | number)[] = [clientId];
+  const declinedPeriod = periodSql(period, declinedParams);
   const declinedCount = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'card.declined' AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE event_type = 'card.declined' AND client_id = $1
+      ${declinedPeriod ? `AND ${declinedPeriod}` : ''}`, declinedParams
   );
   const abandoned = parseInt(abandonedCount?.count || '0');
   const declined = parseInt(declinedCount?.count || '0');
   const totalOpps = totalSales + abandoned + declined;
   const successRate = totalOpps > 0 ? ((totalSales / totalOpps) * 100).toFixed(1) : '0';
 
-  // MailX UTM metrics — filtered by client_id
+  // MailX UTM metrics — filtered by client_id + período
+  const mailxParams: (string | number)[] = [clientId];
+  const mailxPeriod = periodSql(period, mailxParams);
   const mailxData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_IS_MAILX}
-  `, [clientId]);
+      ${mailxPeriod ? `AND ${mailxPeriod}` : ''}
+  `, mailxParams);
+  const mailxRecParams: (string | number)[] = [clientId];
+  const mailxRecPeriod = periodSql(period, mailxRecParams);
   const mailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_IS_MAILX}
       AND ${SQL_IS_RECOVERY}
-  `, [clientId]);
+      ${mailxRecPeriod ? `AND ${mailxRecPeriod}` : ''}
+  `, mailxRecParams);
 
+  const emailMailxParams: (string | number)[] = [clientId];
+  const emailPeriod = periodSql(period, emailMailxParams);
   const emailMailxData = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
-      ${emailDateFilter}
+      ${emailPeriod ? `AND ${emailPeriod}` : ''}
   `, emailMailxParams);
+  const emailMailxRecParams: (string | number)[] = [clientId];
+  const emailRecPeriod = periodSql(period, emailMailxRecParams);
   const emailMailxRecoveries = await queryOne<{ count: string, revenue: string }>(`
     SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
     FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_EMAIL}
       AND ${SQL_IS_RECOVERY}
-      ${emailDateFilter}
-  `, emailMailxParams);
+      ${emailRecPeriod ? `AND ${emailRecPeriod}` : ''}
+  `, emailMailxRecParams);
+  const emailMailxUpsellParams: (string | number)[] = [clientId];
+  const emailUpsellPeriod = periodSql(period, emailMailxUpsellParams);
+  const emailMailxUpsell = await queryOne<{ count: string, revenue: string }>(`
+    SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+    FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+      AND ${SQL_IS_UPSELL}
+      ${emailUpsellPeriod ? `AND ${emailUpsellPeriod}` : ''}
+  `, emailMailxUpsellParams);
 
-  // Top 5 products — filtered by client_id
+  // Top 5 products — filtered by client_id + período
+  const topProductsParams: (string | number)[] = [clientId];
+  const topProductsPeriod = periodSql(period, topProductsParams);
   const topProducts = await query<{ name: string, count: string, revenue: string }>(`
-    SELECT 
+    SELECT
       product_name as name,
       COUNT(*) as count,
       ${SQL_REVENUE} as revenue
-    FROM webhook_logs 
+    FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1
       AND product_name IS NOT NULL
+      ${topProductsPeriod ? `AND ${topProductsPeriod}` : ''}
     GROUP BY product_name ORDER BY count DESC LIMIT 5
-  `, [clientId]);
+  `, topProductsParams);
 
-  // Recent webhooks — filtered by client_id
+  // Recent webhooks — feed operacional, sempre os mais recentes (não segue o período de análise)
   const recentWebhooks = await query(`
     SELECT id, event_type, source, status, error, created_at, processed_at
     FROM webhook_logs
@@ -1256,7 +1335,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     LIMIT 10
   `, [clientId]);
 
-  // Daily activity last 7 days — filtered by client_id
+  // Daily activity — últimos 7 dias, diagnóstico de saúde da integração (não segue o período de análise)
   const dailyActivity = await query<{ day: string, count: string }>(`
     SELECT TO_CHAR(created_at, 'DD/MM') as day, COUNT(*) as count
     FROM webhook_logs
@@ -1265,79 +1344,114 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ORDER BY DATE(created_at)
   `, [clientId]);
 
-  // ── Webhooks by hour ──
+  // ── Vendas por Hora — filtered by client_id + período ──
+  const hourlyParams: (string | number)[] = [clientId];
+  const hourlyPeriod = periodSql(period, hourlyParams);
   const hourlyWebhooks = await query<{ hour: string, count: string }>(`
     SELECT EXTRACT(HOUR FROM created_at)::text as hour, COUNT(*) as count
     FROM webhook_logs
-    WHERE client_id = $1
+    WHERE client_id = $1 ${hourlyPeriod ? `AND ${hourlyPeriod}` : ''}
     GROUP BY EXTRACT(HOUR FROM created_at)
     ORDER BY EXTRACT(HOUR FROM created_at)
-  `, [clientId]);
+  `, hourlyParams);
   const hourlyValues = Array.from({ length: 24 }, (_, i) => {
     const match = hourlyWebhooks.find(r => parseInt(r.hour) === i);
     return match ? parseInt(match.count) : 0;
   });
 
-  // ── Top 5 Tags (event type distribution) ──
+  // ── Top 5 Tipos de Evento — filtered by client_id + período ──
+  const eventDistParams: (string | number)[] = [clientId];
+  const eventDistPeriod = periodSql(period, eventDistParams);
   const eventDist = await query<{ event_type: string, count: string }>(`
     SELECT event_type, COUNT(*) as count
     FROM webhook_logs
-    WHERE client_id = $1
+    WHERE client_id = $1 ${eventDistPeriod ? `AND ${eventDistPeriod}` : ''}
     GROUP BY event_type
     ORDER BY count DESC
     LIMIT 5
-  `, [clientId]);
+  `, eventDistParams);
 
   // ── Conversion Funnel (envios por venda) ──
   const enviosPorVenda = totalSales > 0 ? Math.round(totalWh / totalSales) : 0;
 
   const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // ── Conversão por Segmento: leads de abandono (CartPanda evento vs SlickText lista) ──
-  const hasCartPanda = stores.some(s => (s.platform || 'cartpanda') === 'cartpanda');
-
-  let abandonoLeads = abandoned;
-  let leadsSource: 'cartpanda_event' | 'slicktext_list' | 'unavailable' = hasCartPanda ? 'cartpanda_event' : 'unavailable';
+  // ── Conversão por Segmento: leads sempre via SlickText (lista Compra/Abandono), ──
+  // ── escopados ao período selecionado — não mais o total vitalício da lista. ──
+  // Vendas continuam vindo do nosso banco (já são exatas, é conversão real registrada).
+  let abandonoLeads = 0;
+  let compradorLeads = 0;
+  let leadsSource: 'slicktext_list' | 'unavailable' = 'unavailable';
   let leadsWarning: string | null = null;
 
-  if (!hasCartPanda) {
-    try {
-      const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-        `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-      );
-      if (client?.st_api_token && client?.st_brand_id) {
+  {
+    const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+    );
+    if (client?.st_api_token && client?.st_brand_id) {
+      try {
         const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
         const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
-        const kits = await query<{ st_list_abandono_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id FROM kits WHERE client_id = $1 AND st_list_abandono_id IS NOT NULL`,
+        const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`,
           [clientId]
         );
-        const counts = await Promise.all(
-          kits.map(k => st.getListContactCount(parseInt(k.st_list_abandono_id!)).catch(() => 0))
+
+        // "Hoje" não tem from/to em string — pega a data do próprio Postgres pra não
+        // depender do fuso de quem gerou a requisição (mesma lógica do preset "Hoje").
+        let analyticsFrom = periodFrom;
+        let analyticsTo = periodTo;
+        if (period.isToday) {
+          const todayRow = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+          analyticsFrom = todayRow?.today;
+          analyticsTo = todayRow?.today;
+        }
+
+        const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
+        const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+
+        const abandonoCounts = await Promise.all(
+          abandonoIds.map(id => st.getContactAnalytics(analyticsFrom, analyticsTo, parseInt(id))
+            .then(r => st.extractContactAnalyticsTotal(r)).catch(() => 0))
         );
-        abandonoLeads = counts.reduce((a, b) => a + b, 0);
+        const compraCounts = await Promise.all(
+          compraIds.map(id => st.getContactAnalytics(analyticsFrom, analyticsTo, parseInt(id))
+            .then(r => st.extractContactAnalyticsTotal(r)).catch(() => 0))
+        );
+
+        abandonoLeads = abandonoCounts.reduce((a, b) => a + b, 0);
+        compradorLeads = compraCounts.reduce((a, b) => a + b, 0);
         leadsSource = 'slicktext_list';
         if (unmatched.length > 0) {
           leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
         }
-      } else {
-        leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado indisponível para este gateway';
+      } catch (err: any) {
+        logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
+        leadsSource = 'unavailable';
+        leadsWarning = 'Falha ao consultar SlickText — Leads de Carrinho Abandonado e Compradores temporariamente indisponíveis';
       }
-    } catch (err: any) {
-      logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
-      leadsSource = 'unavailable';
-      leadsWarning = 'Falha ao consultar SlickText — Leads de Carrinho Abandonado temporariamente indisponível';
+    } else {
+      leadsWarning = 'SlickText não configurado — Leads de Carrinho Abandonado e Compradores indisponíveis';
     }
   }
 
   const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
 
   // ── Email Marketing KPIs (ActiveCampaign reporting) ──
+  // API do AC só aceita "N dias atrás de agora" — "Hoje" mapeia certinho (1 dia),
+  // presets/personalizado terminando hoje também; terminando no passado, fica
+  // limitado a 30 dias fixos e avisamos isso (ac_period_limited).
   const today = new Date().toISOString().slice(0, 10);
-  const acDaysBack = (periodTo && periodTo === today && periodFrom)
-    ? Math.round((parseYmd(periodTo).getTime() - parseYmd(periodFrom).getTime()) / 86400000) + 1
-    : 30;
-  const acPeriodLimited = !!(periodFrom && periodTo && periodTo !== today);
+  let acDaysBack = 30;
+  let acPeriodLimited = false;
+  if (period.isToday) {
+    acDaysBack = 1;
+  } else if (periodTo && periodTo === today && periodFrom) {
+    acDaysBack = Math.round((parseYmd(periodTo).getTime() - parseYmd(periodFrom).getTime()) / 86400000) + 1;
+  } else if (periodFrom && periodTo) {
+    acDaysBack = 30;
+    acPeriodLimited = true;
+  }
 
   const emailMetrics = {
     entrada_contatos: '--' as string,
@@ -1384,6 +1498,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   res.json({
     currency,
+    period: {
+      active: periodActive,
+      is_today: period.isToday,
+      from: periodFrom || null,
+      to: periodTo || null,
+    },
     kpis: {
       faturamento: fmtBRL(totalRevenue),
       vendas: totalSales,
@@ -1403,8 +1523,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     email_mailx: {
       faturamento_email: fmtBRL(parseFloat(emailMailxData?.revenue || '0')),
       vendas_email: parseInt(emailMailxData?.count || '0'),
+      ticket_medio_email: (() => {
+        const vendasEmail = parseInt(emailMailxData?.count || '0');
+        const revEmail = parseFloat(emailMailxData?.revenue || '0');
+        return fmtBRL(vendasEmail > 0 ? revEmail / vendasEmail : 0);
+      })(),
       recuperacoes_email: parseInt(emailMailxRecoveries?.count || '0'),
       faturamento_recuperacoes_email: fmtBRL(parseFloat(emailMailxRecoveries?.revenue || '0')),
+      vendas_upsell_email: parseInt(emailMailxUpsell?.count || '0'),
+      faturamento_upsell_email: fmtBRL(parseFloat(emailMailxUpsell?.revenue || '0')),
     },
     top_products: topProducts.map(p => ({
       name: p.name,
@@ -1447,11 +1574,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         leads_warning: leadsWarning,
       },
       compradores: {
-        leads: totalSales,
+        leads: compradorLeads,
         vendas: parseInt(mailxData?.count || '0'),
-        taxa: totalSales > 0
-          ? parseFloat(((parseInt(mailxData?.count || '0') / totalSales) * 100).toFixed(2))
+        taxa: compradorLeads > 0
+          ? parseFloat(((parseInt(mailxData?.count || '0') / compradorLeads) * 100).toFixed(2))
           : 0,
+        leads_source: leadsSource,
+        leads_warning: leadsWarning,
       },
     },
     metrics_only: METRICS_ONLY,
@@ -1605,6 +1734,78 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     total_receita_liquida_sms,
     rows,
   });
+}));
+
+// GET /admin/clientes/:id/sms-campaign-map - Lista os vínculos manuais utm_campaign -> campaign_id da SlickText
+adminRouter.get('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const rows = await query<{ utm_campaign: string; slicktext_campaign_id: number }>(
+    `SELECT utm_campaign, slicktext_campaign_id FROM sms_campaign_map WHERE client_id = $1`,
+    [clientId]
+  );
+  res.json({ mappings: rows });
+}));
+
+// POST /admin/clientes/:id/sms-campaign-map - Cria/atualiza o vínculo utm_campaign -> campaign_id da SlickText
+// Preenchido manualmente (não há como descobrir isso via API — ver countCampaignMessages).
+adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const { utm_campaign, slicktext_campaign_id } = req.body;
+
+  if (!utm_campaign || !Number.isInteger(slicktext_campaign_id)) {
+    res.status(400).json({ error: 'utm_campaign (string) e slicktext_campaign_id (inteiro) são obrigatórios' });
+    return;
+  }
+
+  await query(
+    `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (client_id, utm_campaign)
+     DO UPDATE SET slicktext_campaign_id = $3, updated_at = NOW()`,
+    [clientId, utm_campaign, slicktext_campaign_id]
+  );
+
+  res.json({ ok: true });
+}));
+
+// GET /admin/clientes/:id/sms-campaign-sends - Conta envios reais de uma mensagem de automação,
+// paginando a API da SlickText. Sob demanda (não entra no /sms-granular) porque pode ser lento
+// pra campanhas com muitas mensagens.
+adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const utmCampaign = req.query.utm_campaign as string | undefined;
+
+  if (!utmCampaign) {
+    res.status(400).json({ error: 'utm_campaign é obrigatório' });
+    return;
+  }
+
+  const mapping = await queryOne<{ slicktext_campaign_id: number }>(
+    `SELECT slicktext_campaign_id FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
+    [clientId, utmCampaign]
+  );
+
+  if (!mapping) {
+    res.json({ linked: false, count: null, message: 'Sem campaign_id da SlickText vinculado a esta mensagem ainda.' });
+    return;
+  }
+
+  const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
+    `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
+  );
+  if (!client?.st_api_token || !client?.st_brand_id) {
+    res.json({ linked: true, count: null, message: 'SlickText não configurado para este cliente.' });
+    return;
+  }
+
+  try {
+    const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
+    const result = await st.countCampaignMessages(mapping.slicktext_campaign_id);
+    res.json({ linked: true, ...result });
+  } catch (err: any) {
+    logger.error(CTX, `Falha ao contar envios da campanha ${mapping.slicktext_campaign_id} (client ${clientId}): ${err.message}`);
+    res.json({ linked: true, count: null, message: `Erro ao consultar SlickText: ${err.message}` });
+  }
 }));
 
 // ── Kit Management (Post-Setup) ──
@@ -1874,33 +2075,63 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
     const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);
 
-    // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') ──
+    // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') — respeita o período de análise ──
+    const period = resolvePeriodFilter(req);
+    const periodActive = period.isToday || !!(period.from && period.to);
+    const smsSalesParams: (string | number)[] = [clientId];
+    const smsSalesPeriod = periodSql(period, smsSalesParams);
     const smsSales = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
         AND ${SQL_MAILX_SMS}
-    `, [clientId]);
+        ${smsSalesPeriod ? `AND ${smsSalesPeriod}` : ''}
+    `, smsSalesParams);
+    const smsRecParams: (string | number)[] = [clientId];
+    const smsRecPeriod = periodSql(period, smsRecParams);
     const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_RECOVERY}
-    `, [clientId]);
+        ${smsRecPeriod ? `AND ${smsRecPeriod}` : ''}
+    `, smsRecParams);
+    const smsUpsellParams: (string | number)[] = [clientId];
+    const smsUpsellPeriod = periodSql(period, smsUpsellParams);
+    const smsUpsell = await queryOne<{ count: string; revenue: string }>(`
+      SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND client_id = $1
+        AND ${SQL_MAILX_SMS}
+        AND ${SQL_IS_UPSELL}
+        ${smsUpsellPeriod ? `AND ${smsUpsellPeriod}` : ''}
+    `, smsUpsellParams);
 
     const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
     const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
+    const smsVendas = parseInt(smsSales?.count || '0');
+    const smsTicketMedio = smsVendas > 0 ? smsRevenue / smsVendas : 0;
+    const smsUpsellRevenue = parseFloat(smsUpsell?.revenue || '0');
 
     res.json({
       configured: true,
       currency,
+      period: {
+        active: periodActive,
+        is_today: period.isToday,
+        from: period.from || null,
+        to: period.to || null,
+      },
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
-        vendas_sms: parseInt(smsSales?.count || '0'),
+        vendas_sms: smsVendas,
+        ticket_medio_sms: fmtBRL(smsTicketMedio),
         recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),
         faturamento_recuperacoes_sms: fmtBRL(smsRecRevenue),
+        vendas_upsell_sms: parseInt(smsUpsell?.count || '0'),
+        faturamento_upsell_sms: fmtBRL(smsUpsellRevenue),
       },
       contacts: {
         total: totalCompra + totalAbandono,

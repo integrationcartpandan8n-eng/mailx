@@ -205,14 +205,27 @@ export class SlickTextClient {
 
   /**
    * Get contact analytics (total, by status, by source).
+   * `listId` escopa pra uma lista específica em vez do brand inteiro — NÃO confirmado
+   * contra a API real (best-effort, mesma ressalva de countCampaignMessages). Validar
+   * com uma lista pequena antes de confiar no número.
    */
-  async getContactAnalytics(start?: string, end?: string): Promise<any> {
+  async getContactAnalytics(start?: string, end?: string, listId?: number): Promise<any> {
     const params: any = {};
     if (start) params.start = start;
     if (end) params.end = end;
+    if (listId) params.list_id = listId;
 
     const res = await this.http.get('/analytics/contacts', { params });
     return res.data;
+  }
+
+  /**
+   * Total de contatos novos (leads) de uma lista específica num período — usa
+   * getContactAnalytics escopado por list_id. Retorna null se a API não aceitar o
+   * escopo por lista (nesse caso o número viria errado, misturando outras listas).
+   */
+  extractContactAnalyticsTotal(analyticsResponse: any): number {
+    return analyticsResponse?.totals?.total ?? analyticsResponse?.total ?? 0;
   }
 
   /**
@@ -225,6 +238,46 @@ export class SlickTextClient {
 
     const res = await this.http.get('/analytics/messages', { params });
     return res.data;
+  }
+
+  /**
+   * Conta o total de mensagens enviadas por uma campanha específica, paginando
+   * GET /messages?source=Campaign&source_id={campaignId}. A API não tem um campo de
+   * "total" pronto — só um booleano hasMore por página — então soma o tamanho de
+   * cada página até acabar ou até o limite de segurança (evita loop infinito/rate
+   * limit caso a paginação real use outro parâmetro do que o esperado aqui).
+   *
+   * IMPORTANTE: os nomes de parâmetro de paginação (page/limit) são um best-effort
+   * baseado em convenção REST comum — ainda não testado contra a API real da
+   * SlickText em produção. Validar com uma campanha pequena antes de confiar no
+   * número em campanhas grandes.
+   */
+  async countCampaignMessages(
+    campaignId: number,
+    opts: { status?: string; maxPages?: number } = {}
+  ): Promise<{ count: number; capped: boolean; pages: number }> {
+    const maxPages = opts.maxPages ?? 40;
+    let page = 1;
+    let count = 0;
+    let capped = false;
+
+    while (page <= maxPages) {
+      const params: any = { source: 'Campaign', source_id: campaignId, page, limit: 100 };
+      if (opts.status) params.status = opts.status;
+
+      const res = await this.http.get('/messages', { params });
+      const items = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+      count += items.length;
+
+      const hasMore = res.data?.hasMore ?? res.data?.has_more ?? false;
+      if (!hasMore || items.length === 0) {
+        return { count, capped: false, pages: page };
+      }
+      page++;
+    }
+    capped = true;
+    logger.warn(CTX, `countCampaignMessages: atingiu o limite de ${maxPages} páginas pra campaign_id=${campaignId} — número pode estar incompleto`);
+    return { count, capped, pages: page - 1 };
   }
 
   /**

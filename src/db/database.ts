@@ -177,6 +177,21 @@ export async function initDatabase(): Promise<void> {
           ON webhook_logs (client_id, event_type, status, created_at);
         CREATE INDEX IF NOT EXISTS idx_webhook_logs_utm_source
           ON webhook_logs (utm_source) WHERE utm_source IS NOT NULL;
+
+        -- Mapeamento manual: nossa tag interna de mensagem (ex: "CarrinhoAbandonado-MS0001A-Produto",
+        -- a mesma chave usada no agrupamento do SMS granular) -> campaign_id real da SlickText.
+        -- Não existe forma automática de descobrir isso (a API da SlickText não expõe
+        -- automações/workflows, só campaigns avulsas) — preenchido manualmente uma vez por produto.
+        CREATE TABLE IF NOT EXISTS sms_campaign_map (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          utm_campaign VARCHAR(255) NOT NULL,
+          slicktext_campaign_id INTEGER NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sms_campaign_map_unique
+          ON sms_campaign_map (client_id, utm_campaign);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');

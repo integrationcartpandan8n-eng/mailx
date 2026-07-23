@@ -266,6 +266,33 @@
         /* Seção "Desempenho por Mensagem de Automação" */
         .section-block { margin-bottom: 1.25rem; }
 
+        /* Créditos por Automação */
+        .creditos-auto-wrap { padding: 1rem 1.25rem 1.25rem; border-top: 1px solid var(--border); }
+        .creditos-auto-title { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
+        .creditos-auto-sub { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.85rem; }
+        .creditos-auto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+        .creditos-auto-card {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.85rem;
+            text-align: center;
+        }
+        .creditos-auto-card .n { font-size: 1.35rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
+        .creditos-auto-card .l { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 0.25rem; }
+        .creditos-auto-card .d { font-size: 0.68rem; color: var(--text-dim); margin-top: 0.4rem; }
+        .creditos-auto-card .calc-btn {
+            margin-top: 0.6rem;
+            background: var(--accent-subtle);
+            border: 1px solid var(--border);
+            color: var(--accent-light);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 0.35rem 0.7rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+
         #sms-granular-section {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -366,11 +393,28 @@
 
         .rank-row {
             display: grid;
-            grid-template-columns: 1fr 90px 130px 150px;
+            grid-template-columns: 1fr 110px 90px 130px 150px;
             gap: 1rem;
             align-items: center;
             padding: 0.75rem 1.25rem;
         }
+
+        .rank-envios { font-size: 0.78rem; color: var(--text-dim); text-align: center; }
+        .rank-envios .envios-btn {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--accent-light);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 0.3rem 0.55rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .rank-envios .envios-btn:hover { background: var(--surface-3, var(--surface-2)); }
+        .rank-envios .envios-count { font-weight: 700; color: var(--text); }
+        .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.65rem; }
+        .rank-envios .envios-muted { color: var(--text-muted); font-size: 0.68rem; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -614,6 +658,7 @@
             .summary-strip .cell:last-child { border-bottom: none; }
             .rank-row { grid-template-columns: 1fr 72px 100px; }
             .rank-refund { display: none; }
+            .rank-envios { display: none; }
             .g-row { grid-template-columns: minmax(100px, 1fr) 80px; }
             .g-row .g-bar-track { display: none; }
         }
@@ -1033,6 +1078,7 @@
                 <span class="gp-label">Período de análise — aplica a <b>todos</b> os gráficos desta página</span>
             </div>
             <div class="gp-pills">
+                <button type="button" class="gp-pill" id="gpTodayBtn" data-today title="Hoje até agora — pra bater os valores do dia com o gateway">Hoje</button>
                 <button type="button" class="gp-pill active" data-days="7">7 dias</button>
                 <button type="button" class="gp-pill" data-days="30">30 dias</button>
                 <button type="button" class="gp-pill" data-days="90">90 dias</button>
@@ -1297,6 +1343,7 @@
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads via SlickText, no período</span>
                 </div>
                 <div class="card-body" style="padding:0">
                     <table class="kit-table">
@@ -1360,7 +1407,7 @@
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
         <div id="tab-content-sms" style="display:none">
             <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
-                ⚠ Todos os números desta aba (faturamento, vendas, contatos, créditos) são o total vitalício/atual do SlickText — ainda não respeitam o filtro de período selecionado acima.
+                ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
             </div>
             <div class="card">
                 <div class="card-header">
@@ -1393,6 +1440,7 @@
                 <div id="sms-granular-content" style="display:none;">
                     <div class="summary-strip" id="sms-granular-summary"></div>
                     <div id="sms-granular-body"></div>
+                    <div id="creditos-automacao-block"></div>
                 </div>
             </div>
 
@@ -2245,6 +2293,10 @@
         }
 
         function reloadAllCharts(from, to, timeOpts = {}) {
+            // "Hoje" chega aqui com from=to=data atual do SERVIDOR (não do navegador) — ver
+            // applyToday(). Passa como um intervalo normal de 1 dia pra todo widget que já
+            // sabe lidar com from/to; timeOpts.today só liga o branch CURRENT_DATE no backend
+            // pra /stats e /sms-stats (mais direto e sem risco de mismatch de fuso).
             loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime);
             const refundSection = document.getElementById('refundChartSection');
             if (refundSection && refundSection.style.display !== 'none') {
@@ -2252,33 +2304,22 @@
             }
             loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime });
             reloadClientStatsForPeriod(from, to, timeOpts);
+            loadSmsStats(from, to, timeOpts);
         }
 
         async function reloadClientStatsForPeriod(from, to, timeOpts = {}) {
             try {
                 const params = new URLSearchParams();
-                if (from && to) {
+                if (timeOpts.today) {
+                    params.set('today', '1');
+                } else if (from && to) {
                     params.set('from', from);
                     params.set('to', to);
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
                 const res = await fetch(`${API}/clientes/${clientId}/stats?${params}`);
                 const data = await res.json();
-                if (window.__clientStatsData) {
-                    window.__clientStatsData.email = data.email;
-                    window.__clientStatsData.email_mailx = data.email_mailx;
-                } else {
-                    window.__clientStatsData = data;
-                }
-                renderEmailMarketingKpis(window.__clientStatsData, {
-                    contacts: 'emailContactsKpis',
-                    engagement: 'emailEngagementKpis',
-                    pending: 'emailEngagementPending',
-                    badge: 'emailEngagementBadge',
-                    limited: 'emailEngagementLimited',
-                    error: 'emailEngagementError',
-                });
-                loadEmailTabStats(window.__clientStatsData);
+                renderClientStatsData(data);
             } catch (e) {
                 console.error('Failed to reload client stats for period:', e);
             }
@@ -2314,6 +2355,25 @@
                 const from = new Date();
                 from.setDate(from.getDate() - (days - 1));
                 reloadAllCharts(fmtYmdLocal(from), fmtYmdLocal(to));
+            }
+
+            // "Hoje": busca a data atual do próprio servidor (Postgres) em vez de usar o
+            // relógio do navegador — evita bater 1 dia errado por fuso-horário quando quem
+            // está filtrando não está no mesmo fuso do servidor.
+            async function applyToday() {
+                window.__globalPeriodDays = null;
+                const todayBtn = document.getElementById('gpTodayBtn');
+                const originalLabel = todayBtn.textContent;
+                todayBtn.textContent = '...';
+                try {
+                    const res = await fetch(`${API}/server-today`);
+                    const { date } = await res.json();
+                    reloadAllCharts(date, date, { today: true });
+                } catch (e) {
+                    console.error('Failed to resolve server today:', e);
+                } finally {
+                    todayBtn.textContent = originalLabel;
+                }
             }
 
             function updatePreview() {
@@ -2353,6 +2413,13 @@
                     popover.classList.remove('open');
                     applyPreset(parseInt(btn.dataset.days, 10));
                 });
+            });
+
+            const todayBtn = document.getElementById('gpTodayBtn');
+            todayBtn.addEventListener('click', () => {
+                setActivePill(todayBtn);
+                popover.classList.remove('open');
+                applyToday();
             });
 
             customBtn.addEventListener('click', (e) => {
@@ -2600,8 +2667,13 @@
             return pct < 1 ? pct.toFixed(2) + '%' : pct.toFixed(1) + '%';
         }
 
+        window.__clientTabCharts = window.__clientTabCharts || {};
+
         async function loadClientStats() {
             try {
+                // Fetch estrutural (sem período) — só pra stores/kits/metrics_only. Os dados de
+                // negócio (KPIs, gráficos) são carregados logo em seguida por initGlobalPeriodControl(),
+                // que já dispara o preset padrão (7 dias) via applyPreset(7) ao inicializar.
                 const res = await fetch(`${API}/clientes/${clientId}/stats`);
                 const data = await res.json();
 
@@ -2613,7 +2685,13 @@
                 if (window.__clientKits) renderKits(window.__clientKits);
                 initRefundChartForClient(data.stores);
                 initGlobalPeriodControl();
+            } catch (e) {
+                console.error('Failed to load client stats:', e);
+            }
+        }
 
+        function renderClientStatsData(data) {
+            {
                 // Render KPIs
                 const kpiGrid = document.getElementById('clientKpis');
                 const stores = data.stores || [];
@@ -2662,7 +2740,8 @@
                 if (data.top_products && data.top_products.length > 0) {
                     document.getElementById('topProductsChart').style.display = 'block';
                     document.getElementById('topProductsEmpty').style.display = 'none';
-                    new Chart(document.getElementById('chartTopProducts'), {
+                    if (window.__clientTabCharts.topProducts) window.__clientTabCharts.topProducts.destroy();
+                    window.__clientTabCharts.topProducts = new Chart(document.getElementById('chartTopProducts'), {
                         type: 'bar',
                         data: {
                             labels: data.top_products.map(p => p.name),
@@ -2720,7 +2799,8 @@
                 if (data.daily_activity && data.daily_activity.labels.length > 0) {
                     document.getElementById('activityChartWrap').style.display = 'block';
                     document.getElementById('activityEmpty').style.display = 'none';
-                    new Chart(document.getElementById('chartActivity'), {
+                    if (window.__clientTabCharts.activity) window.__clientTabCharts.activity.destroy();
+                    window.__clientTabCharts.activity = new Chart(document.getElementById('chartActivity'), {
                         type: 'line',
                         data: {
                             labels: data.daily_activity.labels,
@@ -2760,7 +2840,8 @@
 
                 // Vendas por Hora
                 if (data.charts && data.charts.hourly) {
-                    new Chart(document.getElementById('chartHourly'), {
+                    if (window.__clientTabCharts.hourly) window.__clientTabCharts.hourly.destroy();
+                    window.__clientTabCharts.hourly = new Chart(document.getElementById('chartHourly'), {
                         type: 'bar',
                         data: {
                             labels: data.charts.hourly.labels,
@@ -2786,7 +2867,8 @@
 
                 // Top 5 Tipos de Evento
                 if (data.charts && data.charts.top_event_types) {
-                    new Chart(document.getElementById('chartTopTags'), {
+                    if (window.__clientTabCharts.topTags) window.__clientTabCharts.topTags.destroy();
+                    window.__clientTabCharts.topTags = new Chart(document.getElementById('chartTopTags'), {
                         type: 'bar',
                         data: {
                             labels: data.charts.top_event_types.labels,
@@ -2831,9 +2913,13 @@
                     const abTaxaCell = abTaxaStr === '—'
                         ? `<span style="color:var(--text-dim)">—</span>`
                         : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
+                    const compWarning = cs.compradores.leads_warning;
+                    const compLeadsCell = compWarning
+                        ? `${cs.compradores.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${compWarning.replace(/"/g, '&quot;')}"></i>`
+                        : cs.compradores.leads.toLocaleString('pt-BR');
                     document.getElementById('convSegmentoBody').innerHTML = [
                         { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                        { seg: 'Compradores', leadsHtml: cs.compradores.leads.toLocaleString('pt-BR'), vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
+                        { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
                     ].map(r => `
                         <tr>
                             <td style="font-weight:600">${r.seg}</td>
@@ -2861,8 +2947,6 @@
 
                 window.__clientStatsData = data;
                 loadEmailTabStats(data);
-            } catch (e) {
-                console.error('Failed to load client stats:', e);
             }
         }
 
@@ -2885,11 +2969,9 @@
             activeBtn.style.background = 'var(--accent)';
             activeBtn.style.color = '#fff';
 
-            // Load SMS data on first switch
-            if (tab === 'sms' && !window._smsLoaded) {
-                loadSmsStats();
-                window._smsLoaded = true;
-            }
+            // Dados de SMS já são carregados a cada troca de período via reloadAllCharts()
+            // (disparado por initGlobalPeriodControl() no load inicial) — não precisa recarregar
+            // aqui, e recarregar sem período jogaria fora o filtro ativo.
 
             // Load email tab data
             if (tab === 'email') {
@@ -2898,9 +2980,17 @@
         }
 
         // ── Load SMS Stats from SlickText API ──
-        async function loadSmsStats() {
+        async function loadSmsStats(from, to, timeOpts = {}) {
             try {
-                const res = await fetch(`${API}/clientes/${clientId}/sms-stats`);
+                const params = new URLSearchParams();
+                if (timeOpts.today) {
+                    params.set('today', '1');
+                } else if (from && to) {
+                    params.set('from', from);
+                    params.set('to', to);
+                }
+                appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
+                const res = await fetch(`${API}/clientes/${clientId}/sms-stats?${params}`);
                 const data = await res.json();
 
                 if (!data.configured) {
@@ -2929,13 +3019,16 @@
                     </div>
                 `;
 
-                // SMS Revenue KPIs (mailxsms UTM-attributed)
+                // SMS Revenue KPIs (mailxsms UTM-attributed) — já respeita o período selecionado
                 const r = data.revenue || {};
                 document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms) — total vitalício, ainda não respeita o filtro de período.' },
-                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS — total vitalício.' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms), no período selecionado.' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS, no período selecionado.' },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'Faturamento SMS ÷ Vendas SMS do período.' },
                     { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
                     { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
+                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de um fluxo de upsell.' },
+                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'Faturamento só das vendas de upsell SMS acima.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
@@ -3008,6 +3101,168 @@
             return positives.length ? positives[0].receita_liquida : 1;
         }
 
+        // ── Envios por mensagem (SlickText) — sob demanda, cacheado na sessão ──
+        // Não vem junto do /sms-granular porque contar envios pagina a API da SlickText
+        // e pode ser lento; carrega só quando a pessoa pede.
+        window.__smsSendsCache = window.__smsSendsCache || {};
+
+        function utmToDomId(utm) {
+            return 'envios-' + utm.replace(/[^a-zA-Z0-9]/g, '_');
+        }
+
+        function renderEnviosCell(utmCampaign, vendas) {
+            const cached = window.__smsSendsCache[utmCampaign];
+            const id = utmToDomId(utmCampaign);
+            if (!cached) {
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}">Ver envios</button></div>`;
+            }
+            if (cached === 'loading') {
+                return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
+            }
+            if (cached.linked === false) {
+                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular campanha</button></div>`;
+            }
+            if (cached.count == null) {
+                return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
+            }
+            // Eficiência por mensagem (doc 3.3): quantos envios pra gerar 1 venda dessa mensagem.
+            const ratio = vendas > 0 ? Math.round(cached.count / vendas) : null;
+            const ratioHtml = ratio != null
+                ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
+                : `<small>envios${cached.capped ? ' (parcial)' : ''}</small>`;
+            return `<div class="rank-envios" id="${id}">
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}</span>
+            </div>`;
+        }
+
+        async function loadSmsCampaignSends(utmCampaign, vendas) {
+            window.__smsSendsCache[utmCampaign] = 'loading';
+            const cell = document.getElementById(utmToDomId(utmCampaign));
+            if (cell) cell.outerHTML = renderEnviosCell(utmCampaign, vendas);
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?utm_campaign=${encodeURIComponent(utmCampaign)}`);
+                const data = await res.json();
+                window.__smsSendsCache[utmCampaign] = data;
+            } catch (e) {
+                window.__smsSendsCache[utmCampaign] = { linked: true, count: null, message: 'Falha ao consultar.' };
+            }
+            const cell2 = document.getElementById(utmToDomId(utmCampaign));
+            if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign, vendas);
+        }
+
+        async function linkSmsCampaign(utmCampaign) {
+            const idStr = prompt('ID da campanha na SlickText (campaign_id numérico) pra vincular a esta mensagem:');
+            if (!idStr) return;
+            const campaignId = parseInt(idStr, 10);
+            if (!Number.isInteger(campaignId)) {
+                alert('Precisa ser um número inteiro (o campaign_id, ex: 3333).');
+                return;
+            }
+            try {
+                await fetch(`${API}/clientes/${clientId}/sms-campaign-map`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ utm_campaign: utmCampaign, slicktext_campaign_id: campaignId }),
+                });
+                delete window.__smsSendsCache[utmCampaign];
+                const row = (window.__smsGranularData?.rows || []).find(r => r.utm_campaign === utmCampaign);
+                loadSmsCampaignSends(utmCampaign, row?.vendas || 0);
+            } catch (e) {
+                alert('Falha ao salvar o vínculo. Tenta de novo.');
+            }
+        }
+
+        document.getElementById('sms-granular-body')?.addEventListener('click', (e) => {
+            const loadBtn = e.target.closest('[data-load-envios]');
+            if (loadBtn) {
+                loadSmsCampaignSends(decodeURIComponent(loadBtn.dataset.loadEnvios), parseInt(loadBtn.dataset.vendas, 10) || 0);
+                return;
+            }
+            const linkBtn = e.target.closest('[data-link-envios]');
+            if (linkBtn) {
+                linkSmsCampaign(decodeURIComponent(linkBtn.dataset.linkEnvios));
+            }
+        });
+
+        // ── Créditos por Automação — soma os envios (≈ créditos) de todas as mensagens ──
+        // ── de um mesmo tipo de automação (Carrinho Abandonado / Upsell) ──
+        // 1 envio ≈ 1 crédito na maioria dos casos, mas mensagem longa (>160 caracteres)
+        // pode consumir mais de 1 crédito da SlickText — por isso é rotulado como estimativa.
+        function isUpsellTipo(tipo) {
+            return /upsell|compra aprovada/i.test(tipo || '');
+        }
+
+        function renderCreditosAutomacao() {
+            const data = window.__smsGranularData;
+            const el = document.getElementById('creditos-automacao-block');
+            if (!el) return;
+            if (!data || !data.rows || data.rows.length === 0) { el.innerHTML = ''; return; }
+
+            const groups = { abandono: [], upsell: [] };
+            data.rows.forEach(r => (isUpsellTipo(r.tipo_automacao) ? groups.upsell : groups.abandono).push(r));
+
+            const cardHtml = (key, label, rows) => {
+                const cached = window.__creditosAutomacaoCache?.[key];
+                if (!cached) {
+                    return `<div class="creditos-auto-card">
+                        <div class="n">—</div>
+                        <div class="l">${label}</div>
+                        <div class="d">${rows.length} mensage${rows.length === 1 ? 'm' : 'ns'}</div>
+                        <button type="button" class="calc-btn" data-calc-creditos="${key}">Calcular</button>
+                    </div>`;
+                }
+                if (cached === 'loading') {
+                    return `<div class="creditos-auto-card"><div class="n">...</div><div class="l">${label}</div><div class="d">calculando</div></div>`;
+                }
+                return `<div class="creditos-auto-card">
+                    <div class="n">${cached.total.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
+                    <div class="l">${label}</div>
+                    <div class="d">≈ créditos · ${cached.linkedCount}/${rows.length} mensagens vinculadas</div>
+                </div>`;
+            };
+
+            el.innerHTML = `
+                <div class="creditos-auto-wrap">
+                    <div class="creditos-auto-title">Créditos por Automação</div>
+                    <div class="creditos-auto-sub">Estimativa via total de envios da SlickText por automação (1 envio ≈ 1 crédito; mensagem longa pode custar mais).</div>
+                    <div class="creditos-auto-grid">
+                        ${cardHtml('abandono', 'Carrinho Abandonado', groups.abandono)}
+                        ${cardHtml('upsell', 'Upsell', groups.upsell)}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function calcCreditosAutomacao(key) {
+            const data = window.__smsGranularData;
+            if (!data) return;
+            window.__creditosAutomacaoCache = window.__creditosAutomacaoCache || {};
+            window.__creditosAutomacaoCache[key] = 'loading';
+            renderCreditosAutomacao();
+
+            const rows = data.rows.filter(r => (isUpsellTipo(r.tipo_automacao) ? 'upsell' : 'abandono') === key);
+            const results = await Promise.all(rows.map(async (r) => {
+                try {
+                    const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?utm_campaign=${encodeURIComponent(r.utm_campaign)}`);
+                    return await res.json();
+                } catch (e) {
+                    return { linked: false, count: null };
+                }
+            }));
+
+            const total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+            const linkedCount = results.filter(r => r.linked && r.count != null).length;
+            const anyCapped = results.some(r => r.capped);
+
+            window.__creditosAutomacaoCache[key] = { total, linkedCount, anyCapped };
+            renderCreditosAutomacao();
+        }
+
+        document.getElementById('creditos-automacao-block')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-calc-creditos]');
+            if (btn) calcCreditosAutomacao(btn.dataset.calcCreditos);
+        });
+
         function humanizeMsgCode(code) {
             const m = /^MS(\d{4})([A-Z])$/i.exec(code || '');
             if (!m) return { human: code || '—', raw: code || '' };
@@ -3059,6 +3314,7 @@
                                 <div class="msg-sub">${row.tipo_automacao || '—'} · <span class="prod">${row.produto || '—'}</span></div>
                             </div>
                         </div>
+                        ${renderEnviosCell(row.utm_campaign, row.vendas)}
                         <div class="rank-sales"><strong>${row.vendas.toLocaleString('pt-BR')}</strong> vendas</div>
                         <div class="rank-refund">${fmtSmsRefundBadge(sym, row.reembolsos, row.valor_reembolso)}</div>
                         <div class="rank-value">
@@ -3164,6 +3420,7 @@
             document.getElementById('sms-granular-body').innerHTML = view === 'produto'
                 ? renderSmsGranularProduto(data, sym)
                 : renderSmsGranularMensagem(data, sym);
+            renderCreditosAutomacao();
         }
 
         async function loadSmsGranular(clientId, opts = {}) {
@@ -3199,6 +3456,7 @@
                 }
 
                 window.__smsGranularData = data;
+                window.__creditosAutomacaoCache = {}; // período mudou — descarta cálculo anterior
                 section.style.display = 'block';
                 content.style.display = 'block';
                 renderSmsGranular();
@@ -3235,15 +3493,18 @@
             // Métricas MailX (Email) — dado real escopado a email, não clone do total geral
             const em = data.email_mailx || {};
             document.getElementById('emailMailxKpis').innerHTML = [
-                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || '$ 0,00' },
-                { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR') },
-                { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR') },
-                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00' },
+                { icon: 'fa-envelope-open-text blue', label: 'Faturamento Email', value: em.faturamento_email || '$ 0,00', tip: 'Faturamento com UTM de origem Email, no período selecionado.' },
+                { icon: 'fa-paper-plane green', label: 'Vendas Email', value: (em.vendas_email || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a Email, no período selecionado.' },
+                { icon: 'fa-receipt purple', label: 'Ticket Médio Email', value: em.ticket_medio_email || '$ 0,00', tip: 'Faturamento Email ÷ Vendas Email do período.' },
+                { icon: 'fa-cart-arrow-down orange', label: 'Recuperações Email', value: (em.recuperacoes_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de recuperação de carrinho abandonado.' },
+                { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00', tip: 'Faturamento só das recuperações Email acima.' },
+                { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
+                { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
             ].map(k => `
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
                     <div class="kpi-value">${k.value}</div>
-                    <div class="kpi-label">${k.label}</div>
+                    <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
                 </div>
             `).join('');
         }

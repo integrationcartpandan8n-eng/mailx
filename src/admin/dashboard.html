@@ -882,6 +882,28 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Representatividade MailX -->
+                    <div class="chart-card" style="margin-top:1rem">
+                        <div class="chart-header">
+                            <div class="chart-title">Representatividade MailX</div>
+                            <div class="chart-subtitle">Quanto do faturamento total (todos os clientes) foi gerado pela MailX</div>
+                        </div>
+                        <div style="text-align:center; padding:1rem 0 1.5rem">
+                            <div style="font-size:2.5rem; font-weight:800; letter-spacing:-0.03em" id="rep-percent-overview">0%</div>
+                            <div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.5rem">do faturamento total gerado pela MailX</div>
+                            <div style="margin-top:1rem; display:flex; justify-content:center; gap:2rem">
+                                <div>
+                                    <div style="font-size:0.95rem; font-weight:700; color:var(--success)" id="rep-mailx-overview">0</div>
+                                    <div style="font-size:0.65rem; color:var(--text-muted)">Fat. MailX</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:0.95rem; font-weight:700" id="rep-total-overview">0</div>
+                                    <div style="font-size:0.65rem; color:var(--text-muted)">Fat. Total</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- ═══════════ TAB: Email ═══════════ -->
@@ -1331,6 +1353,11 @@
                     document.getElementById('fn-vendas').textContent = data.funnel.total_vendas.toLocaleString('pt-BR');
                     document.getElementById('fn-ratio').textContent = data.funnel.envios_por_venda.toLocaleString('pt-BR');
                 }
+
+                // Representatividade MailX (card dedicado, mesma fórmula do KPI acima)
+                document.getElementById('rep-percent-overview').textContent = data.kpis.representatividade || '0%';
+                document.getElementById('rep-mailx-overview').textContent = data.kpis.faturamento_mailx || '$ 0,00';
+                document.getElementById('rep-total-overview').textContent = data.kpis.faturamento_aprovado || '$ 0,00';
 
                 // Hourly Sales
                 if (window.__dashCharts.hourly) window.__dashCharts.hourly.destroy();
