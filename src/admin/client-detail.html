@@ -393,7 +393,7 @@
 
         .rank-row {
             display: grid;
-            grid-template-columns: 1fr 110px 90px 130px 150px;
+            grid-template-columns: 1fr 130px 90px 130px 150px;
             gap: 1rem;
             align-items: center;
             padding: 0.75rem 1.25rem;
@@ -415,6 +415,8 @@
         .rank-envios .envios-count { font-weight: 700; color: var(--text); }
         .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.65rem; }
         .rank-envios .envios-muted { color: var(--text-muted); font-size: 0.68rem; }
+        .rank-envios .envios-clicks { display: block; font-weight: 500; color: var(--accent-light); font-size: 0.65rem; margin-top: 0.15rem; }
+        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-muted); font-size: 0.62rem; margin-top: 0.15rem; cursor: help; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -1131,6 +1133,17 @@
                     <button type="button" class="gp-btn primary" id="gpApplyBtn">Aplicar</button>
                 </div>
             </div>
+        </div>
+
+        <!-- ═══ Avisos de clareza de dados — sempre visíveis, acima de qualquer aba ═══ -->
+        <div id="dataErrorBanner" style="display:none; margin-bottom:1rem; padding:0.85rem 1.1rem; background:rgba(248,113,113,0.14); border:2px solid var(--danger); border-radius:var(--radius-sm); color:#fff; font-size:0.82rem; font-weight:600; align-items:center; gap:0.6rem">
+            <i class="fas fa-triangle-exclamation" style="color:var(--danger); font-size:1.1rem"></i>
+            <span id="dataErrorBannerText"></span>
+            <button type="button" onclick="retryLastPeriodLoad()" style="margin-left:auto; background:var(--danger); color:#fff; border:none; border-radius:6px; padding:0.35rem 0.7rem; font-size:0.72rem; font-weight:700; cursor:pointer; white-space:nowrap">Tentar novamente</button>
+        </div>
+        <div id="todayInfoBanner" style="display:none; margin-bottom:1rem; padding:0.75rem 1.1rem; background:rgba(96,165,250,0.12); border:1px solid #60a5fa; border-radius:var(--radius-sm); color:#dce8fb; font-size:0.78rem; align-items:center; gap:0.6rem">
+            <i class="fas fa-circle-info" style="color:#60a5fa"></i>
+            <span>Mostrando <b>HOJE</b> (data do servidor), do início do dia até agora — o dia ainda não terminou, então esses números vão continuar mudando. Não trate como fechado para bater meta.</span>
         </div>
 
         <!-- ═══ TAB: VISÃO GERAL (Email + SMS consolidated) ═══ -->
@@ -2292,11 +2305,54 @@
             }
         }
 
+        // ── Aviso de clareza de dados: qualquer falha ao carregar um período fica
+        // ESTAMPADA (banner vermelho fixo, não um log de console) — evita que alguém
+        // olhe pro dashboard achando que "faturamento de hoje" é $0 quando na verdade
+        // a request falhou e o número na tela é só o de antes (ou nenhum). Ver pedido
+        // do Murilo: metas concretas não podem ser lidas em cima de dado silenciosamente
+        // errado/desatualizado.
+        window.__dataLoadErrors = new Set();
+        window.__lastPeriodLoad = null;
+
+        function reportDataLoadError(source, err) {
+            console.error(`Failed to load ${source}:`, err);
+            window.__dataLoadErrors.add(source);
+            renderDataErrorBanner();
+        }
+
+        function clearDataLoadError(source) {
+            window.__dataLoadErrors.delete(source);
+            renderDataErrorBanner();
+        }
+
+        function renderDataErrorBanner() {
+            const banner = document.getElementById('dataErrorBanner');
+            const text = document.getElementById('dataErrorBannerText');
+            if (!banner || !text) return;
+            if (window.__dataLoadErrors.size === 0) {
+                banner.style.display = 'none';
+                return;
+            }
+            const list = [...window.__dataLoadErrors].join(', ');
+            text.textContent = `Falha ao carregar dados do período selecionado (${list}) — os números exibidos abaixo podem estar incompletos, desatualizados ou de um período anterior. Não use para bater meta até resolver.`;
+            banner.style.display = 'flex';
+        }
+
+        function retryLastPeriodLoad() {
+            if (!window.__lastPeriodLoad) return;
+            const { from, to, timeOpts } = window.__lastPeriodLoad;
+            reloadAllCharts(from, to, timeOpts);
+        }
+
         function reloadAllCharts(from, to, timeOpts = {}) {
             // "Hoje" chega aqui com from=to=data atual do SERVIDOR (não do navegador) — ver
             // applyToday(). Passa como um intervalo normal de 1 dia pra todo widget que já
             // sabe lidar com from/to; timeOpts.today só liga o branch CURRENT_DATE no backend
             // pra /stats e /sms-stats (mais direto e sem risco de mismatch de fuso).
+            window.__lastPeriodLoad = { from, to, timeOpts };
+            const todayBanner = document.getElementById('todayInfoBanner');
+            if (todayBanner) todayBanner.style.display = timeOpts.today ? 'flex' : 'none';
+
             loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime);
             const refundSection = document.getElementById('refundChartSection');
             if (refundSection && refundSection.style.display !== 'none') {
@@ -2318,10 +2374,12 @@
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
                 const res = await fetch(`${API}/clientes/${clientId}/stats?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 renderClientStatsData(data);
+                clearDataLoadError('métricas gerais');
             } catch (e) {
-                console.error('Failed to reload client stats for period:', e);
+                reportDataLoadError('métricas gerais', e);
             }
         }
 
@@ -2497,15 +2555,22 @@
         }
 
         async function loadRevenueChartsClient(from, to, fromTime, toTime) {
-            const params = new URLSearchParams({ from, to, client_id: clientId });
-            appendPeriodTimeParams(params, fromTime, toTime);
-            const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
-            updateRevenueCharts(
-                d,
-                document.getElementById('chartAutoCamp'),
-                document.getElementById('chartRecUpsell'),
-                __clientCharts
-            );
+            try {
+                const params = new URLSearchParams({ from, to, client_id: clientId });
+                appendPeriodTimeParams(params, fromTime, toTime);
+                const res = await fetch(`${API}/dashboard/revenue-charts?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                updateRevenueCharts(
+                    d,
+                    document.getElementById('chartAutoCamp'),
+                    document.getElementById('chartRecUpsell'),
+                    __clientCharts
+                );
+                clearDataLoadError('gráficos de receita');
+            } catch (e) {
+                reportDataLoadError('gráficos de receita', e);
+            }
         }
 
         // ── Refund doughnut chart (Fase D.5) ──
@@ -2575,16 +2640,23 @@
         }
 
         async function loadRefundChartClient(from, to, fromTime, toTime) {
-            const params = new URLSearchParams({ from, to, client_id: clientId });
-            appendPeriodTimeParams(params, fromTime, toTime);
-            const d = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`).then(r => r.json());
-            renderRefundChart(
-                d,
-                document.getElementById('chartRefund'),
-                __clientRefundChart,
-                document.getElementById('refundPctClient'),
-                document.getElementById('chargebackCostClient')
-            );
+            try {
+                const params = new URLSearchParams({ from, to, client_id: clientId });
+                appendPeriodTimeParams(params, fromTime, toTime);
+                const res = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                renderRefundChart(
+                    d,
+                    document.getElementById('chartRefund'),
+                    __clientRefundChart,
+                    document.getElementById('refundPctClient'),
+                    document.getElementById('chargebackCostClient')
+                );
+                clearDataLoadError('gráfico de reembolso');
+            } catch (e) {
+                reportDataLoadError('gráfico de reembolso', e);
+            }
         }
 
         function initRefundChartForClient(stores) {
@@ -2991,9 +3063,11 @@
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
                 const res = await fetch(`${API}/clientes/${clientId}/sms-stats?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 if (!data.configured) {
+                    clearDataLoadError('SMS');
                     document.getElementById('smsRevenueKpis').innerHTML =
                         '<div style="text-align:center; padding:1rem; color:var(--text-muted); grid-column:1/-1">—</div>';
                     document.getElementById('smsContactKpis').innerHTML =
@@ -3006,6 +3080,7 @@
                 }
 
                 if (data.error) {
+                    reportDataLoadError('SMS', new Error(data.error));
                     document.getElementById('smsContactKpis').innerHTML =
                         `<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1"><i class="fas fa-times-circle"></i> ${data.error}</div>`;
                     return;
@@ -3066,8 +3141,9 @@
                         </tr>
                     `).join('');
                 }
+                clearDataLoadError('SMS');
             } catch (e) {
-                console.error('Failed to load SMS stats:', e);
+                reportDataLoadError('SMS', e);
                 document.getElementById('smsContactKpis').innerHTML =
                     '<div style="text-align:center; padding:1rem; color:var(--danger); grid-column:1/-1">Erro ao carregar dados SMS</div>';
             }
@@ -3125,13 +3201,22 @@
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
             }
-            // Eficiência por mensagem (doc 3.3): quantos envios pra gerar 1 venda dessa mensagem.
+            // Eficiência por mensagem (doc 3.3): quantos envios/cliques pra gerar 1 venda.
             const ratio = vendas > 0 ? Math.round(cached.count / vendas) : null;
             const ratioHtml = ratio != null
                 ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
                 : `<small>envios${cached.capped ? ' (parcial)' : ''}</small>`;
+
+            let clicksHtml = '';
+            if (cached.clicksFieldFound === false) {
+                clicksHtml = `<small class="envios-clicks-muted" title="A SlickText não retornou nenhum campo de clique reconhecido nessa consulta — validar com o Nicollas.">cliques indisponíveis</small>`;
+            } else if (typeof cached.clicks === 'number') {
+                const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
+                clicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+            }
+
             return `<div class="rank-envios" id="${id}">
-                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}</span>
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${ratioHtml}${clicksHtml}</span>
             </div>`;
         }
 
@@ -3445,6 +3530,7 @@
                 appendPeriodTimeParams(params, opts.fromTime, opts.toTime);
 
                 const res  = await fetch(`${API}/clientes/${clientId}/sms-granular?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 loading.style.display = 'none';
@@ -3452,6 +3538,7 @@
                 if (!data.rows || data.rows.length === 0) {
                     window.__smsGranularData = null;
                     empty.style.display = 'block';
+                    clearDataLoadError('desempenho por mensagem SMS');
                     return;
                 }
 
@@ -3460,8 +3547,9 @@
                 section.style.display = 'block';
                 content.style.display = 'block';
                 renderSmsGranular();
+                clearDataLoadError('desempenho por mensagem SMS');
             } catch (e) {
-                console.error('Failed to load SMS granular:', e);
+                reportDataLoadError('desempenho por mensagem SMS', e);
                 loading.style.display = 'none';
             }
         }
