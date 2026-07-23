@@ -266,6 +266,33 @@
         /* Seção "Desempenho por Mensagem de Automação" */
         .section-block { margin-bottom: 1.25rem; }
 
+        /* Créditos por Automação */
+        .creditos-auto-wrap { padding: 1rem 1.25rem 1.25rem; border-top: 1px solid var(--border); }
+        .creditos-auto-title { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
+        .creditos-auto-sub { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.85rem; }
+        .creditos-auto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+        .creditos-auto-card {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.85rem;
+            text-align: center;
+        }
+        .creditos-auto-card .n { font-size: 1.35rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
+        .creditos-auto-card .l { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 0.25rem; }
+        .creditos-auto-card .d { font-size: 0.68rem; color: var(--text-dim); margin-top: 0.4rem; }
+        .creditos-auto-card .calc-btn {
+            margin-top: 0.6rem;
+            background: var(--accent-subtle);
+            border: 1px solid var(--border);
+            color: var(--accent-light);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 0.35rem 0.7rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+
         #sms-granular-section {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -1413,6 +1440,7 @@
                 <div id="sms-granular-content" style="display:none;">
                     <div class="summary-strip" id="sms-granular-summary"></div>
                     <div id="sms-granular-body"></div>
+                    <div id="creditos-automacao-block"></div>
                 </div>
             </div>
 
@@ -3147,6 +3175,85 @@
             }
         });
 
+        // ── Créditos por Automação — soma os envios (≈ créditos) de todas as mensagens ──
+        // ── de um mesmo tipo de automação (Carrinho Abandonado / Upsell) ──
+        // 1 envio ≈ 1 crédito na maioria dos casos, mas mensagem longa (>160 caracteres)
+        // pode consumir mais de 1 crédito da SlickText — por isso é rotulado como estimativa.
+        function isUpsellTipo(tipo) {
+            return /upsell|compra aprovada/i.test(tipo || '');
+        }
+
+        function renderCreditosAutomacao() {
+            const data = window.__smsGranularData;
+            const el = document.getElementById('creditos-automacao-block');
+            if (!el) return;
+            if (!data || !data.rows || data.rows.length === 0) { el.innerHTML = ''; return; }
+
+            const groups = { abandono: [], upsell: [] };
+            data.rows.forEach(r => (isUpsellTipo(r.tipo_automacao) ? groups.upsell : groups.abandono).push(r));
+
+            const cardHtml = (key, label, rows) => {
+                const cached = window.__creditosAutomacaoCache?.[key];
+                if (!cached) {
+                    return `<div class="creditos-auto-card">
+                        <div class="n">—</div>
+                        <div class="l">${label}</div>
+                        <div class="d">${rows.length} mensage${rows.length === 1 ? 'm' : 'ns'}</div>
+                        <button type="button" class="calc-btn" data-calc-creditos="${key}">Calcular</button>
+                    </div>`;
+                }
+                if (cached === 'loading') {
+                    return `<div class="creditos-auto-card"><div class="n">...</div><div class="l">${label}</div><div class="d">calculando</div></div>`;
+                }
+                return `<div class="creditos-auto-card">
+                    <div class="n">${cached.total.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
+                    <div class="l">${label}</div>
+                    <div class="d">≈ créditos · ${cached.linkedCount}/${rows.length} mensagens vinculadas</div>
+                </div>`;
+            };
+
+            el.innerHTML = `
+                <div class="creditos-auto-wrap">
+                    <div class="creditos-auto-title">Créditos por Automação</div>
+                    <div class="creditos-auto-sub">Estimativa via total de envios da SlickText por automação (1 envio ≈ 1 crédito; mensagem longa pode custar mais).</div>
+                    <div class="creditos-auto-grid">
+                        ${cardHtml('abandono', 'Carrinho Abandonado', groups.abandono)}
+                        ${cardHtml('upsell', 'Upsell', groups.upsell)}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function calcCreditosAutomacao(key) {
+            const data = window.__smsGranularData;
+            if (!data) return;
+            window.__creditosAutomacaoCache = window.__creditosAutomacaoCache || {};
+            window.__creditosAutomacaoCache[key] = 'loading';
+            renderCreditosAutomacao();
+
+            const rows = data.rows.filter(r => (isUpsellTipo(r.tipo_automacao) ? 'upsell' : 'abandono') === key);
+            const results = await Promise.all(rows.map(async (r) => {
+                try {
+                    const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?utm_campaign=${encodeURIComponent(r.utm_campaign)}`);
+                    return await res.json();
+                } catch (e) {
+                    return { linked: false, count: null };
+                }
+            }));
+
+            const total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+            const linkedCount = results.filter(r => r.linked && r.count != null).length;
+            const anyCapped = results.some(r => r.capped);
+
+            window.__creditosAutomacaoCache[key] = { total, linkedCount, anyCapped };
+            renderCreditosAutomacao();
+        }
+
+        document.getElementById('creditos-automacao-block')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-calc-creditos]');
+            if (btn) calcCreditosAutomacao(btn.dataset.calcCreditos);
+        });
+
         function humanizeMsgCode(code) {
             const m = /^MS(\d{4})([A-Z])$/i.exec(code || '');
             if (!m) return { human: code || '—', raw: code || '' };
@@ -3304,6 +3411,7 @@
             document.getElementById('sms-granular-body').innerHTML = view === 'produto'
                 ? renderSmsGranularProduto(data, sym)
                 : renderSmsGranularMensagem(data, sym);
+            renderCreditosAutomacao();
         }
 
         async function loadSmsGranular(clientId, opts = {}) {
@@ -3339,6 +3447,7 @@
                 }
 
                 window.__smsGranularData = data;
+                window.__creditosAutomacaoCache = {}; // período mudou — descarta cálculo anterior
                 section.style.display = 'block';
                 content.style.display = 'block';
                 renderSmsGranular();
