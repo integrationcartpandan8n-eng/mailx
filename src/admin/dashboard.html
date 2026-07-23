@@ -770,6 +770,13 @@
                     <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
                 </div>
 
+                <!-- ═══ Aviso de clareza de dados — sempre visível, acima de qualquer aba ═══ -->
+                <div id="dataErrorBanner" style="display:none; margin-bottom:1rem; padding:0.85rem 1.1rem; background:rgba(248,113,113,0.14); border:2px solid var(--danger); border-radius:var(--radius-sm); color:#fff; font-size:0.82rem; font-weight:600; align-items:center; gap:0.6rem">
+                    <i class="fas fa-triangle-exclamation" style="color:var(--danger); font-size:1.1rem"></i>
+                    <span id="dataErrorBannerText"></span>
+                    <button type="button" onclick="retryLastFailedLoads()" style="margin-left:auto; background:var(--danger); color:#fff; border:none; border-radius:6px; padding:0.35rem 0.7rem; font-size:0.72rem; font-weight:700; cursor:pointer; white-space:nowrap">Tentar novamente</button>
+                </div>
+
                 <!-- ═══════════ TAB: Visão Geral ═══════════ -->
                 <div class="tab-content active" id="tab-overview">
                     <div class="kpi-grid" id="overview-kpis"></div>
@@ -1202,6 +1209,43 @@
             }
         }
 
+        // ── Aviso de clareza de dados: qualquer falha ao carregar um card/gráfico fica
+        // ESTAMPADA (banner vermelho fixo, não um log de console) — evita que alguém
+        // olhe pro dashboard agregado achando que um KPI é $0 ou está zerado quando na
+        // verdade a request falhou e o número na tela é só o de antes (ou nenhum).
+        window.__dataLoadErrors = new Set();
+        window.__dataRetryFns = {};
+
+        function reportDataLoadError(source, err, retryFn) {
+            console.error(`Failed to load ${source}:`, err);
+            window.__dataLoadErrors.add(source);
+            if (retryFn) window.__dataRetryFns[source] = retryFn;
+            renderDataErrorBanner();
+        }
+
+        function clearDataLoadError(source) {
+            window.__dataLoadErrors.delete(source);
+            delete window.__dataRetryFns[source];
+            renderDataErrorBanner();
+        }
+
+        function renderDataErrorBanner() {
+            const banner = document.getElementById('dataErrorBanner');
+            const text = document.getElementById('dataErrorBannerText');
+            if (!banner || !text) return;
+            if (window.__dataLoadErrors.size === 0) {
+                banner.style.display = 'none';
+                return;
+            }
+            const list = [...window.__dataLoadErrors].join(', ');
+            text.textContent = `Falha ao carregar dados (${list}) — os números exibidos podem estar incompletos, desatualizados ou zerados por engano. Não use para bater meta até resolver.`;
+            banner.style.display = 'flex';
+        }
+
+        function retryLastFailedLoads() {
+            Object.values(window.__dataRetryFns).forEach(fn => fn());
+        }
+
         function initPeriodControl(container, onChange) {
             const state = { days: 30 };
             const fmt = d => d.toISOString().slice(0, 10);
@@ -1236,25 +1280,39 @@
         }
 
         async function loadRevenueChartsOverview(from, to) {
-            const params = new URLSearchParams({ from, to });
-            const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
-            updateRevenueCharts(
-                d,
-                document.getElementById('chartAutoCamp'),
-                document.getElementById('chartRecUpsell'),
-                __overviewCharts
-            );
+            try {
+                const params = new URLSearchParams({ from, to });
+                const res = await fetch(`${API}/dashboard/revenue-charts?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                updateRevenueCharts(
+                    d,
+                    document.getElementById('chartAutoCamp'),
+                    document.getElementById('chartRecUpsell'),
+                    __overviewCharts
+                );
+                clearDataLoadError('gráficos de receita');
+            } catch (e) {
+                reportDataLoadError('gráficos de receita', e, () => loadRevenueChartsOverview(from, to));
+            }
         }
 
         async function loadRevenueChartsEmail(from, to) {
-            const params = new URLSearchParams({ from, to, channel: 'email' });
-            const d = await fetch(`${API}/dashboard/revenue-charts?${params}`).then(r => r.json());
-            updateRevenueCharts(
-                d,
-                document.getElementById('chartAutoCampEmail'),
-                document.getElementById('chartRecUpsellEmail'),
-                __emailCharts
-            );
+            try {
+                const params = new URLSearchParams({ from, to, channel: 'email' });
+                const res = await fetch(`${API}/dashboard/revenue-charts?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                updateRevenueCharts(
+                    d,
+                    document.getElementById('chartAutoCampEmail'),
+                    document.getElementById('chartRecUpsellEmail'),
+                    __emailCharts
+                );
+                clearDataLoadError('gráficos de receita (email)');
+            } catch (e) {
+                reportDataLoadError('gráficos de receita (email)', e, () => loadRevenueChartsEmail(from, to));
+            }
         }
 
         initPeriodControl(document.getElementById('revenuePeriodControl'), loadRevenueChartsOverview);
@@ -1303,15 +1361,22 @@
         }
 
         async function loadRefundChartOverview(from, to) {
-            const params = new URLSearchParams({ from, to });
-            const d = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`).then(r => r.json());
-            renderRefundChart(
-                d,
-                document.getElementById('chartRefund'),
-                __overviewRefundChart,
-                document.getElementById('refundPctOverview'),
-                document.getElementById('chargebackCostOverview')
-            );
+            try {
+                const params = new URLSearchParams({ from, to });
+                const res = await fetch(`${API}/dashboard/revenue-vs-refund?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                renderRefundChart(
+                    d,
+                    document.getElementById('chartRefund'),
+                    __overviewRefundChart,
+                    document.getElementById('refundPctOverview'),
+                    document.getElementById('chargebackCostOverview')
+                );
+                clearDataLoadError('gráfico de reembolso');
+            } catch (e) {
+                reportDataLoadError('gráfico de reembolso', e, () => loadRefundChartOverview(from, to));
+            }
         }
 
         initPeriodControl(document.getElementById('refundPeriodControl'), loadRefundChartOverview);
@@ -1333,6 +1398,7 @@
         async function loadOverview() {
             try {
                 const res = await fetch(`${API}/dashboard/overview`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 renderKPI('overview-kpis', [
@@ -1437,8 +1503,9 @@
                         },
                     }
                 });
+                clearDataLoadError('visão geral');
             } catch (e) {
-                console.error('Failed to load overview:', e);
+                reportDataLoadError('visão geral', e, () => loadOverview());
             }
         }
 
@@ -1446,6 +1513,7 @@
         async function loadHistory() {
             try {
                 const res = await fetch(`${API}/dashboard/history`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 renderKPI('history-sales-kpis', [
@@ -1532,8 +1600,9 @@
                         },
                     }
                 });
+                clearDataLoadError('histórico importado');
             } catch (e) {
-                console.error('Failed to load history:', e);
+                reportDataLoadError('histórico importado', e, () => loadHistory());
             }
         }
 
@@ -1546,6 +1615,7 @@
                     fetch(`${API}/clientes`),
                     fetch(`${API}/dashboard/pipeline-kpis`),
                 ]);
+                if (!clientsRes.ok || !kpisRes.ok) throw new Error(`HTTP ${clientsRes.status}/${kpisRes.status}`);
                 const { clients } = await clientsRes.json();
                 const { kpis } = await kpisRes.json();
 
@@ -1655,8 +1725,9 @@
                         }
                     }
                 });
+                clearDataLoadError('clientes/pipeline');
             } catch (e) {
-                console.error('Failed to load clients:', e);
+                reportDataLoadError('clientes/pipeline', e, () => loadClients());
             }
         }
 
@@ -1664,6 +1735,7 @@
         async function loadWebhooks() {
             try {
                 const res = await fetch(`${API}/webhooks?limit=15`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const { logs, count } = await res.json();
 
                 document.getElementById('webhook-count').textContent = `${count || logs.length} registros`;
@@ -1679,8 +1751,9 @@
                         </tr>
                     `;
                 }).join('');
+                clearDataLoadError('webhooks');
             } catch (e) {
-                console.error('Failed to load webhooks:', e);
+                reportDataLoadError('webhooks', e, () => loadWebhooks());
             }
         }
 
@@ -1770,6 +1843,7 @@
         async function loadEmailDashboard() {
             try {
                 const res = await fetch(`${API}/dashboard/email`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 const r = data.revenue || {};
                 renderKPI('email-revenue-kpis', [
@@ -1792,8 +1866,9 @@
                     window.__emailChartsInit = true;
                     initPeriodControl(document.getElementById('revenuePeriodControlEmail'), loadRevenueChartsEmail);
                 }
+                clearDataLoadError('dashboard de email');
             } catch (err) {
-                console.error('Failed to load email dashboard:', err);
+                reportDataLoadError('dashboard de email', err, () => loadEmailDashboard());
                 document.getElementById('email-revenue-kpis').innerHTML = '<div style="color:var(--danger); padding:1rem">Erro ao carregar dados de Email.</div>';
             }
         }
@@ -1802,6 +1877,7 @@
         async function loadSmsDashboard() {
             try {
                 const res = await fetch(`${API}/dashboard/sms`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 const r = data.revenue || {};
                 renderKPI('sms-revenue-kpis', [
@@ -1819,8 +1895,9 @@
                     { label: 'Listas SMS', value: s.listas_sms, icon: 'list', color: 'orange', tip: 'Quantidade de listas SlickText criadas, somando todos os clientes.' },
                 ]);
                 document.getElementById('sms-clients-count').textContent = data.clients_with_st || 0;
+                clearDataLoadError('dashboard de SMS');
             } catch (err) {
-                console.error('Failed to load sms dashboard:', err);
+                reportDataLoadError('dashboard de SMS', err, () => loadSmsDashboard());
                 document.getElementById('sms-revenue-kpis').innerHTML = '<div style="color:var(--danger); padding:1rem">Erro ao carregar dados de SMS.</div>';
             }
         }
