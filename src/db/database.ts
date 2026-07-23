@@ -205,6 +205,26 @@ export async function initDatabase(): Promise<void> {
         -- (GET /analytics/workflows/{workflow_id}/nodes/{node_id}). Quando presente, essa coluna
         -- tem prioridade sobre slicktext_campaign_id (que nesse caso guarda o workflow_id "pai").
         ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS workflow_node_id INTEGER;
+
+        -- Confirmado com o Murilo: um cliente pode rodar SMS por MAIS DE UMA conta/marca da
+        -- SlickText em paralelo pro mesmo produto (ex: dois números de telefone diferentes pra
+        -- escalar volume). clients.st_api_token/st_brand_id continuam sendo a "conta principal";
+        -- essa tabela guarda contas ADICIONAIS do mesmo cliente. Todo lugar que consulta a
+        -- SlickText pra métricas agregadas (contatos, créditos, listas) soma as duas; vínculos de
+        -- mensagem específicos (sms_campaign_map) guardam qual conta usar via st_account_id.
+        CREATE TABLE IF NOT EXISTS client_slicktext_accounts (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          label VARCHAR(255),
+          st_api_token TEXT NOT NULL,
+          st_brand_id VARCHAR(50) NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+
+        -- NULL = conta principal (clients.st_api_token/st_brand_id); referencia
+        -- client_slicktext_accounts.id quando o vínculo é de uma conta adicional.
+        ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS st_account_id INTEGER REFERENCES client_slicktext_accounts(id) ON DELETE SET NULL;
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
