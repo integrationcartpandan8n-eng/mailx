@@ -2149,6 +2149,15 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
   try {
     if (sourceType === 'Workflow') {
       const { start, end } = await resolveSlickTextDateRange(req);
+      // Realidade da API (confirmada via probes em produção): envios/cliques POR MENSAGEM
+      // (node) só existem como total vitalício — o endpoint de node ignora start/end e o
+      // filtro _sub_source_id em /analytics/messages também é ignorado (nem o painel deles
+      // mostra por-mensagem-por-período). O que filtra por período de verdade é o nível de
+      // WORKFLOW via /analytics/messages. Então: devolvemos os dois, cada um rotulado como
+      // o que é — nada de fingir período onde não há (metas concretas do time dependem disso).
+      const workflowPeriodCount = await st.getMessageAnalyticsForSource('Workflow', mapping.slicktext_campaign_id, start, end)
+        .then(d => d?.totals?.total ?? null).catch(() => null);
+
       if (mapping.workflow_node_id) {
         const data = await st.getWorkflowNodeAnalytics(mapping.slicktext_campaign_id, mapping.workflow_node_id, start, end);
         const t = data?.totals || {};
@@ -2156,6 +2165,7 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           linked: true,
           sourceType,
           scope: 'node',
+          lifetime: true, // count/clicks abaixo são desde a criação da mensagem, NÃO do período
           count: t.messages ?? 0,
           clicks: t.clicks ?? 0,
           uniqueClicks: t.unique_clicks ?? 0,
@@ -2163,48 +2173,27 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           capped: false,
           pages: 1,
           nodeName: data?.workflow_node?.name,
+          workflowId: mapping.slicktext_campaign_id,
+          workflowPeriodCount, // envios do WORKFLOW inteiro no período (esse sim filtrado)
         });
       } else {
-        // Workflow inteiro (sem node): o analytics com _workflow_id na query só devolve o
-        // gráfico de entradas (sem messages/clicks — confirmado via probe). Envios do período
-        // vêm de /analytics/messages; cliques somando o analytics de cada node (nodes
-        // descobertos pelos links do resumo vitalício do workflow).
-        const [msgData, byId] = await Promise.all([
-          st.getMessageAnalyticsForSource('Workflow', mapping.slicktext_campaign_id, start, end),
-          st.getWorkflowAnalyticsById(mapping.slicktext_campaign_id).catch(() => null),
-        ]);
-        const count = msgData?.totals?.total ?? 0;
-
-        const nodeIds = [...new Set(
-          Object.values<any>(byId?.links || {})
-            .map(l => l?._sub_source_id)
-            .filter((v): v is number => Number.isInteger(v))
-        )];
-        let clicks: number | null = null;
-        let uniqueClicks: number | null = null;
-        if (nodeIds.length > 0) {
-          const nodeTotals = await Promise.all(nodeIds.map(nid =>
-            st.getWorkflowNodeAnalytics(mapping.slicktext_campaign_id, nid, start, end)
-              .then(d => d?.totals).catch(() => null)
-          ));
-          const valid = nodeTotals.filter(Boolean);
-          if (valid.length > 0) {
-            clicks = valid.reduce((s, t) => s + (t.clicks || 0), 0);
-            uniqueClicks = valid.reduce((s, t) => s + (t.unique_clicks || 0), 0);
-          }
-        }
-
+        const byId = await st.getWorkflowAnalyticsById(mapping.slicktext_campaign_id).catch(() => null);
+        const t = byId?.totals || {};
         res.json({
           linked: true,
           sourceType,
           scope: 'workflow',
-          count,
-          clicks,
-          uniqueClicks,
-          clicksFieldFound: clicks !== null,
+          lifetime: false, // count = período (via /analytics/messages); clicks = vitalício do workflow
+          count: workflowPeriodCount ?? 0,
+          clicks: t.clicks ?? null,
+          uniqueClicks: t.unique_clicks ?? null,
+          clicksLifetime: true,
+          clicksFieldFound: t.clicks !== undefined,
           capped: false,
           pages: 1,
           workflowName: byId?.workflow?.name,
+          workflowId: mapping.slicktext_campaign_id,
+          workflowPeriodCount,
         });
       }
     } else {
