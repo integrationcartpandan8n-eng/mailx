@@ -337,64 +337,83 @@ export class SlickTextClient {
   }
 
   /**
-   * ENVIOS (e créditos exatos) de UMA mensagem de workflow num PERÍODO — paginando o
-   * GET /messages cru. Confirmado via probe em produção:
-   * - o filtro `_sub_source_id` (node) FUNCIONA no /messages (o analytics ignora, aqui não);
-   * - cada item tem `created` ("YYYY-MM-DD HH:mm:ss") e `message_credits` (créditos reais).
-   * Conta client-side os itens com created dentro de [start, end]. Se as páginas vierem em
-   * ordem decrescente de created (detectado na 1ª página), para cedo ao passar do início do
-   * período — barato pra "Hoje"/7d. Cap de segurança marca `capped` (número parcial).
-   * startYmd/endYmd: "YYYY-MM-DD" (comparação lexicográfica com o prefixo de `created`).
+   * ENVIOS (e créditos exatos) de UMA mensagem de workflow num PERÍODO, via GET /messages cru.
+   * Fatos confirmados por probes em produção:
+   * - filtro `_sub_source_id` (node) funciona; cada item tem `created` e `message_credits`;
+   * - paginação é por `offset`+`limit` (`page` exige pageSize; limit máx aceito: 100);
+   * - a listagem vem em ordem CRESCENTE de `created` (mais antigo primeiro) e não há filtro
+   *   de data — varrer tudo custaria centenas de requests pra mensagens de alto volume.
+   * Estratégia: BUSCA BINÁRIA por offset nas duas bordas do período (cada sonda busca 1 item):
+   * count = primeiroOffset(created > end) - primeiroOffset(created >= start). ~2×log2(N)+galope
+   * ≈ 30-40 requests de 1 item por mensagem — poucos segundos, independente do volume.
+   * Créditos exatos: só quando o intervalo é pequeno (varre a fatia); senão credits=null e o
+   * chamador usa 1 envio ≈ 1 crédito como estimativa.
    */
   async countWorkflowNodeMessages(
     workflowId: number,
     nodeId: number,
     startYmd: string,
     endYmd: string,
-    opts: { maxPages?: number } = {}
-  ): Promise<{ count: number; credits: number; capped: boolean; pages: number }> {
-    const maxPages = opts.maxPages ?? 80;
+    opts: { creditsScanLimit?: number } = {}
+  ): Promise<{ count: number; credits: number | null; capped: boolean; pages: number }> {
+    const creditsScanLimit = opts.creditsScanLimit ?? 500;
     const startKey = `${startYmd} 00:00:00`;
     const endKey = `${endYmd} 23:59:59`;
-    let page = 1;
-    let count = 0;
-    let credits = 0;
-    let sortedDesc: boolean | null = null;
+    const baseParams = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId };
+    let requests = 0;
 
-    while (page <= maxPages) {
-      const params: any = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId, page, limit: 100 };
-      const res = await this.http.get('/messages', { params });
-      const items: any[] = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
-      if (items.length === 0) return { count, credits, capped: false, pages: page };
+    const fetchAt = async (offset: number, limit = 1): Promise<any[]> => {
+      requests++;
+      const res = await this.http.get('/messages', { params: { ...baseParams, offset, limit } });
+      return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    };
 
-      if (sortedDesc === null && items.length > 1) {
-        const first = items[0]?.created || '';
-        const last = items[items.length - 1]?.created || '';
-        sortedDesc = first >= last;
+    // Galope pra achar N (total de mensagens do node): dobra o offset até vir vazio.
+    const first = await fetchAt(0);
+    if (first.length === 0) return { count: 0, credits: 0, capped: false, pages: requests };
+    let hi = 1024;
+    while ((await fetchAt(hi)).length > 0) {
+      hi *= 2;
+      if (hi > 1_000_000) break; // trava de segurança
+    }
+    // N está em (hi/2, hi] — o lowerBound abaixo já resolve com esse teto.
+    const total = hi;
+
+    // Primeiro offset cujo item satisfaz pred(created); itens além do fim contam como "satisfaz"
+    // (created vazio = fim da lista). Ordem crescente confirmada — verificada de leve no galope.
+    const lowerBound = async (pred: (created: string) => boolean): Promise<number> => {
+      let lo = 0;
+      let high = total;
+      while (lo < high) {
+        const mid = Math.floor((lo + high) / 2);
+        const items = await fetchAt(mid);
+        const created: string = items[0]?.created || '';
+        if (!created || pred(created)) high = mid;
+        else lo = mid + 1;
       }
+      return lo;
+    };
 
-      let allOlderThanStart = true;
-      for (const item of items) {
-        const created: string = item?.created || '';
-        if (!created) continue;
-        if (created >= startKey) allOlderThanStart = false;
-        if (created >= startKey && created <= endKey) {
-          count++;
+    const startIdx = await lowerBound(c => c >= startKey);
+    const endIdx = await lowerBound(c => c > endKey);
+    const count = Math.max(0, endIdx - startIdx);
+
+    // Créditos exatos varrendo a fatia — só quando ela é pequena o bastante.
+    let credits: number | null = null;
+    if (count > 0 && count <= creditsScanLimit) {
+      credits = 0;
+      for (let off = startIdx; off < endIdx; off += 100) {
+        const batch = await fetchAt(off, Math.min(100, endIdx - off));
+        for (const item of batch) {
           credits += typeof item?.message_credits === 'number' ? item.message_credits : 1;
         }
+        if (batch.length === 0) break;
       }
-
-      // Ordem decrescente + página inteira antes do início do período = não vem mais nada útil.
-      if (sortedDesc && allOlderThanStart) {
-        return { count, credits, capped: false, pages: page };
-      }
-
-      const hasMore = res.data?.hasMore ?? res.data?.has_more ?? res.data?.pagingData?.hasMore ?? (items.length === 100);
-      if (!hasMore) return { count, credits, capped: false, pages: page };
-      page++;
+    } else if (count === 0) {
+      credits = 0;
     }
-    logger.warn(CTX, `countWorkflowNodeMessages: cap de ${maxPages} páginas no node ${nodeId} (workflow ${workflowId}) — contagem parcial`);
-    return { count, credits, capped: true, pages: page - 1 };
+
+    return { count, credits, capped: false, pages: requests };
   }
 
   /**
