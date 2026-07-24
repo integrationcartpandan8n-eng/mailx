@@ -22,6 +22,7 @@
             --accent-glow: rgba(0, 77, 232, 0.25);
             --accent-subtle: rgba(0, 77, 232, 0.1);
             --text: #f2f5fa;
+            --text-soft: #cdd8ec;
             --text-dim: #a3b1cc;
             --text-muted: #6e7f9e;
             --success: #00d68f;
@@ -408,7 +409,7 @@
             padding: 0.75rem 1.25rem;
         }
 
-        .rank-envios { font-size: 0.88rem; color: var(--text-dim); text-align: center; }
+        .rank-envios { font-size: 0.88rem; color: var(--text-soft); text-align: center; }
         .rank-envios .envios-btn {
             background: var(--surface-2);
             border: 1px solid var(--border);
@@ -422,10 +423,10 @@
         }
         .rank-envios .envios-btn:hover { background: var(--surface-3, var(--surface-2)); }
         .rank-envios .envios-count { font-weight: 700; color: var(--text); }
-        .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.75rem; margin-top: 0.1rem; }
+        .rank-envios .envios-count small { display: block; font-weight: 600; color: var(--text-soft); font-size: 0.78rem; margin-top: 0.1rem; }
         .rank-envios .envios-muted { color: var(--text-dim); font-size: 0.78rem; }
-        .rank-envios .envios-clicks { display: block; font-weight: 500; color: var(--accent-light); font-size: 0.75rem; margin-top: 0.2rem; }
-        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.72rem; margin-top: 0.2rem; cursor: help; }
+        .rank-envios .envios-clicks { display: block; font-weight: 600; color: var(--accent-light); font-size: 0.78rem; margin-top: 0.2rem; }
+        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-soft); font-size: 0.75rem; margin-top: 0.2rem; cursor: help; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -441,9 +442,9 @@
         .type-icon.upsell { background: var(--success-bg); color: var(--success); }
         .msg-identity { min-width: 0; }
         .msg-human { font-size: 0.95rem; font-weight: 700; color: var(--text); display: flex; align-items: baseline; gap: 0.4rem; }
-        .msg-human .code { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--text-muted); font-weight: 500; }
-        .msg-sub { font-size: 0.82rem; color: var(--text-dim); margin-top: 2px; }
-        .msg-sub .prod { color: var(--text-dim); font-weight: 600; }
+        .msg-human .code { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--text-dim); font-weight: 500; }
+        .msg-sub { font-size: 0.82rem; color: var(--text-soft); margin-top: 2px; }
+        .msg-sub .prod { color: #fff; font-weight: 700; }
 
         .rank-pos {
             font-size: 0.68rem;
@@ -487,7 +488,7 @@
 
         .rank-sales {
             font-size: 0.9rem;
-            color: var(--text-dim);
+            color: var(--text-soft);
             text-align: right;
         }
 
@@ -506,7 +507,7 @@
 
         .rank-value .rp {
             font-size: 0.78rem;
-            color: var(--text-dim);
+            color: var(--text-soft);
             margin-top: 1px;
         }
 
