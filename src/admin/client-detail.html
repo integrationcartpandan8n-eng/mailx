@@ -3398,7 +3398,10 @@
                 if (window.__smsLinkedMap && window.__smsLinkedMap[utmCampaign] === false) {
                     return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular</button></div>`;
                 }
-                return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}">Ver envios</button></div>`;
+                // Linha vinculada sem cache: o loadSmsGranular já enfileirou o carregamento
+                // automático — nada de botão "Ver envios" (feedback do Murilo: vínculo é setup
+                // de uma vez, os números têm que aparecer sozinhos).
+                return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
             }
             if (cached === 'loading') {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted">carregando...</span></div>`;
@@ -4081,9 +4084,6 @@
 
                 // Envios/cliques também são POR PERÍODO — manter o cache antigo misturaria
                 // envios de um período com vendas de outro (razões envios/venda sem sentido).
-                // Descarta e recarrega automaticamente as linhas que já estavam carregadas.
-                const previouslyLoaded = Object.keys(window.__smsSendsCache || {})
-                    .filter(k => typeof window.__smsSendsCache[k] === 'object');
                 window.__smsSendsCache = {};
 
                 section.style.display = 'block';
@@ -4091,8 +4091,11 @@
                 renderSmsGranular();
                 clearDataLoadError('desempenho por mensagem SMS');
 
+                // Carrega envios/cliques de TODAS as linhas vinculadas automaticamente (fila
+                // sequencial — não trava o resto do dashboard). Feedback do Murilo: o vínculo
+                // já é setup persistente, não faz sentido clicar "Ver envios" linha por linha.
                 data.rows
-                    .filter(r => previouslyLoaded.includes(r.utm_campaign))
+                    .filter(r => r.has_link !== false)
                     .forEach(r => queueEnviosLoad(r.utm_campaign, r.vendas || 0));
             } catch (e) {
                 reportDataLoadError('desempenho por mensagem SMS', e);
