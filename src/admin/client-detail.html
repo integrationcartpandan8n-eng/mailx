@@ -9,31 +9,38 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg: #000000;
-            --surface: #0a0e18;
-            --surface-2: #0f1520;
-            --surface-3: #141c2b;
-            --border: #1a2236;
-            --border-light: #222e45;
+            /* Paleta clareada: fundo deixa de ser preto puro e os textos secundários sobem
+               2-3 tons — o contraste antigo (#6b7a99/#3d4f6f sobre #000) cansava o olho. */
+            --bg: #070a12;
+            --surface: #0d1322;
+            --surface-2: #121a2c;
+            --surface-3: #182238;
+            --border: #223050;
+            --border-light: #2e3f66;
             --accent: #004de8;
-            --accent-light: #3b82f6;
+            --accent-light: #4b8df8;
             --accent-glow: rgba(0, 77, 232, 0.25);
-            --accent-subtle: rgba(0, 77, 232, 0.08);
-            --text: #e8ecf4;
-            --text-dim: #6b7a99;
-            --text-muted: #3d4f6f;
+            --accent-subtle: rgba(0, 77, 232, 0.1);
+            --text: #f2f5fa;
+            --text-dim: #a3b1cc;
+            --text-muted: #6e7f9e;
             --success: #00d68f;
-            --success-bg: rgba(0, 214, 143, 0.08);
+            --success-bg: rgba(0, 214, 143, 0.1);
             --warning: #ffb020;
-            --warning-bg: rgba(255, 176, 32, 0.08);
+            --warning-bg: rgba(255, 176, 32, 0.1);
             --danger: #ff4d6a;
-            --danger-bg: rgba(255, 77, 106, 0.08);
+            --danger-bg: rgba(255, 77, 106, 0.1);
             --purple: #8b5cf6;
             --radius: 14px;
             --radius-sm: 8px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        /* Escala tipográfica: 17px base em desktop sobe TODOS os tamanhos em rem ~6% —
+           "mais perto do olho" sem retocar centenas de regras. */
+        html { font-size: 17px; }
+        @media (max-width: 768px) { html { font-size: 16px; } }
 
         body {
             font-family: 'Inter', -apple-system, sans-serif;
@@ -42,10 +49,12 @@
             min-height: 100vh;
             display: flex;
             justify-content: center;
-            padding: 2rem 1rem;
+            padding: 2rem 1.5rem;
         }
 
-        .container { width: 100%; max-width: 900px; }
+        /* Antes 900px: num monitor largo tudo virava um poço vertical com escuridão
+           dos lados. 1500px deixa os grids de KPI e as tabelas respirarem. */
+        .container { width: 100%; max-width: 1500px; }
 
         /* Header */
         .page-header {
@@ -839,61 +848,80 @@
         }
 
         /* KPI Grid */
+        /* Par de cards lado a lado que colapsa pra 1 coluna no mobile */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+        .grid-2 .card { margin-bottom: 0; }
+        @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+        /* KPIs no MESMO estilo do dashboard agregado (/admin): card largo alinhado à
+           esquerda, ícone num quadrado colorido, label em cima e valor grande embaixo.
+           Os templates renderizam ícone → valor → label; o flex `order` inverte pra
+           label ficar acima do valor sem mexer em todos os templates JS. */
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-            gap: 0.75rem;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 0.9rem;
         }
 
         .kpi-card {
             background: var(--surface-2);
             border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.1rem 1.1rem 0.9rem;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            text-align: left;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light));
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .kpi-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+        .kpi-card:hover::before { opacity: 1; }
+
+        .kpi-card .kpi-icon {
+            order: 1;
+            width: 34px;
+            height: 34px;
             border-radius: var(--radius-sm);
-            padding: 0.85rem;
-            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            margin-bottom: 0.65rem;
         }
-
-        .kpi-card .kpi-value {
-            font-size: 1.35rem;
-            font-weight: 800;
-            color: #fff;
-            letter-spacing: -0.03em;
-        }
-
         .kpi-card .kpi-label {
-            font-size: 0.65rem;
+            order: 2;
+            font-size: 0.68rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: var(--text-muted);
-            margin-top: 0.25rem;
-        }
-
-        .kpi-card .kpi-icon {
-            font-size: 0.85rem;
+            color: var(--text-dim);
             margin-bottom: 0.35rem;
         }
-
-        .kpi-card .kpi-icon.green { color: var(--success); }
-        .kpi-card .kpi-icon.blue { color: var(--accent-light); }
-        .kpi-card .kpi-icon.purple { color: var(--purple); }
-        .kpi-card .kpi-icon.red { color: var(--danger); }
-        .kpi-card .kpi-icon.orange { color: var(--warning); }
-
-        /* Variante compacta dos KPIs (aba SMS): ícone à esquerda, valor+label empilhados à
-           direita — corta ~metade da altura da faixa e deixa a página menos vertical. */
-        .kpi-grid.compact { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 0.5rem; }
-        .kpi-grid.compact .kpi-card {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            column-gap: 0.65rem;
-            align-items: center;
-            text-align: left;
-            padding: 0.6rem 0.8rem;
+        .kpi-card .kpi-value {
+            order: 3;
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -0.03em;
+            line-height: 1.1;
         }
-        .kpi-grid.compact .kpi-card .kpi-icon { grid-row: 1 / span 2; margin: 0; font-size: 0.95rem; }
-        .kpi-grid.compact .kpi-card .kpi-value { font-size: 1.05rem; line-height: 1.25; }
-        .kpi-grid.compact .kpi-card .kpi-label { margin-top: 0.05rem; font-size: 0.6rem; }
+
+        .kpi-card .kpi-icon.green { background: var(--success-bg); color: var(--success); }
+        .kpi-card .kpi-icon.blue { background: var(--accent-subtle); color: var(--accent-light); }
+        .kpi-card .kpi-icon.purple { background: rgba(139, 92, 246, 0.08); color: var(--purple); }
+        .kpi-card .kpi-icon.red { background: var(--danger-bg); color: var(--danger); }
+        .kpi-card .kpi-icon.orange { background: var(--warning-bg); color: var(--warning); }
 
         /* Dados de conta (vitalícios) lado a lado em telas largas — não competem em altura
            com as métricas de período. */
@@ -1206,7 +1234,7 @@
         </div>
 
         <!-- ═══ Activity Chart + Recent Webhooks ═══ -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem" id="activity-row">
+        <div class="grid-2" id="activity-row">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-chart-area"></i> Atividade (7 dias)</div>
@@ -1277,23 +1305,34 @@
             </div>
         </div>
 
-        <!-- ═══ Top 5 Produtos ═══ -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title"><i class="fas fa-trophy"></i> Top 5 Produtos</div>
-            </div>
-            <div class="card-body">
-                <div id="topProductsChart" style="height:220px; position:relative">
-                    <canvas id="chartTopProducts"></canvas>
+        <!-- ═══ Top 5 Produtos + Vendas por Hora ═══ -->
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-trophy"></i> Top 5 Produtos</div>
                 </div>
-                <div id="topProductsEmpty" style="display:none" class="empty-state">
-                    <i class="fas fa-box-open"></i>Nenhuma venda registrada ainda
+                <div class="card-body">
+                    <div id="topProductsChart" style="height:220px; position:relative">
+                        <canvas id="chartTopProducts"></canvas>
+                    </div>
+                    <div id="topProductsEmpty" style="display:none" class="empty-state">
+                        <i class="fas fa-box-open"></i>Nenhuma venda registrada ainda
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-clock"></i> Vendas por Hora</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">distribuição 24h</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartHourly"></canvas></div>
                 </div>
             </div>
         </div>
 
-        <!-- ═══ Faturamento + Vendas por Hora ═══ -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+        <!-- ═══ Faturamento diário ═══ -->
+        <div class="grid-2">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
@@ -1314,20 +1353,8 @@
             </div>
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr; gap:1.25rem; margin-bottom:1.25rem">
-            <div class="card" style="margin-bottom:0">
-                <div class="card-header">
-                    <div class="card-title"><i class="fas fa-clock"></i> Vendas por Hora</div>
-                    <span style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600">distribuição 24h</span>
-                </div>
-                <div class="card-body">
-                    <div style="height:220px; position:relative"><canvas id="chartHourly"></canvas></div>
-                </div>
-            </div>
-        </div>
-
         <!-- ═══ Top 5 Tipos de Evento + Conversão Envios por Venda ═══ -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+        <div class="grid-2">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-tags"></i> Top 5 Tipos de Evento</div>
@@ -1360,7 +1387,7 @@
         </div>
 
         <!-- ═══ Representatividade + Conversão por Segmento ═══ -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; margin-bottom:1.25rem">
+        <div class="grid-2">
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-percentage"></i> Representatividade MailX</div>
@@ -1454,7 +1481,7 @@
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
                 </div>
                 <div class="card-body">
-                    <div class="kpi-grid compact" id="smsRevenueKpis">
+                    <div class="kpi-grid" id="smsRevenueKpis">
                         <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                     </div>
                 </div>
@@ -1491,7 +1518,7 @@
                         <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
                     </div>
                     <div class="card-body">
-                        <div class="kpi-grid compact" id="smsContactKpis">
+                        <div class="kpi-grid" id="smsContactKpis">
                             <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                         </div>
                     </div>
@@ -1501,7 +1528,7 @@
                         <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
                     </div>
                     <div class="card-body">
-                        <div class="kpi-grid compact" id="smsSendKpis">
+                        <div class="kpi-grid" id="smsSendKpis">
                             <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                         </div>
                     </div>
