@@ -286,7 +286,9 @@
             border-radius: var(--radius);
             padding: 1.25rem 1.25rem 1rem;
             position: relative;
-            overflow: hidden;
+            /* overflow:hidden cortava o tooltip (.kpi-tip::after) sempre que ele ultrapassava a
+               borda do card — mesmo bug já corrigido em client-detail.html. A barra decorativa
+               (::before) já é flush com a borda (top:0/left:0/right:0), não precisa de clip. */
             transition: all 0.3s ease;
         }
 
@@ -300,6 +302,9 @@
             background: linear-gradient(90deg, var(--accent), var(--accent-light));
             opacity: 0;
             transition: opacity 0.3s;
+            /* Cantos arredondados combinando com o card, já que o overflow:hidden do pai foi
+               removido (cortava o tooltip). */
+            border-radius: var(--radius) var(--radius) 0 0;
         }
 
         .kpi-card:hover {
