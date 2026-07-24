@@ -1914,13 +1914,6 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
     return;
   }
 
-  // Janela larga mas SEGURA: queremos descobrir todos os links já usados, não os do período.
-  // Fim fica abaixo de 2038 (limite de timestamp 32-bit — ano 2100 fazia o backend da SlickText
-  // devolver vazio SEM erro, foi a causa do primeiro "0 vinculados" em produção).
-  const todayRow = await queryOne<{ tomorrow: string }>(`SELECT (CURRENT_DATE + 1)::text as tomorrow`);
-  const start = '2015-01-01 00:00:00';
-  const end = `${todayRow?.tomorrow || '2037-12-31'} 23:59:59`;
-
   type Found = { workflowId: number; nodeId: number | null; accountId: number | null; accountLabel: string; workflowName?: string };
   const byUtm = new Map<string, Found[]>();
   const errors: string[] = [];
@@ -1939,11 +1932,16 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
     // Sequencial por conta — respeita o rate limit de 8 req/s da SlickText.
     for (const wf of workflows) {
       try {
-        const analytics = await st.getWorkflowAnalytics(wf.workflow_id, start, end);
-        const links = analytics?.links || {};
+        // GET /links?_source_id — confirmado via probe em produção (o analytics com
+        // _workflow_id na query NÃO devolve links via token; ver getWorkflowAnalytics).
+        let links: any[] = await st.getLinks({ source: 'Workflow', _source_id: wf.workflow_id });
+        if (!Array.isArray(links) || links.length === 0) {
+          // Fallback: resumo vitalício do workflow, que também carrega os links.
+          const byId = await st.getWorkflowAnalyticsById(wf.workflow_id).catch(() => null);
+          links = byId?.links ? Object.values(byId.links) : [];
+        }
         let linksComUtm = 0;
-        for (const linkId of Object.keys(links)) {
-          const link = links[linkId];
+        for (const link of links) {
           const utm = extractUtmCampaignFromUrl(link?.url);
           if (!utm) continue;
           linksComUtm++;
@@ -1953,9 +1951,9 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
           list.push(entry);
           byUtm.set(utm, list);
         }
-        scanned.push({ workflow: wf.name, account: acc.label, links: Object.keys(links).length, linksComUtm });
+        scanned.push({ workflow: wf.name, account: acc.label, links: links.length, linksComUtm });
       } catch (err: any) {
-        errors.push(`analytics ${wf.name} (${acc.label}): ${err.message}`);
+        errors.push(`links ${wf.name} (${acc.label}): ${err.message}`);
       }
     }
   }
@@ -1994,62 +1992,6 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
 
   logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados, ${scanned.length} workflows varridos (${errors.length} erros)`);
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
-}));
-
-// GET /admin/clientes/:id/sms-debug/links-probe - DIAGNÓSTICO TEMPORÁRIO: em produção, o painel da
-// SlickText devolve a seção `links` no analytics de workflow, mas a MESMA chamada via token de API
-// veio com 0 links em todos os workflows. Esse probe testa as variantes plausíveis de uma vez
-// (range igual ao do painel, range largo, endpoint /links direto, node analytics conhecido) pra
-// descobrir qual funciona com token. Query: ?brand=30571&workflow_id=9361&node_id=92762.
-// Remover depois de confirmado.
-adminRouter.get('/clientes/:id/sms-debug/links-probe', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const brand = req.query.brand as string | undefined;
-  const workflowId = parseInt((req.query.workflow_id as string) || '0', 10);
-  const nodeId = parseInt((req.query.node_id as string) || '0', 10);
-
-  const accounts = await getSlickTextAccounts(clientId);
-  const account = brand ? accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts[0];
-  if (!account) {
-    res.status(400).json({ error: 'Conta não encontrada pra esse brand.', brands: accounts.map(a => a.st_brand_id) });
-    return;
-  }
-
-  const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
-  const summarize = (data: any) => ({
-    keys: data && typeof data === 'object' ? Object.keys(data) : typeof data,
-    linksCount: data?.links ? Object.keys(data.links).length : 0,
-    sampleLink: data?.links ? Object.values<any>(data.links)[0]?.name?.slice(0, 80) : undefined,
-    dataCount: Array.isArray(data?.data) ? data.data.length : (Array.isArray(data) ? data.length : undefined),
-  });
-
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  const ymd = (d: Date) => d.toISOString().slice(0, 10);
-  const monthRange = { start: `${ymd(monthStart)} 00:00:00`, end: `${ymd(new Date())} 23:59:59` };
-
-  const probes: { name: string; fn: () => Promise<any> }[] = [
-    { name: 'analytics/workflows range-mes-atual', fn: () => st.getWorkflowAnalytics(workflowId, monthRange.start, monthRange.end) },
-    { name: 'analytics/workflows range-2015-hoje', fn: () => st.getWorkflowAnalytics(workflowId, '2015-01-01 00:00:00', `${ymd(new Date())} 23:59:59`) },
-    { name: 'GET /links', fn: async () => (await (st as any).http.get('/links')).data },
-    { name: 'GET /links?source=Workflow&source_id', fn: async () => (await (st as any).http.get('/links', { params: { source: 'Workflow', source_id: workflowId } })).data },
-    { name: 'GET /links?source=Workflow&_source_id', fn: async () => (await (st as any).http.get('/links', { params: { source: 'Workflow', _source_id: workflowId } })).data },
-  ];
-  if (nodeId) {
-    probes.push({ name: 'analytics node range-mes-atual', fn: () => st.getWorkflowNodeAnalytics(workflowId, nodeId, monthRange.start, monthRange.end) });
-  }
-
-  const results: any[] = [];
-  for (const p of probes) {
-    try {
-      const data = await p.fn();
-      results.push({ probe: p.name, ok: true, ...summarize(data) });
-    } catch (err: any) {
-      results.push({ probe: p.name, ok: false, status: err.response?.status, error: err.message });
-    }
-  }
-
-  res.json({ account: account.label, brand: account.st_brand_id, workflowId, results });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
@@ -2164,19 +2106,46 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           nodeName: data?.workflow_node?.name,
         });
       } else {
-        const data = await st.getWorkflowAnalytics(mapping.slicktext_campaign_id, start, end);
-        const t = data?.totals || {};
+        // Workflow inteiro (sem node): o analytics com _workflow_id na query só devolve o
+        // gráfico de entradas (sem messages/clicks — confirmado via probe). Envios do período
+        // vêm de /analytics/messages; cliques somando o analytics de cada node (nodes
+        // descobertos pelos links do resumo vitalício do workflow).
+        const [msgData, byId] = await Promise.all([
+          st.getMessageAnalyticsForSource('Workflow', mapping.slicktext_campaign_id, start, end),
+          st.getWorkflowAnalyticsById(mapping.slicktext_campaign_id).catch(() => null),
+        ]);
+        const count = msgData?.totals?.total ?? 0;
+
+        const nodeIds = [...new Set(
+          Object.values<any>(byId?.links || {})
+            .map(l => l?._sub_source_id)
+            .filter((v): v is number => Number.isInteger(v))
+        )];
+        let clicks: number | null = null;
+        let uniqueClicks: number | null = null;
+        if (nodeIds.length > 0) {
+          const nodeTotals = await Promise.all(nodeIds.map(nid =>
+            st.getWorkflowNodeAnalytics(mapping.slicktext_campaign_id, nid, start, end)
+              .then(d => d?.totals).catch(() => null)
+          ));
+          const valid = nodeTotals.filter(Boolean);
+          if (valid.length > 0) {
+            clicks = valid.reduce((s, t) => s + (t.clicks || 0), 0);
+            uniqueClicks = valid.reduce((s, t) => s + (t.unique_clicks || 0), 0);
+          }
+        }
+
         res.json({
           linked: true,
           sourceType,
           scope: 'workflow',
-          count: t.messages ?? 0,
-          clicks: t.clicks ?? 0,
-          uniqueClicks: t.unique_clicks ?? 0,
-          clicksFieldFound: true,
+          count,
+          clicks,
+          uniqueClicks,
+          clicksFieldFound: clicks !== null,
           capped: false,
           pages: 1,
-          workflowName: data?.workflow?.name,
+          workflowName: byId?.workflow?.name,
         });
       }
     } else {

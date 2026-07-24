@@ -377,19 +377,51 @@ export class SlickTextClient {
   }
 
   /**
-   * Analytics de um workflow inteiro, filtrado por período — CONFIRMADO contra a API
-   * real (capturado da própria tela de Analytics da SlickText, inspecionando o
-   * Network do navegador). Devolve totals (entrances/messages/clicks/unsubscribes do
-   * workflow inteiro no período) e `links` (cliques por link, cada um com
-   * `_sub_source_id` = o workflow_node_id da mensagem que contém aquele link, e a
-   * `url` já traz o utm_campaign da gente — dá pra casar cliques por mensagem sem
-   * nenhum vínculo manual, quando a mensagem tem link).
-   *
-   * start/end no formato "YYYY-MM-DD HH:mm:ss".
+   * Série temporal de ENTRADAS de um workflow no período (gráfico "Workflow Entrances").
+   * ATENÇÃO: apesar do nome do path, esse endpoint com `_workflow_id` na query devolve SÓ
+   * {totals:{total,average},groups:[...]} — nada de messages/clicks/links (confirmado via
+   * probe em produção com token; a resposta rica fica em getWorkflowAnalyticsById).
    */
   async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
     const res = await this.http.get('/analytics/workflows', {
       params: { _workflow_id: workflowId, start, end, compare: '', frequency: '', timezone, noCache: 0 },
+    });
+    return res.data;
+  }
+
+  /**
+   * Resumo VITALÍCIO de um workflow: {totals:{entrances,messages,clicks,...}, workflow,
+   * links} — os `links` trazem a URL completa (com utm_campaign) e o `_sub_source_id`
+   * (workflow_node_id da mensagem que contém o link). Formato confirmado pela captura do
+   * painel; o probe v1 deu 404 só porque testamos o workflow na conta errada.
+   * Não aceita filtro de período — pra números por período use os endpoints de node ou
+   * getMessageAnalyticsForSource.
+   */
+  async getWorkflowAnalyticsById(workflowId: number): Promise<any> {
+    const res = await this.http.get(`/analytics/workflows/${workflowId}`);
+    return res.data;
+  }
+
+  /**
+   * Lista os LINKS rastreados da marca — cada item tem url (com utm_campaign), source
+   * ('Workflow'/'Campaign'), _source_id e _sub_source_id (node da mensagem). Filtro por
+   * `_source_id` CONFIRMADO via probe em produção (voltou exatamente os links do
+   * workflow). Retorna {data:[...], pagingData}.
+   */
+  async getLinks(params: { source?: string; _source_id?: number } = {}): Promise<any[]> {
+    const res = await this.http.get('/links', { params });
+    return res.data?.data || res.data || [];
+  }
+
+  /**
+   * Total de mensagens enviadas de um source (Workflow/Campaign) no PERÍODO — endpoint do
+   * gráfico "Messages Sent" do painel, confirmado por captura: devolve
+   * {totals:{total,average},groups:[{name:'Messages',period:{...}}]}.
+   * start/end "YYYY-MM-DD HH:mm:ss".
+   */
+  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+    const res = await this.http.get('/analytics/messages', {
+      params: { source, _source_id: sourceId, attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
     return res.data;
   }
