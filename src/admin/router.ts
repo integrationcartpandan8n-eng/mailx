@@ -2016,6 +2016,59 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/links-dump - DIAGNÓSTICO TEMPORÁRIO: vendas chegam com utm
+// ...NeuromindProN8N mas o auto-vínculo (que varre GET /links?source=Workflow) não acha nenhum
+// link com esse utm. Esse dump pagina TODOS os links da(s) conta(s) — sem filtro de source — e
+// devolve os que casam com ?q= (busca no utm e na URL), com o registro completo (source,
+// _source_id, _sub_source_id, name) pra descobrir onde o link mora. Remover após o diagnóstico.
+adminRouter.get('/clientes/:id/sms-debug/links-dump', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const q = ((req.query.q as string) || '').toLowerCase();
+  const brand = req.query.brand as string | undefined;
+
+  const accounts = await getSlickTextAccounts(clientId);
+  const targets = brand ? accounts.filter(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts;
+  if (targets.length === 0) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
+
+  const out: any[] = [];
+  for (const acc of targets) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const http = (st as any).http;
+    let offset = 0;
+    let total = 0;
+    for (let page = 0; page < 40; page++) {
+      const resp = await http.get('/links', { params: { offset, limit: 100 } });
+      const items: any[] = Array.isArray(resp.data) ? resp.data : (resp.data?.data ?? []);
+      if (items.length === 0) break;
+      total += items.length;
+      for (const l of items) {
+        const utm = extractUtmCampaignFromUrl(l?.url) || '';
+        const hay = `${utm} ${l?.url || ''} ${l?.name || ''}`.toLowerCase();
+        if (!q || hay.includes(q)) {
+          out.push({
+            account: acc.label,
+            link_id: l?.link_id,
+            name: l?.name,
+            utm,
+            source: l?.source,
+            _source_id: l?._source_id,
+            sub_source: l?.sub_source,
+            _sub_source_id: l?._sub_source_id,
+            active: l?.active,
+            created: l?.created,
+            url: (l?.url || '').slice(0, 160),
+          });
+        }
+      }
+      if (items.length < 100) break;
+      offset += 100;
+    }
+    out.push({ account: acc.label, _scanTotal: total });
+  }
+
+  res.json({ q, matches: out });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
