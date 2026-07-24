@@ -880,6 +880,33 @@
         .kpi-card .kpi-icon.red { color: var(--danger); }
         .kpi-card .kpi-icon.orange { color: var(--warning); }
 
+        /* Variante compacta dos KPIs (aba SMS): ícone à esquerda, valor+label empilhados à
+           direita — corta ~metade da altura da faixa e deixa a página menos vertical. */
+        .kpi-grid.compact { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 0.5rem; }
+        .kpi-grid.compact .kpi-card {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            column-gap: 0.65rem;
+            align-items: center;
+            text-align: left;
+            padding: 0.6rem 0.8rem;
+        }
+        .kpi-grid.compact .kpi-card .kpi-icon { grid-row: 1 / span 2; margin: 0; font-size: 0.95rem; }
+        .kpi-grid.compact .kpi-card .kpi-value { font-size: 1.05rem; line-height: 1.25; }
+        .kpi-grid.compact .kpi-card .kpi-label { margin-top: 0.05rem; font-size: 0.6rem; }
+
+        /* Dados de conta (vitalícios) lado a lado em telas largas — não competem em altura
+           com as métricas de período. */
+        .sms-account-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+        .sms-account-grid .card { margin-bottom: 0; }
+        @media (min-width: 1000px) { .sms-account-grid { grid-template-columns: 1fr 1fr; } }
+
+        /* Card colapsável (Listas por Produto) */
+        .card-header.collapsible { cursor: pointer; user-select: none; }
+        .card-header.collapsible:hover { background: var(--surface-2); }
+        .card-header.collapsible .chevron { transition: transform 0.2s; color: var(--text-dim); font-size: 0.75rem; }
+        .card-header.collapsible.open .chevron { transform: rotate(180deg); }
+
         /* Tooltip de explicação nos KPIs — ícone (ⓘ) ao lado do label */
         .kpi-tip {
             display: inline-block;
@@ -1427,7 +1454,7 @@
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
                 </div>
                 <div class="card-body">
-                    <div class="kpi-grid" id="smsRevenueKpis">
+                    <div class="kpi-grid compact" id="smsRevenueKpis">
                         <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                     </div>
                 </div>
@@ -1458,31 +1485,34 @@
                 </div>
             </div>
 
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS</div>
+            <div class="sms-account-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
+                    </div>
+                    <div class="card-body">
+                        <div class="kpi-grid compact" id="smsContactKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <div class="kpi-grid" id="smsContactKpis">
-                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
+                    </div>
+                    <div class="card-body">
+                        <div class="kpi-grid compact" id="smsSendKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="card">
-                <div class="card-header">
-                    <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos</div>
-                </div>
-                <div class="card-body">
-                    <div class="kpi-grid" id="smsSendKpis">
-                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
-                    </div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="card-header">
+                <div class="card-header collapsible" id="smsListsHeader" onclick="toggleSmsListsCard()">
                     <div class="card-title"><i class="fas fa-list"></i> Listas por Produto</div>
+                    <i class="fas fa-chevron-down chevron"></i>
                 </div>
-                <div class="card-body" style="padding:0">
+                <div class="card-body" id="smsListsCardBody" style="padding:0; display:none">
                     <table class="kit-table" id="smsListsTable">
                         <thead>
                             <tr>
@@ -3415,6 +3445,15 @@
             }
             const cell2 = document.getElementById(utmToDomId(utmCampaign));
             if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign, vendas);
+        }
+
+        // "Listas por Produto" colapsável — consulta ocasional, não precisa ocupar a página.
+        function toggleSmsListsCard() {
+            const body = document.getElementById('smsListsCardBody');
+            const header = document.getElementById('smsListsHeader');
+            const open = body.style.display === 'none';
+            body.style.display = open ? '' : 'none';
+            header.classList.toggle('open', open);
         }
 
         // FILA SEQUENCIAL pros recarregamentos em massa (troca de período, auto-vínculo):
