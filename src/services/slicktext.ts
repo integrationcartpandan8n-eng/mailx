@@ -44,6 +44,17 @@ export class SlickTextClient {
         Accept: 'application/json',
       },
       timeout: 20000,
+      // encodeURIComponent estrito: o serializer default do axios manda espaço como "+"
+      // (start=2026-07-24+00:00:00), e o backend da SlickText descarta a data SILENCIOSAMENTE
+      // e devolve totais vitalícios — confirmado em produção ("Hoje" retornava o total de
+      // sempre). O painel deles manda %20/%3A (start=2026-07-24%2000%3A00%3A00); replicamos.
+      paramsSerializer: {
+        serialize: (params: Record<string, any>) =>
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined && v !== null)
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+            .join('&'),
+      },
     });
 
     // Rate limit: 8 req/s for V2 — retry on 429
