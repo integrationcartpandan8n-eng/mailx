@@ -1635,6 +1635,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       faturamento_recuperacoes_email: fmtBRL(parseFloat(emailMailxRecoveries?.revenue || '0')),
       vendas_upsell_email: parseInt(emailMailxUpsell?.count || '0'),
       faturamento_upsell_email: fmtBRL(parseFloat(emailMailxUpsell?.revenue || '0')),
+      // Representatividade do canal EMAIL dentro do faturamento total do cliente (mesmo período)
+      // — espelha representatividade_sms (sms-stats), seção 3.2 da spec aplicada por canal.
+      faturamento_total_cliente: fmtBRL(totalRevenue),
+      vendas_total_cliente: totalSales,
+      representatividade_email: totalRevenue > 0
+        ? parseFloat(((parseFloat(emailMailxData?.revenue || '0') / totalRevenue) * 100).toFixed(1))
+        : 0,
     },
     top_products: topProducts.map(p => ({
       name: p.name,
@@ -2633,12 +2640,26 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         ${smsUpsellPeriod ? `AND ${smsUpsellPeriod}` : ''}
     `, smsUpsellParams);
 
+    // Faturamento/vendas TOTAIS do cliente no mesmo per\u00EDodo (todos os canais) \u2014 pr\u00E9-requisito da
+    // spec pra Representatividade por canal (se\u00E7\u00E3o 3.2/3.1.2): sem isso a aba SMS s\u00F3 mostrava o
+    // lado "gerado pela MailX", sem o "faturamento aprovado do cliente" pra comparar.
+    const totalParams: (string | number)[] = [clientId];
+    const totalPeriodSql = periodSql(period, totalParams);
+    const clientTotal = await queryOne<{ count: string; revenue: string }>(`
+      SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
+        ${totalPeriodSql ? `AND ${totalPeriodSql}` : ''}
+    `, totalParams);
+
     const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const smsRevenue = parseFloat(smsSales?.revenue || '0');
     const smsRecRevenue = parseFloat(smsRecoveries?.revenue || '0');
     const smsVendas = parseInt(smsSales?.count || '0');
     const smsTicketMedio = smsVendas > 0 ? smsRevenue / smsVendas : 0;
     const smsUpsellRevenue = parseFloat(smsUpsell?.revenue || '0');
+    const clientTotalRevenue = parseFloat(clientTotal?.revenue || '0');
+    const clientTotalVendas = parseInt(clientTotal?.count || '0');
 
     res.json({
       configured: true,
@@ -2657,6 +2678,13 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         faturamento_recuperacoes_sms: fmtBRL(smsRecRevenue),
         vendas_upsell_sms: parseInt(smsUpsell?.count || '0'),
         faturamento_upsell_sms: fmtBRL(smsUpsellRevenue),
+        // Faturamento/vendas do CLIENTE (todos os canais, mesmo período) + representatividade
+        // do SMS dentro disso — seção 3.1.2/3.2 da spec original.
+        faturamento_total_cliente: fmtBRL(clientTotalRevenue),
+        vendas_total_cliente: clientTotalVendas,
+        representatividade_sms: clientTotalRevenue > 0
+          ? parseFloat(((smsRevenue / clientTotalRevenue) * 100).toFixed(1))
+          : 0,
       },
       contacts: {
         total: totalCompra + totalAbandono,
