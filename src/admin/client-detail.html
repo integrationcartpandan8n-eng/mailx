@@ -3417,6 +3417,21 @@
             if (cell2) cell2.outerHTML = renderEnviosCell(utmCampaign, vendas);
         }
 
+        // FILA SEQUENCIAL pros recarregamentos em massa (troca de período, auto-vínculo):
+        // cada contagem agora faz dezenas de sondas na SlickText e demora segundos — disparar
+        // todas de uma vez esgota as ~6 conexões do navegador e TRAVA o resto do dashboard
+        // (o botão "Hoje" ficava preso esperando o /server-today entrar na fila). Uma por vez:
+        // as linhas vão preenchendo progressivamente e o resto da página continua fluido.
+        window.__enviosQueue = Promise.resolve();
+        function queueEnviosLoad(utmCampaign, vendas) {
+            const periodAtEnqueue = JSON.stringify(window.__lastPeriodLoad || {});
+            window.__enviosQueue = window.__enviosQueue.then(() => {
+                // Período mudou enquanto esperava na fila? Pula — o novo ciclo re-enfileira.
+                if (JSON.stringify(window.__lastPeriodLoad || {}) !== periodAtEnqueue) return;
+                return loadSmsCampaignSends(utmCampaign, vendas);
+            }).catch(() => {});
+        }
+
         window.__linkCampaignTarget = null;
         window.__smsCampaignsCache = null; // {campaigns, workflows} da SlickText, buscado 1x por sessão de página
 
@@ -3542,7 +3557,7 @@
                 renderSmsGranular();
                 matchedVisible.forEach(l => {
                     const row = rows.find(r => r.utm_campaign === l.utm_campaign);
-                    loadSmsCampaignSends(l.utm_campaign, row?.vendas || 0);
+                    queueEnviosLoad(l.utm_campaign, row?.vendas || 0);
                 });
 
                 const scanned = data.scanned || [];
@@ -3704,16 +3719,19 @@
             renderCreditosAutomacao();
 
             const rows = data.rows.filter(r => (isUpsellTipo(r.tipo_automacao) ? 'upsell' : 'abandono') === key);
-            const results = await Promise.all(rows.map(async (r) => {
+            // Sequencial de propósito — cada consulta faz dezenas de sondas na SlickText;
+            // em paralelo esgotaria as conexões do navegador e travaria o resto da página.
+            const results = [];
+            for (const r of rows) {
                 try {
                     const params = smsCampaignSendsPeriodParams();
                     params.set('utm_campaign', r.utm_campaign);
                     const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-sends?${params}`);
-                    return await res.json();
+                    results.push(await res.json());
                 } catch (e) {
-                    return { linked: false, count: null };
+                    results.push({ linked: false, count: null });
                 }
-            }));
+            }
 
             // Envios POR MENSAGEM são vitalícios (limitação da API — ver renderEnviosCell), mas o
             // total do WORKFLOW no período existe (workflowPeriodCount). Como várias mensagens
@@ -3957,7 +3975,7 @@
 
                 data.rows
                     .filter(r => previouslyLoaded.includes(r.utm_campaign))
-                    .forEach(r => loadSmsCampaignSends(r.utm_campaign, r.vendas || 0));
+                    .forEach(r => queueEnviosLoad(r.utm_campaign, r.vendas || 0));
             } catch (e) {
                 reportDataLoadError('desempenho por mensagem SMS', e);
                 loading.style.display = 'none';

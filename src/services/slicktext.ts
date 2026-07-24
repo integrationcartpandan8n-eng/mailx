@@ -354,7 +354,7 @@ export class SlickTextClient {
     nodeId: number,
     startYmd: string,
     endYmd: string,
-    opts: { creditsScanLimit?: number } = {}
+    opts: { creditsScanLimit?: number; approxTotal?: number } = {}
   ): Promise<{ count: number; credits: number | null; capped: boolean; pages: number }> {
     const creditsScanLimit = opts.creditsScanLimit ?? 500;
     const startKey = `${startYmd} 00:00:00`;
@@ -368,16 +368,23 @@ export class SlickTextClient {
       return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     };
 
-    // Galope pra achar N (total de mensagens do node): dobra o offset até vir vazio.
     const first = await fetchAt(0);
     if (first.length === 0) return { count: 0, credits: 0, capped: false, pages: requests };
-    let hi = 1024;
-    while ((await fetchAt(hi)).length > 0) {
-      hi *= 2;
-      if (hi > 1_000_000) break; // trava de segurança
+
+    // Teto pra busca binária: se o chamador já sabe o total vitalício do node (via node
+    // analytics), usa com margem — poupa o galope (~6-10 requests por contagem). Senão,
+    // galope dobrando o offset até vir vazio.
+    let total: number;
+    if (opts.approxTotal && opts.approxTotal > 0) {
+      total = Math.ceil(opts.approxTotal * 1.2) + 200; // margem: mensagens continuam chegando
+    } else {
+      let hi = 1024;
+      while ((await fetchAt(hi)).length > 0) {
+        hi *= 2;
+        if (hi > 1_000_000) break; // trava de segurança
+      }
+      total = hi;
     }
-    // N está em (hi/2, hi] — o lowerBound abaixo já resolve com esse teto.
-    const total = hi;
 
     // Primeiro offset cujo item satisfaz pred(created); itens além do fim contam como "satisfaz"
     // (created vazio = fim da lista). Ordem crescente confirmada — verificada de leve no galope.
