@@ -225,6 +225,13 @@ export async function initDatabase(): Promise<void> {
         -- NULL = conta principal (clients.st_api_token/st_brand_id); referencia
         -- client_slicktext_accounts.id quando o vínculo é de uma conta adicional.
         ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS st_account_id INTEGER REFERENCES client_slicktext_accounts(id) ON DELETE SET NULL;
+
+        -- Diagnóstico N8N (dump real em produção): mensagens de listas alimentadas pelo n8n
+        -- usam links criados MANUALMENTE no encurtador da SlickText (source='manual', sem
+        -- workflow nem node associado). Pra vincular essas utms, slicktext_campaign_id passa
+        -- a aceitar NULL — source_type='ManualLink' não tem workflow/campaign; os cliques
+        -- saem por link (_link_id) e envios por mensagem não existem via API.
+        ALTER TABLE sms_campaign_map ALTER COLUMN slicktext_campaign_id DROP NOT NULL;
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
