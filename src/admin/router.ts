@@ -2060,6 +2060,59 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/link-clicks-probe - DIAGNÓSTICO TEMPORÁRIO: o painel da
+// SlickText mostra cliques nos links manuais (N8N), mas nossa consulta com _link_id volta 0 —
+// a API ignora parâmetro desconhecido em silêncio (mesmo padrão do bug das datas). Testa
+// vários formatos de filtro de uma vez pra descobrir o que /analytics/links/clicks aceita
+// pra link avulso. ?link=<link_id> (default 195041) &brand= &start= &end=. Remover após.
+adminRouter.get('/clientes/:id/sms-debug/link-clicks-probe', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const linkId = parseInt((req.query.link as string) || '195041');
+  const brand = (req.query.brand as string) || '27972';
+  const start = (req.query.start as string) || '2026-07-01 00:00:00';
+  const end = (req.query.end as string) || '2026-07-24 23:59:59';
+
+  const accounts = await getSlickTextAccounts(clientId);
+  const acc = accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, ''));
+  if (!acc) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
+  const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+  const http = (st as any).http;
+
+  const common = { start, end, compare: '', frequency: '', timezone: 'UTC', noCache: 0 };
+  const variants: { name: string; path: string; params: any }[] = [
+    { name: 'A_link_id_group', path: '/analytics/links/clicks', params: { _link_id: linkId, group: '_link_id', ...common } },
+    { name: 'B_link_source_manual', path: '/analytics/links/clicks', params: { link_source: 'manual', group: '_link_id', ...common } },
+    { name: 'C_manual_com_source_id', path: '/analytics/links/clicks', params: { link_source: 'manual', _link_source_id: linkId, group: '_link_id', ...common } },
+    { name: 'D_link_id_sem_group', path: '/analytics/links/clicks', params: { _link_id: linkId, ...common } },
+    { name: 'E_sem_filtro_group', path: '/analytics/links/clicks', params: { group: '_link_id', ...common } },
+    { name: 'F_link_detail', path: `/links/${linkId}`, params: {} },
+  ];
+
+  const out: any[] = [];
+  for (const v of variants) {
+    try {
+      const resp = await http.get(v.path, { params: v.params });
+      const d = resp.data;
+      const groups: any[] = Array.isArray(d?.groups) ? d.groups : [];
+      out.push({
+        variant: v.name,
+        totals: d?.totals ?? null,
+        groupsCount: groups.length,
+        // Groups que parecem os links N8N (ou os 5 primeiros, pra ver o formato dos nomes/chaves)
+        sampleGroups: (groups.filter((g: any) => /n8n/i.test(String(g?.name || ''))).slice(0, 5).length
+          ? groups.filter((g: any) => /n8n/i.test(String(g?.name || ''))).slice(0, 5)
+          : groups.slice(0, 5)
+        ).map((g: any) => ({ name: g?.name, total: g?.total })),
+        raw: groups.length === 0 && !d?.totals ? JSON.stringify(d).slice(0, 400) : undefined,
+      });
+    } catch (err: any) {
+      out.push({ variant: v.name, erro: err.message, body: JSON.stringify(err?.response?.data ?? null).slice(0, 300) });
+    }
+  }
+
+  res.json({ linkId, brand, start, end, results: out });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
