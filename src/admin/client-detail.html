@@ -3345,29 +3345,40 @@
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
             }
-            // Eficiência por mensagem (doc 3.3): quantos envios/cliques pra gerar 1 venda.
-            const ratio = vendas > 0 ? Math.round(cached.count / vendas) : null;
+            const sourceName = cached.nodeName || cached.workflowName || '';
+
+            // Realidade da API da SlickText (confirmada por probes): envios/cliques POR MENSAGEM
+            // só existem como total VITALÍCIO — não dá pra filtrar por data. Mostrar isso
+            // estampado, sem razões contra as vendas do período (misturaria janelas diferentes).
+            if (cached.lifetime) {
+                const clicksPart = typeof cached.clicks === 'number' ? ` · ${cached.clicks.toLocaleString('pt-BR')} cliques` : '';
+                const title = `SlickText: ${sourceName.replace(/"/g, '&quot;')} — totais desde a criação da mensagem. A API da SlickText não fornece envios/cliques POR MENSAGEM filtrados por data (nem o painel deles mostra isso); o total do fluxo no período aparece em Créditos por Automação.`;
+                return `<div class="rank-envios" id="${id}" title="${title}">
+                    <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${clicksPart}<small class="envios-clicks-muted">vitalício, não filtra por período</small></span>
+                </div>`;
+            }
+
+            // Escopo de workflow inteiro: count É do período (via /analytics/messages) — razão
+            // envios/venda honesta. Cliques do workflow só existem vitalícios; rotular.
+            const ratio = vendas > 0 && cached.count > 0 ? Math.round(cached.count / vendas) : null;
             const ratioHtml = ratio != null
                 ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
-                : `<small>envios${cached.capped ? ' (parcial)' : ''}</small>`;
+                : `<small>envios no período${cached.capped ? ' (parcial)' : ''}</small>`;
 
             let clicksHtml = '';
             if (cached.clicksFieldFound === false) {
-                clicksHtml = `<small class="envios-clicks-muted" title="A SlickText não retornou nenhum campo de clique reconhecido nessa consulta — validar com o Nicollas.">cliques indisponíveis</small>`;
+                clicksHtml = `<small class="envios-clicks-muted" title="A SlickText não retornou os cliques nessa consulta.">cliques indisponíveis</small>`;
             } else if (typeof cached.clicks === 'number') {
-                const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
-                clicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+                clicksHtml = `<small class="envios-clicks-muted">${cached.clicks.toLocaleString('pt-BR')} cliques${cached.clicksLifetime ? ' (vitalício)' : ''}</small>`;
             }
 
-            // Estampado: quando o vínculo é do WORKFLOW inteiro (sem node_id específico), o
-            // número pode estar somando mais de uma mensagem — não é um dado "errado", mas não
-            // pode ser lido como exclusivo dessa linha sem checar se o workflow tem só 1 mensagem.
+            // Estampado: vínculo do WORKFLOW inteiro (sem node) — o número soma todas as
+            // mensagens do fluxo, não só a desta linha.
             const scopeWarningHtml = cached.scope === 'workflow'
-                ? `<i class="fas fa-triangle-exclamation envios-scope-warning" title="Vinculado ao workflow inteiro (${cached.workflowName ? escapeHtml(cached.workflowName) : 'sem nome'}) — se esse workflow tiver mais de uma mensagem, esse número pode somar todas juntas. Vincule pelo ID da mensagem específica pra separar." style="color:var(--warning); margin-left:0.3rem; cursor:help; font-size:0.7rem"></i>`
+                ? `<i class="fas fa-triangle-exclamation envios-scope-warning" title="Vinculado ao workflow inteiro (${cached.workflowName ? escapeHtml(cached.workflowName) : 'sem nome'}) — envios do fluxo TODO no período, pode somar mais de uma mensagem." style="color:var(--warning); margin-left:0.3rem; cursor:help; font-size:0.7rem"></i>`
                 : '';
 
-            const sourceName = cached.nodeName || cached.workflowName || '';
-            const countTitle = sourceName ? `SlickText: ${sourceName.replace(/"/g, '&quot;')} — no período selecionado` : 'Envios no período selecionado';
+            const countTitle = sourceName ? `SlickText: ${sourceName.replace(/"/g, '&quot;')} — envios no período selecionado` : 'Envios no período selecionado';
             return `<div class="rank-envios" id="${id}" title="${countTitle}">
                 <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${scopeWarningHtml}${ratioHtml}${clicksHtml}</span>
             </div>`;
@@ -3662,10 +3673,13 @@
                 if (cached === 'loading') {
                     return `<div class="creditos-auto-card"><div class="n">...</div><div class="l">${label}</div><div class="d">calculando</div></div>`;
                 }
+                const periodoLabel = cached.isPeriod
+                    ? `no período · ${cached.workflows} fluxo${cached.workflows === 1 ? '' : 's'}`
+                    : 'total vitalício (API não filtra por data)';
                 return `<div class="creditos-auto-card">
                     <div class="n">${cached.total.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
                     <div class="l">${label}</div>
-                    <div class="d">≈ créditos · ${cached.linkedCount}/${rows.length} mensagens vinculadas</div>
+                    <div class="d">≈ créditos ${periodoLabel} · ${cached.linkedCount}/${rows.length} mensagens vinculadas</div>
                 </div>`;
             };
 
@@ -3700,11 +3714,29 @@
                 }
             }));
 
-            const total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+            // Envios POR MENSAGEM são vitalícios (limitação da API — ver renderEnviosCell), mas o
+            // total do WORKFLOW no período existe (workflowPeriodCount). Como várias mensagens
+            // compartilham o mesmo workflow, soma DEDUPLICADO por workflow — esse é o número de
+            // envios/créditos do período de verdade. Fallback: se nenhum workflowPeriodCount veio
+            // (ex: vínculos por Campaign), soma os counts como antes e rotula como vitalício.
+            const byWorkflow = new Map();
+            results.forEach(r => {
+                if (r && r.workflowId != null && typeof r.workflowPeriodCount === 'number') {
+                    byWorkflow.set(`${r.workflowId}`, r.workflowPeriodCount);
+                }
+            });
             const linkedCount = results.filter(r => r.linked && r.count != null).length;
             const anyCapped = results.some(r => r.capped);
+            let total, isPeriod;
+            if (byWorkflow.size > 0) {
+                total = [...byWorkflow.values()].reduce((a, b) => a + b, 0);
+                isPeriod = true;
+            } else {
+                total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+                isPeriod = false;
+            }
 
-            window.__creditosAutomacaoCache[key] = { total, linkedCount, anyCapped };
+            window.__creditosAutomacaoCache[key] = { total, linkedCount, anyCapped, isPeriod, workflows: byWorkflow.size };
             renderCreditosAutomacao();
         }
 
