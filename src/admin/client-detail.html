@@ -116,7 +116,11 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             margin-bottom: 1.25rem;
-            overflow: hidden;
+            /* overflow:hidden cortava os tooltips .kpi-tip (KPIs e envios da tabela granular)
+               sempre que estouravam a borda do card — o próprio border-radius do card já
+               arredonda seu fundo/borda sem precisar de clip; o único efeito colateral é a
+               linha de hover da tabela (fundo full-width) poder aparecer com canto reto na
+               primeira/última linha, cosmético e raro. */
         }
 
         .card-header {
@@ -874,7 +878,9 @@
             align-items: flex-start;
             text-align: left;
             position: relative;
-            overflow: hidden;
+            /* overflow:hidden cortava o tooltip (.kpi-tip::after) sempre que ele ultrapassava a
+               borda do card — a barra decorativa (::before) já é flush com a borda (top:0/left:0/
+               right:0), não precisa de clip. */
             transition: all 0.3s ease;
         }
         .kpi-card::before {
@@ -885,6 +891,9 @@
             background: linear-gradient(90deg, var(--accent), var(--accent-light));
             opacity: 0;
             transition: opacity 0.3s;
+            /* Cantos arredondados combinando com o card, já que o overflow:hidden do pai foi
+               removido (cortava o tooltip .kpi-tip) e essa barra ficaria com cantos retos. */
+            border-radius: var(--radius) var(--radius) 0 0;
         }
         .kpi-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
         .kpi-card:hover::before { opacity: 1; }
