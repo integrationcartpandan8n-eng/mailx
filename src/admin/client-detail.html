@@ -278,7 +278,7 @@
         /* Créditos por Automação */
         .creditos-auto-wrap { padding: 1rem 1.25rem 1.25rem; border-top: 1px solid var(--border); }
         .creditos-auto-title { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
-        .creditos-auto-sub { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.85rem; }
+        .creditos-auto-sub { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.85rem; }
         .creditos-auto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
         .creditos-auto-card {
             background: var(--surface-2);
@@ -287,9 +287,9 @@
             padding: 0.85rem;
             text-align: center;
         }
-        .creditos-auto-card .n { font-size: 1.35rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
-        .creditos-auto-card .l { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 0.25rem; }
-        .creditos-auto-card .d { font-size: 0.68rem; color: var(--text-dim); margin-top: 0.4rem; }
+        .creditos-auto-card .n { font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
+        .creditos-auto-card .l { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-top: 0.25rem; }
+        .creditos-auto-card .d { font-size: 0.78rem; color: var(--text-dim); margin-top: 0.4rem; }
         .creditos-auto-card .calc-btn {
             margin-top: 0.6rem;
             background: var(--accent-subtle);
@@ -402,18 +402,18 @@
 
         .rank-row {
             display: grid;
-            grid-template-columns: 1fr 130px 90px 130px 150px;
+            grid-template-columns: 1fr 180px 110px 150px 170px;
             gap: 1rem;
             align-items: center;
             padding: 0.75rem 1.25rem;
         }
 
-        .rank-envios { font-size: 0.78rem; color: var(--text-dim); text-align: center; }
+        .rank-envios { font-size: 0.88rem; color: var(--text-dim); text-align: center; }
         .rank-envios .envios-btn {
             background: var(--surface-2);
             border: 1px solid var(--border);
             color: var(--accent-light);
-            font-size: 0.68rem;
+            font-size: 0.75rem;
             font-weight: 600;
             padding: 0.3rem 0.55rem;
             border-radius: var(--radius-sm);
@@ -422,10 +422,10 @@
         }
         .rank-envios .envios-btn:hover { background: var(--surface-3, var(--surface-2)); }
         .rank-envios .envios-count { font-weight: 700; color: var(--text); }
-        .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.65rem; }
-        .rank-envios .envios-muted { color: var(--text-muted); font-size: 0.68rem; }
-        .rank-envios .envios-clicks { display: block; font-weight: 500; color: var(--accent-light); font-size: 0.65rem; margin-top: 0.15rem; }
-        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-muted); font-size: 0.62rem; margin-top: 0.15rem; cursor: help; }
+        .rank-envios .envios-count small { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.75rem; margin-top: 0.1rem; }
+        .rank-envios .envios-muted { color: var(--text-dim); font-size: 0.78rem; }
+        .rank-envios .envios-clicks { display: block; font-weight: 500; color: var(--accent-light); font-size: 0.75rem; margin-top: 0.2rem; }
+        .rank-envios .envios-clicks-muted { display: block; font-weight: 500; color: var(--text-dim); font-size: 0.72rem; margin-top: 0.2rem; cursor: help; }
 
         .rank-row:hover { background: var(--surface-2); }
 
@@ -440,9 +440,9 @@
         .type-icon.abandono { background: var(--accent-subtle); color: var(--accent-light); }
         .type-icon.upsell { background: var(--success-bg); color: var(--success); }
         .msg-identity { min-width: 0; }
-        .msg-human { font-size: 0.85rem; font-weight: 700; color: var(--text); display: flex; align-items: baseline; gap: 0.4rem; }
-        .msg-human .code { font-family: ui-monospace, monospace; font-size: 0.62rem; color: var(--text-muted); font-weight: 500; }
-        .msg-sub { font-size: 0.72rem; color: var(--text-dim); margin-top: 1px; }
+        .msg-human { font-size: 0.95rem; font-weight: 700; color: var(--text); display: flex; align-items: baseline; gap: 0.4rem; }
+        .msg-human .code { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--text-muted); font-weight: 500; }
+        .msg-sub { font-size: 0.82rem; color: var(--text-dim); margin-top: 2px; }
         .msg-sub .prod { color: var(--text-dim); font-weight: 600; }
 
         .rank-pos {
@@ -474,7 +474,7 @@
         }
 
         .rank-type {
-            font-size: 0.66rem;
+            font-size: 0.76rem;
             color: var(--text-dim);
             flex-shrink: 0;
         }
@@ -486,26 +486,26 @@
         }
 
         .rank-sales {
-            font-size: 0.78rem;
+            font-size: 0.9rem;
             color: var(--text-dim);
             text-align: right;
         }
 
         .rank-sales strong { color: var(--text); font-weight: 700; }
 
-        .rank-refund { text-align: right; font-size: 0.72rem; }
+        .rank-refund { text-align: right; font-size: 0.8rem; }
 
         .rank-value { text-align: right; }
 
         .rank-value .rv {
-            font-size: 0.92rem;
+            font-size: 1.05rem;
             font-weight: 800;
             letter-spacing: -0.02em;
             color: var(--text);
         }
 
         .rank-value .rp {
-            font-size: 0.66rem;
+            font-size: 0.78rem;
             color: var(--text-dim);
             margin-top: 1px;
         }
@@ -901,7 +901,7 @@
         }
         .kpi-card .kpi-label {
             order: 2;
-            font-size: 0.68rem;
+            font-size: 0.76rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.06em;
@@ -1515,7 +1515,7 @@
             <div class="sms-account-grid">
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
+                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
                     </div>
                     <div class="card-body">
                         <div class="kpi-grid" id="smsContactKpis">
@@ -1525,7 +1525,7 @@
                 </div>
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.65rem; color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
+                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
                     </div>
                     <div class="card-body">
                         <div class="kpi-grid" id="smsSendKpis">
