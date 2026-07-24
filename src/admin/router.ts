@@ -2078,39 +2078,35 @@ adminRouter.get('/clientes/:id/sms-debug/link-clicks-probe', asyncHandler(async 
   const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
   const http = (st as any).http;
 
+  // v2: /analytics/links/clicks não enxerga links manuais nem filtrado nem sem filtro
+  // (confirmado em produção — groups nunca incluem os N8N, em nenhum período). Os contadores
+  // do painel (All/Unique/Bot) vêm de outro lugar. Candidatos testados de uma vez:
   const common = { start, end, compare: '', frequency: '', timezone: 'UTC', noCache: 0 };
   const variants: { name: string; path: string; params: any }[] = [
-    { name: 'A_link_id_group', path: '/analytics/links/clicks', params: { _link_id: linkId, group: '_link_id', ...common } },
-    { name: 'B_link_source_manual', path: '/analytics/links/clicks', params: { link_source: 'manual', group: '_link_id', ...common } },
-    { name: 'C_manual_com_source_id', path: '/analytics/links/clicks', params: { link_source: 'manual', _link_source_id: linkId, group: '_link_id', ...common } },
-    { name: 'D_link_id_sem_group', path: '/analytics/links/clicks', params: { _link_id: linkId, ...common } },
-    { name: 'E_sem_filtro_group', path: '/analytics/links/clicks', params: { group: '_link_id', ...common } },
-    { name: 'F_link_detail', path: `/links/${linkId}`, params: {} },
+    { name: 'A_link_detail_completo', path: `/links/${linkId}`, params: {} },
+    { name: 'B_link_clicks_sub', path: `/links/${linkId}/clicks`, params: {} },
+    { name: 'C_link_clicks_sub_periodo', path: `/links/${linkId}/clicks`, params: { start, end } },
+    { name: 'D_link_stats_sub', path: `/links/${linkId}/stats`, params: {} },
+    { name: 'E_link_analytics_sub', path: `/links/${linkId}/analytics`, params: {} },
+    { name: 'F_analytics_link_path', path: `/analytics/links/${linkId}`, params: {} },
+    { name: 'G_analytics_links_lista', path: '/analytics/links', params: { _link_id: linkId, ...common } },
+    { name: 'H_clicks_source_Manual', path: '/analytics/links/clicks', params: { link_source: 'Manual Creation', group: '_link_id', ...common } },
+    { name: 'I_links_lista_com_stats', path: '/links', params: { _link_id: linkId } },
+    { name: 'J_clicks_lista_crua', path: '/clicks', params: { _link_id: linkId, offset: 0, limit: 5 } },
   ];
 
   const out: any[] = [];
   for (const v of variants) {
     try {
       const resp = await http.get(v.path, { params: v.params });
-      const d = resp.data;
-      const groups: any[] = Array.isArray(d?.groups) ? d.groups : [];
-      out.push({
-        variant: v.name,
-        totals: d?.totals ?? null,
-        groupsCount: groups.length,
-        // Groups que parecem os links N8N (ou os 5 primeiros, pra ver o formato dos nomes/chaves)
-        sampleGroups: (groups.filter((g: any) => /n8n/i.test(String(g?.name || ''))).slice(0, 5).length
-          ? groups.filter((g: any) => /n8n/i.test(String(g?.name || ''))).slice(0, 5)
-          : groups.slice(0, 5)
-        ).map((g: any) => ({ name: g?.name, total: g?.total })),
-        raw: groups.length === 0 && !d?.totals ? JSON.stringify(d).slice(0, 400) : undefined,
-      });
+      // Resposta CRUA (limitada) — o objetivo é descobrir os NOMES DOS CAMPOS de clique.
+      out.push({ variant: v.name, status: resp.status, raw: JSON.stringify(resp.data).slice(0, 900) });
     } catch (err: any) {
-      out.push({ variant: v.name, erro: err.message, body: JSON.stringify(err?.response?.data ?? null).slice(0, 300) });
+      out.push({ variant: v.name, erro: err.message, body: JSON.stringify(err?.response?.data ?? null).slice(0, 200) });
     }
   }
 
-  res.json({ linkId, brand, start, end, results: out });
+  res.json({ probe: 'v2', linkId, brand, start, end, results: out });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
