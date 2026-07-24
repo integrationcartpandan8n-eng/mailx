@@ -1994,6 +1994,76 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/paging-probe - DIAGNÓSTICO TEMPORÁRIO: page/limit=100 no
+// GET /messages deu 400 em produção (o probe anterior só tinha testado limit=5 na 1ª página).
+// Descobre o mecanismo real: dumpa o pagingData da 1ª página e testa variantes de "página 2"
+// comparando o primeiro _id (variante boa = 200 + _id diferente da página 1).
+// Query: ?brand=30571&workflow_id=9361&node_id=93106 — Remover depois de confirmado.
+adminRouter.get('/clientes/:id/sms-debug/paging-probe', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const brand = req.query.brand as string | undefined;
+  const workflowId = parseInt((req.query.workflow_id as string) || '0', 10);
+  const nodeId = parseInt((req.query.node_id as string) || '0', 10);
+
+  const accounts = await getSlickTextAccounts(clientId);
+  const account = brand ? accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts[0];
+  if (!account) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
+  const http = (new SlickTextClient(account.st_api_token, account.st_brand_id) as any).http;
+  const baseParams = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId };
+
+  const fetchPage = async (extra: any) => {
+    const resp = await http.get('/messages', { params: { ...baseParams, ...extra } });
+    const d = resp.data;
+    const items: any[] = Array.isArray(d) ? d : (d?.data ?? []);
+    return {
+      itemCount: items.length,
+      firstId: items[0]?._id,
+      firstCreated: items[0]?.created,
+      lastId: items[items.length - 1]?._id,
+      lastCreated: items[items.length - 1]?.created,
+      pagingData: d?.pagingData,
+      topKeys: d && typeof d === 'object' && !Array.isArray(d) ? Object.keys(d) : 'array',
+    };
+  };
+
+  const results: any[] = [];
+  let page1: any = null;
+  const tryProbe = async (name: string, extra: any) => {
+    try {
+      const r = await fetchPage(extra);
+      results.push({ probe: name, ok: true, ...r, differsFromPage1: page1 ? r.firstId !== page1.firstId : undefined });
+      return r;
+    } catch (err: any) {
+      results.push({ probe: name, ok: false, status: err.response?.status, error: err.message, data: err.response?.data });
+      return null;
+    }
+  };
+
+  page1 = await tryProbe('pagina1 sem params extras', {});
+  await tryProbe('limit=100', { limit: 100 });
+  await tryProbe('limit=50', { limit: 50 });
+  await tryProbe('page=2 (limit=25)', { page: 2, limit: 25 });
+  await tryProbe('offset=25 (limit=25)', { offset: 25, limit: 25 });
+  await tryProbe('skip=25 (limit=25)', { skip: 25, limit: 25 });
+  // Cursor por _id/created (padrão comum em APIs Mongo como essa — _id é ObjectId)
+  if (page1?.lastId) {
+    await tryProbe('lastKey=<lastId>', { lastKey: page1.lastId, limit: 25 });
+    await tryProbe('startKey=<lastId>', { startKey: page1.lastId, limit: 25 });
+    await tryProbe('after=<lastId>', { after: page1.lastId, limit: 25 });
+    await tryProbe('last_id=<lastId>', { last_id: page1.lastId, limit: 25 });
+  }
+  // Se o pagingData tiver algum campo string/num, tenta devolver ele como parâmetro homônimo
+  if (page1?.pagingData && typeof page1.pagingData === 'object') {
+    for (const [k, v] of Object.entries(page1.pagingData)) {
+      if ((typeof v === 'string' || typeof v === 'number') && String(v).length < 100) {
+        await tryProbe(`pagingData.${k} devolvido como ?${k}=`, { [k]: v, limit: 25 });
+      }
+    }
+  }
+
+  res.json({ account: account.label, brand: account.st_brand_id, workflowId, nodeId, results });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
