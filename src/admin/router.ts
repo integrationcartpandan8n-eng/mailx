@@ -1826,6 +1826,17 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
   const total_vendas_sms = rows.reduce((sum, r) => sum + r.vendas, 0);
   const total_receita_liquida_sms = rows.reduce((sum, r) => sum + r.receita_liquida, 0);
 
+  // Clareza de dados (achado da auditoria: card 428 vs tabela 427): o card "Vendas SMS"
+  // conta TODAS as vendas mailxsms, mas a tabela só as com utm no padrão de automação
+  // (utm_medium=auto-sms + utm_campaign rastreável). A diferença vira uma nota explícita
+  // na tela em vez de uma discrepância silenciosa entre dois números "iguais".
+  const totalAllSms = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) as count FROM webhook_logs
+    WHERE client_id = $1 AND event_type = 'order.paid' AND ${SQL_MAILX_SMS}
+      AND ${dateFilterSql}
+  `, params);
+  const vendas_sem_rastreio = Math.max(0, parseInt(totalAllSms?.count || '0', 10) - total_vendas_sms);
+
   res.json({
     period,
     from: rangeFrom,
@@ -1835,6 +1846,7 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     currency,
     total_vendas_sms,
     total_receita_liquida_sms,
+    vendas_sem_rastreio,
     rows,
   });
 }));
@@ -2137,16 +2149,22 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
         let periodCredits: number | null = null;
         let periodCapped = false;
         if (periodActive) {
-          try {
-            const counted = await st.countWorkflowNodeMessages(
-              workflowId, mapping.workflow_node_id, start.slice(0, 10), end.slice(0, 10),
-              { approxTotal: typeof t.messages === 'number' ? t.messages : undefined }
-            );
-            periodCount = counted.count;
-            periodCredits = counted.credits;
-            periodCapped = counted.capped;
-          } catch (err: any) {
-            logger.warn(CTX, `countWorkflowNodeMessages falhou (node ${mapping.workflow_node_id}): ${err.message}`);
+          // Retry antes do fallback vitalício — achado da auditoria: uma falha transitória
+          // (rate limit sob carga) fazia a linha cair pro total vitalício rotulado; uma
+          // segunda tentativa costuma resolver.
+          for (let attempt = 1; attempt <= 2 && periodCount === null; attempt++) {
+            try {
+              const counted = await st.countWorkflowNodeMessages(
+                workflowId, mapping.workflow_node_id, start.slice(0, 10), end.slice(0, 10),
+                { approxTotal: typeof t.messages === 'number' ? t.messages : undefined }
+              );
+              periodCount = counted.count;
+              periodCredits = counted.credits;
+              periodCapped = counted.capped;
+            } catch (err: any) {
+              logger.warn(CTX, `countWorkflowNodeMessages falhou (node ${mapping.workflow_node_id}, tentativa ${attempt}/2): ${err.message}`);
+              if (attempt === 1) await new Promise(r => setTimeout(r, 1500));
+            }
           }
         }
 

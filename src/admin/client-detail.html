@@ -3846,10 +3846,18 @@
 
         function renderSmsGranularSummary(data, sym) {
             const totalRefunds = data.rows.reduce((sum, r) => sum + (r.valor_reembolso || 0) + (r.valor_chargeback || 0), 0);
+            // Clareza (achado da auditoria: card 428 vs tabela 427): o card "Vendas SMS" conta
+            // TODAS as vendas SMS; esta tabela só as rastreáveis até a mensagem. A diferença
+            // vira nota explícita, não discrepância silenciosa.
+            const semRastreio = data.vendas_sem_rastreio || 0;
+            const semRastreioHtml = semRastreio > 0
+                ? `<div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.3rem">+ ${semRastreio.toLocaleString('pt-BR')} venda${semRastreio === 1 ? '' : 's'} SMS sem rastreio de mensagem (contada${semRastreio === 1 ? '' : 's'} no card "Vendas SMS" acima, mas sem utm de automação pra aparecer nesta tabela)</div>`
+                : '';
             document.getElementById('sms-granular-summary').innerHTML = `
                 <div class="cell">
                     <div class="v">${data.total_vendas_sms.toLocaleString('pt-BR')}</div>
                     <div class="k">Vendas no período</div>
+                    ${semRastreioHtml}
                 </div>
                 <div class="cell">
                     <div class="v green">${fmtSmsMoney(sym, data.total_receita_liquida_sms)}</div>
