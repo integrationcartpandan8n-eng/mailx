@@ -596,33 +596,10 @@ export class SlickTextClient {
     return res.data;
   }
 
-  /**
-   * Cliques de UM link específico no PERÍODO — mesmo endpoint do gráfico "Click Performance",
-   * mas filtrado por `_link_id` (convenção de filtro da API: prefixo _ pra IDs, como
-   * _link_source_id/_source_id, ambos confirmados). Usado pros links manuais (N8N), que não
-   * têm workflow pra agrupar. Retorna o total do período ou null se o filtro não isolar o
-   * link (defesa: se vierem vários groups, casa pelo nome do link).
-   */
-  async getLinkClicksForLink(linkId: number, linkName: string | null, start: string, end: string, timezone = 'UTC'): Promise<number | null> {
-    const res = await this.http.get('/analytics/links/clicks', {
-      params: { _link_id: linkId, group: '_link_id', start, end, compare: '', frequency: '', timezone, noCache: 0 },
-    });
-    const data = res.data;
-    const groups: any[] = Array.isArray(data?.groups) ? data.groups : [];
-    if (groups.length === 1) return groups[0]?.total ?? data?.totals?.total ?? 0;
-    if (groups.length === 0) {
-      // Sem groups: ou o link não teve clique no período (totals.total = 0), ou a resposta
-      // veio vazia — em ambos os casos totals.total é a leitura correta quando presente.
-      return typeof data?.totals?.total === 'number' ? data.totals.total : 0;
-    }
-    // Filtro _link_id ignorado pela API (vários groups): casa pelo nome do link pra não
-    // atribuir cliques de outro link — se não achar, indisponível (null), nunca chuta.
-    if (linkName) {
-      const g = groups.find((x: any) => x?.name === linkName);
-      return g ? (g.total ?? 0) : 0;
-    }
-    return null;
-  }
+  // Nota (probes v1/v2 em produção): NÃO existe cliques-por-período pra link MANUAL —
+  // /analytics/links/clicks ignora links manuais (groups nunca os incluem, filtrado ou não)
+  // e /links/{id}/clicks|stats|analytics são 404. O que há é o total vitalício nos campos
+  // clicks/unique_clicks/bot_clicks do registro do link (via getLinks/getAllLinks).
 
   /**
    * Total de mensagens enviadas de um source (Workflow/Campaign) no PERÍODO — endpoint do

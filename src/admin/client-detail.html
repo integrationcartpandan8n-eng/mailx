@@ -3415,6 +3415,12 @@
                 if (typeof cached.clicks === 'number' && cached.clicksIsPeriod) {
                     const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
                     manualClicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+                } else if (typeof cached.lifetimeClicks === 'number') {
+                    // Cliques de link manual só existem como total vitalício (probes esgotaram a
+                    // API) — rotulado, sem razão cliques/venda (janelas diferentes). Bots contados
+                    // pela SlickText vão no tooltip pra leitura honesta do número.
+                    const tipCliques = `Total de cliques desde a criação do${cached.linkCount > 1 ? 's' : ''} ${cached.linkCount || 1} link(s) desta mensagem — a API da SlickText não filtra cliques de link manual por período.${typeof cached.lifetimeBotClicks === 'number' ? ` A própria SlickText contou ${cached.lifetimeBotClicks.toLocaleString('pt-BR')} cliques de bot além desse total.` : ''}`.replace(/"/g, '&quot;');
+                    manualClicksHtml = `<small class="envios-clicks-muted">${cached.lifetimeClicks.toLocaleString('pt-BR')} cliques (vitalício) <span class="kpi-tip" tabindex="0" data-tip="${tipCliques}">ⓘ</span></small>`;
                 } else {
                     manualClicksHtml = `<small class="envios-clicks-muted">cliques indisponíveis</small>`;
                 }
