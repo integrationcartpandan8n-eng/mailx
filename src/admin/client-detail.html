@@ -1483,6 +1483,22 @@
                     </div>
                 </div>
             </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento (Email)</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads via tag do ActiveCampaign, vitalício</span>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Segmento</th><th>Leads</th><th>Vendas Email</th><th>Taxa</th></tr>
+                        </thead>
+                        <tbody id="convSegmentoEmailBody">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div><!-- end tab-content-email -->
 
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
@@ -1498,6 +1514,22 @@
                     <div class="kpi-grid" id="smsRevenueKpis">
                         <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                     </div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:1.25rem">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento (SMS)</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads via SlickText, no período</span>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Segmento</th><th>Leads</th><th>Vendas SMS</th><th>Taxa</th></tr>
+                        </thead>
+                        <tbody id="convSegmentoSmsBody">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -2954,6 +2986,38 @@
             return pct < 1 ? pct.toFixed(2) + '%' : pct.toFixed(1) + '%';
         }
 
+        // Renderiza a tabela "Conversão por Segmento" (Carrinho Abandonado / Compradores) —
+        // reaproveitada pra versão consolidada (Visão Geral) e pelas isoladas por canal
+        // (Email/SMS), todas vindas do mesmo payload de /clientes/:id/stats.
+        function renderConversaoSegmentoTable(tbodyId, cs) {
+            const tbody = document.getElementById(tbodyId);
+            if (!tbody || !cs) return;
+            const abWarning = cs.carrinho_abandonado.leads_warning;
+            const abLeadsCell = abWarning
+                ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
+                : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
+            const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
+            const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
+            const abTaxaCell = abTaxaStr === '—'
+                ? `<span style="color:var(--text-dim)">—</span>`
+                : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
+            const compWarning = cs.compradores.leads_warning;
+            const compLeadsCell = compWarning
+                ? `${cs.compradores.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${compWarning.replace(/"/g, '&quot;')}"></i>`
+                : cs.compradores.leads.toLocaleString('pt-BR');
+            tbody.innerHTML = [
+                { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
+                { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
+            ].map(r => `
+                <tr>
+                    <td style="font-weight:600">${r.seg}</td>
+                    <td>${r.leadsHtml}</td>
+                    <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
+                    <td>${r.taxaHtml}</td>
+                </tr>
+            `).join('');
+        }
+
         window.__clientTabCharts = window.__clientTabCharts || {};
 
         async function loadClientStats() {
@@ -3188,34 +3252,10 @@
                     document.getElementById('rep-total').textContent = data.kpis.faturamento;
                 }
 
-                // Conversão por Segmento
-                if (data.conversao_por_segmento) {
-                    const cs = data.conversao_por_segmento;
-                    const abWarning = cs.carrinho_abandonado.leads_warning;
-                    const abLeadsCell = abWarning
-                        ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
-                        : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
-                    const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
-                    const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
-                    const abTaxaCell = abTaxaStr === '—'
-                        ? `<span style="color:var(--text-dim)">—</span>`
-                        : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
-                    const compWarning = cs.compradores.leads_warning;
-                    const compLeadsCell = compWarning
-                        ? `${cs.compradores.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${compWarning.replace(/"/g, '&quot;')}"></i>`
-                        : cs.compradores.leads.toLocaleString('pt-BR');
-                    document.getElementById('convSegmentoBody').innerHTML = [
-                        { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                        { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
-                    ].map(r => `
-                        <tr>
-                            <td style="font-weight:600">${r.seg}</td>
-                            <td>${r.leadsHtml}</td>
-                            <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
-                            <td>${r.taxaHtml}</td>
-                        </tr>
-                    `).join('');
-                }
+                // Conversão por Segmento (consolidado) + versões isoladas por canal (Email/SMS)
+                renderConversaoSegmentoTable('convSegmentoBody', data.conversao_por_segmento);
+                renderConversaoSegmentoTable('convSegmentoEmailBody', data.conversao_por_segmento_email);
+                renderConversaoSegmentoTable('convSegmentoSmsBody', data.conversao_por_segmento_sms);
 
                 // Render recent webhooks
                 const tbody = document.getElementById('recentWebhooks');

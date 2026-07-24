@@ -1540,6 +1540,68 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const mailxRecoveryCount = parseInt(mailxRecoveries?.count || '0');
 
+  // ── Conversão por Segmento ISOLADA por canal (pedido do Murilo: a spec pede a mesma
+  // divisão Carrinho Abandonado/Compradores por dentro de cada aba, não só no consolidado). ──
+  // SMS: vendas filtradas por SQL_MAILX_SMS — leads já são os mesmos do SlickText acima
+  // (a lista É a mesma usada na conversão combinada, não tem separação de canal na origem).
+  const smsSegParams1: (string | number)[] = [clientId];
+  const smsSegPeriod1 = periodSql(period, smsSegParams1);
+  const smsSegRecoveries = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_SMS} AND ${SQL_IS_RECOVERY}
+      ${smsSegPeriod1 ? `AND ${smsSegPeriod1}` : ''}
+  `, smsSegParams1);
+  const smsSegParams2: (string | number)[] = [clientId];
+  const smsSegPeriod2 = periodSql(period, smsSegParams2);
+  const smsSegSales = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_SMS}
+      ${smsSegPeriod2 ? `AND ${smsSegPeriod2}` : ''}
+  `, smsSegParams2);
+  const smsSegRecoveryCount = parseInt(smsSegRecoveries?.count || '0');
+  const smsSegSalesCount = parseInt(smsSegSales?.count || '0');
+
+  // Email: leads via TAG do ActiveCampaign (kits.ac_tag_compra_id/ac_tag_abandono_id) — o
+  // equivalente às listas do SlickText, mas pro canal email. Vitalício (a API de contatos por
+  // tag não filtra por período) — rotulado, igual ao padrão já usado pro SlickText/vitalício.
+  let emailAbandonoLeads = 0;
+  let emailCompradorLeads = 0;
+  let emailLeadsSource: 'ac_tag' | 'unavailable' = 'unavailable';
+  let emailLeadsWarning: string | null = null;
+  {
+    const acClientCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
+      `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
+    );
+    if (acClientCreds?.ac_api_url && acClientCreds?.ac_api_key) {
+      try {
+        const ac = new ActiveCampaignClient(acClientCreds.ac_api_url, acClientCreds.ac_api_key);
+        const acKits = await query<{ ac_tag_abandono_id: string | null; ac_tag_compra_id: string | null; name: string }>(
+          `SELECT DISTINCT ac_tag_abandono_id, ac_tag_compra_id, name FROM kits WHERE client_id = $1`,
+          [clientId]
+        );
+        const abandonoTagIds = [...new Set(acKits.map(k => k.ac_tag_abandono_id).filter((v): v is string => !!v))];
+        const compraTagIds = [...new Set(acKits.map(k => k.ac_tag_compra_id).filter((v): v is string => !!v))];
+        const unmatchedAc = acKits.filter(k => !k.ac_tag_abandono_id && !k.ac_tag_compra_id);
+
+        const [abandonoTagCounts, compraTagCounts] = await Promise.all([
+          Promise.all(abandonoTagIds.map(id => ac.getContactCountByTag(id).catch(() => 0))),
+          Promise.all(compraTagIds.map(id => ac.getContactCountByTag(id).catch(() => 0))),
+        ]);
+        emailAbandonoLeads = abandonoTagCounts.reduce((a, b) => a + b, 0);
+        emailCompradorLeads = compraTagCounts.reduce((a, b) => a + b, 0);
+        emailLeadsSource = 'ac_tag';
+        if (unmatchedAc.length > 0) {
+          emailLeadsWarning = `${unmatchedAc.length} produto(s) sem tag do ActiveCampaign vinculada: ${unmatchedAc.map(k => k.name).join(', ')}`;
+        }
+      } catch (err: any) {
+        logger.error('Admin', `Falha ao buscar leads via ActiveCampaign (client ${clientId}): ${err.message}`);
+        emailLeadsWarning = 'Falha ao consultar ActiveCampaign — Leads de Carrinho Abandonado e Compradores temporariamente indisponíveis';
+      }
+    } else {
+      emailLeadsWarning = 'ActiveCampaign não configurado — Leads de Carrinho Abandonado e Compradores indisponíveis';
+    }
+  }
+
   // ── Email Marketing KPIs (ActiveCampaign reporting) ──
   // API do AC só aceita "N dias atrás de agora" — "Hoje" mapeia certinho (1 dia),
   // presets/personalizado terminando hoje também; terminando no passado, fica
@@ -1691,6 +1753,44 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           : 0,
         leads_source: leadsSource,
         leads_warning: leadsWarning,
+      },
+    },
+    // Isolado por canal — mesmo cálculo, escopado a cada aba (Email/SMS), pedido do Murilo
+    // pra bater com a spec ("toda a separação feita isolada para cada aba").
+    conversao_por_segmento_sms: {
+      carrinho_abandonado: {
+        leads: abandonoLeads,
+        vendas: smsSegRecoveryCount,
+        taxa: abandonoLeads > 0 ? parseFloat(((smsSegRecoveryCount / abandonoLeads) * 100).toFixed(2)) : 0,
+        leads_source: leadsSource,
+        leads_warning: leadsWarning,
+      },
+      compradores: {
+        leads: compradorLeads,
+        vendas: smsSegSalesCount,
+        taxa: compradorLeads > 0 ? parseFloat(((smsSegSalesCount / compradorLeads) * 100).toFixed(2)) : 0,
+        leads_source: leadsSource,
+        leads_warning: leadsWarning,
+      },
+    },
+    conversao_por_segmento_email: {
+      carrinho_abandonado: {
+        leads: emailAbandonoLeads,
+        vendas: parseInt(emailMailxRecoveries?.count || '0'),
+        taxa: emailAbandonoLeads > 0
+          ? parseFloat(((parseInt(emailMailxRecoveries?.count || '0') / emailAbandonoLeads) * 100).toFixed(2))
+          : 0,
+        leads_source: emailLeadsSource,
+        leads_warning: emailLeadsWarning,
+      },
+      compradores: {
+        leads: emailCompradorLeads,
+        vendas: parseInt(emailMailxData?.count || '0'),
+        taxa: emailCompradorLeads > 0
+          ? parseFloat(((parseInt(emailMailxData?.count || '0') / emailCompradorLeads) * 100).toFixed(2))
+          : 0,
+        leads_source: emailLeadsSource,
+        leads_warning: emailLeadsWarning,
       },
     },
     metrics_only: METRICS_ONLY,
