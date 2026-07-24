@@ -200,4 +200,16 @@ export class ActiveCampaignClient {
       return parseInt(res.data?.meta?.total || '0', 10);
     }
   }
+
+  /**
+   * Total de contatos com uma TAG específica (equivalente às listas de segmento do SlickText,
+   * usado com kits.ac_tag_compra_id/ac_tag_abandono_id). limit:1 pra só ler meta.total sem
+   * paginar os registros. Vitalício — a API de contatos por tag não filtra por período.
+   */
+  async getContactCountByTag(tagId: string): Promise<number> {
+    const res = await this.http.get('/contacts', {
+      params: { limit: 1, 'filters[tagid]': tagId },
+    });
+    return parseInt(res.data?.meta?.total || '0', 10);
+  }
 }
