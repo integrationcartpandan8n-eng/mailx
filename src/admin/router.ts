@@ -1994,60 +1994,6 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
-// GET /admin/clientes/:id/sms-debug/group-messages-probe - DIAGNÓSTICO TEMPORÁRIO: o endpoint de
-// cliques aceita group=_link_id — será que /analytics/messages aceita group por node? Se aceitar,
-// ganhamos ENVIOS POR MENSAGEM POR PERÍODO (a única métrica que ainda está vitalícia). Também
-// testa filtros no GET /messages cru pra viabilizar o plano B (contagem paginada por node).
-// Controle (workflow 9361, brand 30571, julho): total esperado ~11.7k; nodes 92762 (333 vitalício,
-// criado 17/jun) e 93106 (~17.5k vitalício). Query: ?brand=30571&workflow_id=9361&node_id=93106
-// Remover depois de confirmado.
-adminRouter.get('/clientes/:id/sms-debug/group-messages-probe', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const brand = req.query.brand as string | undefined;
-  const workflowId = parseInt((req.query.workflow_id as string) || '0', 10);
-  const nodeId = parseInt((req.query.node_id as string) || '0', 10);
-  const startYmd = (req.query.start as string) || '2026-07-01';
-  const endYmd = (req.query.end as string) || '2026-07-31';
-  const base = { start: `${startYmd} 00:00:00`, end: `${endYmd} 23:59:59`, compare: '', frequency: '', timezone: 'UTC', noCache: 0 };
-
-  const accounts = await getSlickTextAccounts(clientId);
-  const account = brand ? accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts[0];
-  if (!account) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
-  const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
-  const http = (st as any).http;
-
-  const probes: { name: string; path: string; params: any }[] = [
-    { name: 'messages group=_sub_source_id', path: '/analytics/messages', params: { source: 'Workflow', _source_id: workflowId, attempted: 1, group: '_sub_source_id', ...base } },
-    { name: 'messages group=sub_source', path: '/analytics/messages', params: { source: 'Workflow', _source_id: workflowId, attempted: 1, group: 'sub_source', ...base } },
-    { name: 'messages group=_workflow_node_id', path: '/analytics/messages', params: { source: 'Workflow', _source_id: workflowId, attempted: 1, group: '_workflow_node_id', ...base } },
-    { name: 'messages group=_source_id (controle de shape)', path: '/analytics/messages', params: { source: 'Workflow', _source_id: workflowId, attempted: 1, group: '_source_id', ...base } },
-    { name: 'GET /messages filtro node (5 itens, shape)', path: '/messages', params: { source: 'Workflow', source_id: workflowId, sub_source: 'SendMessageActionNode', sub_source_id: nodeId, limit: 5 } },
-    { name: 'GET /messages filtro _sub_source_id (5 itens)', path: '/messages', params: { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId, limit: 5 } },
-  ];
-
-  const results: any[] = [];
-  for (const p of probes) {
-    try {
-      const resp = await http.get(p.path, { params: p.params });
-      const d = resp.data;
-      const items = Array.isArray(d) ? d : (d?.data ?? null);
-      results.push({
-        probe: p.name,
-        ok: true,
-        totals: d?.totals,
-        groups: Array.isArray(d?.groups) ? d.groups.map((g: any) => ({ name: g.name, total: g.total })) : undefined,
-        itemCount: Array.isArray(items) ? items.length : undefined,
-        sampleItemKeys: Array.isArray(items) && items[0] ? Object.keys(items[0]) : undefined,
-        sampleItem: Array.isArray(items) && items[0] ? JSON.stringify(items[0]).slice(0, 400) : undefined,
-      });
-    } catch (err: any) {
-      results.push({ probe: p.name, ok: false, status: err.response?.status, error: err.message });
-    }
-  }
-
-  res.json({ account: account.label, brand: account.st_brand_id, workflowId, nodeId, range: base, results });
-}));
-
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
@@ -2182,17 +2128,40 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           }
         }
 
+        // ENVIOS do PERÍODO desta mensagem: contagem paginada do /messages cru (o filtro
+        // _sub_source_id funciona lá, e cada item tem `created` — confirmado via probe).
+        // Só quando há período ativo; sem período, o vitalício do node analytics já é exato.
+        const period = resolvePeriodFilter(req);
+        const periodActive = period.isToday || !!(period.from && period.to);
+        let periodCount: number | null = null;
+        let periodCredits: number | null = null;
+        let periodCapped = false;
+        if (periodActive) {
+          try {
+            const counted = await st.countWorkflowNodeMessages(
+              workflowId, mapping.workflow_node_id, start.slice(0, 10), end.slice(0, 10)
+            );
+            periodCount = counted.count;
+            periodCredits = counted.credits;
+            periodCapped = counted.capped;
+          } catch (err: any) {
+            logger.warn(CTX, `countWorkflowNodeMessages falhou (node ${mapping.workflow_node_id}): ${err.message}`);
+          }
+        }
+
         res.json({
           linked: true,
           sourceType,
           scope: 'node',
-          lifetime: true, // count abaixo é desde a criação da mensagem (API não filtra envios por node)
-          count: t.messages ?? 0,
+          // Com período ativo e contagem ok: count é DO PERÍODO. Fallback: vitalício rotulado.
+          lifetime: !(periodActive && periodCount !== null),
+          count: periodActive && periodCount !== null ? periodCount : (t.messages ?? 0),
+          periodCredits,
           clicks: clicksPeriod, // cliques DO PERÍODO (via links) — null quando indisponível
           clicksIsPeriod: clicksPeriod !== null,
           lifetimeClicks: t.clicks ?? 0,
           clicksFieldFound: clicksPeriod !== null,
-          capped: false,
+          capped: periodCapped,
           pages: 1,
           nodeName: data?.workflow_node?.name,
           workflowId,

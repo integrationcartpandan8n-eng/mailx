@@ -337,6 +337,67 @@ export class SlickTextClient {
   }
 
   /**
+   * ENVIOS (e créditos exatos) de UMA mensagem de workflow num PERÍODO — paginando o
+   * GET /messages cru. Confirmado via probe em produção:
+   * - o filtro `_sub_source_id` (node) FUNCIONA no /messages (o analytics ignora, aqui não);
+   * - cada item tem `created` ("YYYY-MM-DD HH:mm:ss") e `message_credits` (créditos reais).
+   * Conta client-side os itens com created dentro de [start, end]. Se as páginas vierem em
+   * ordem decrescente de created (detectado na 1ª página), para cedo ao passar do início do
+   * período — barato pra "Hoje"/7d. Cap de segurança marca `capped` (número parcial).
+   * startYmd/endYmd: "YYYY-MM-DD" (comparação lexicográfica com o prefixo de `created`).
+   */
+  async countWorkflowNodeMessages(
+    workflowId: number,
+    nodeId: number,
+    startYmd: string,
+    endYmd: string,
+    opts: { maxPages?: number } = {}
+  ): Promise<{ count: number; credits: number; capped: boolean; pages: number }> {
+    const maxPages = opts.maxPages ?? 80;
+    const startKey = `${startYmd} 00:00:00`;
+    const endKey = `${endYmd} 23:59:59`;
+    let page = 1;
+    let count = 0;
+    let credits = 0;
+    let sortedDesc: boolean | null = null;
+
+    while (page <= maxPages) {
+      const params: any = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId, page, limit: 100 };
+      const res = await this.http.get('/messages', { params });
+      const items: any[] = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+      if (items.length === 0) return { count, credits, capped: false, pages: page };
+
+      if (sortedDesc === null && items.length > 1) {
+        const first = items[0]?.created || '';
+        const last = items[items.length - 1]?.created || '';
+        sortedDesc = first >= last;
+      }
+
+      let allOlderThanStart = true;
+      for (const item of items) {
+        const created: string = item?.created || '';
+        if (!created) continue;
+        if (created >= startKey) allOlderThanStart = false;
+        if (created >= startKey && created <= endKey) {
+          count++;
+          credits += typeof item?.message_credits === 'number' ? item.message_credits : 1;
+        }
+      }
+
+      // Ordem decrescente + página inteira antes do início do período = não vem mais nada útil.
+      if (sortedDesc && allOlderThanStart) {
+        return { count, credits, capped: false, pages: page };
+      }
+
+      const hasMore = res.data?.hasMore ?? res.data?.has_more ?? res.data?.pagingData?.hasMore ?? (items.length === 100);
+      if (!hasMore) return { count, credits, capped: false, pages: page };
+      page++;
+    }
+    logger.warn(CTX, `countWorkflowNodeMessages: cap de ${maxPages} páginas no node ${nodeId} (workflow ${workflowId}) — contagem parcial`);
+    return { count, credits, capped: true, pages: page - 1 };
+  }
+
+  /**
    * Message credit analytics — endpoint /analytics/message/credits returns 404.
    * Use getBrandUsage() instead for credit totals.
    */
