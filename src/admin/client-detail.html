@@ -3306,6 +3306,10 @@
                     { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
                     { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de um fluxo de upsell.' },
                     { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'Faturamento só das vendas de upsell SMS acima.' },
+                    // Faturamento total do CLIENTE (todos os canais, mesmo período) + representatividade
+                    // do SMS nesse total — seção 3.1.2/3.2 da spec original, aplicada por canal.
+                    { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                    { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento SMS ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
@@ -4137,6 +4141,8 @@
                 { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00', tip: 'Faturamento só das recuperações Email acima.' },
                 { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
                 { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
+                { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                { icon: 'fa-percentage purple', label: 'Representatividade Email', value: `${(em.representatividade_email ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento Email ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
             ].map(k => `
                 <div class="kpi-card">
                     <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
