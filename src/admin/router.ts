@@ -1996,6 +1996,62 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/links-probe - DIAGNÓSTICO TEMPORÁRIO: em produção, o painel da
+// SlickText devolve a seção `links` no analytics de workflow, mas a MESMA chamada via token de API
+// veio com 0 links em todos os workflows. Esse probe testa as variantes plausíveis de uma vez
+// (range igual ao do painel, range largo, endpoint /links direto, node analytics conhecido) pra
+// descobrir qual funciona com token. Query: ?brand=30571&workflow_id=9361&node_id=92762.
+// Remover depois de confirmado.
+adminRouter.get('/clientes/:id/sms-debug/links-probe', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const brand = req.query.brand as string | undefined;
+  const workflowId = parseInt((req.query.workflow_id as string) || '0', 10);
+  const nodeId = parseInt((req.query.node_id as string) || '0', 10);
+
+  const accounts = await getSlickTextAccounts(clientId);
+  const account = brand ? accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts[0];
+  if (!account) {
+    res.status(400).json({ error: 'Conta não encontrada pra esse brand.', brands: accounts.map(a => a.st_brand_id) });
+    return;
+  }
+
+  const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
+  const summarize = (data: any) => ({
+    keys: data && typeof data === 'object' ? Object.keys(data) : typeof data,
+    linksCount: data?.links ? Object.keys(data.links).length : 0,
+    sampleLink: data?.links ? Object.values<any>(data.links)[0]?.name?.slice(0, 80) : undefined,
+    dataCount: Array.isArray(data?.data) ? data.data.length : (Array.isArray(data) ? data.length : undefined),
+  });
+
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  const monthRange = { start: `${ymd(monthStart)} 00:00:00`, end: `${ymd(new Date())} 23:59:59` };
+
+  const probes: { name: string; fn: () => Promise<any> }[] = [
+    { name: 'analytics/workflows range-mes-atual', fn: () => st.getWorkflowAnalytics(workflowId, monthRange.start, monthRange.end) },
+    { name: 'analytics/workflows range-2015-hoje', fn: () => st.getWorkflowAnalytics(workflowId, '2015-01-01 00:00:00', `${ymd(new Date())} 23:59:59`) },
+    { name: 'GET /links', fn: async () => (await (st as any).http.get('/links')).data },
+    { name: 'GET /links?source=Workflow&source_id', fn: async () => (await (st as any).http.get('/links', { params: { source: 'Workflow', source_id: workflowId } })).data },
+    { name: 'GET /links?source=Workflow&_source_id', fn: async () => (await (st as any).http.get('/links', { params: { source: 'Workflow', _source_id: workflowId } })).data },
+  ];
+  if (nodeId) {
+    probes.push({ name: 'analytics node range-mes-atual', fn: () => st.getWorkflowNodeAnalytics(workflowId, nodeId, monthRange.start, monthRange.end) });
+  }
+
+  const results: any[] = [];
+  for (const p of probes) {
+    try {
+      const data = await p.fn();
+      results.push({ probe: p.name, ok: true, ...summarize(data) });
+    } catch (err: any) {
+      results.push({ probe: p.name, ok: false, status: err.response?.status, error: err.message });
+    }
+  }
+
+  res.json({ account: account.label, brand: account.st_brand_id, workflowId, results });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
