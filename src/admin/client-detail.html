@@ -895,7 +895,11 @@
                removido (cortava o tooltip .kpi-tip) e essa barra ficaria com cantos retos. */
             border-radius: var(--radius) var(--radius) 0 0;
         }
-        .kpi-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+        /* z-index sobe só quando o card está com o mouse/foco em cima — sem isso, o tooltip
+           (que pertence a este card) fica empatado em ordem de empilhamento com os cards
+           vizinhos e o card seguinte no HTML desenha por cima, cortando o balão visualmente
+           (reportado pelo Murilo: o card vizinho aparecia na frente do tooltip). */
+        .kpi-card:hover, .kpi-card:focus-within { border-color: var(--border-light); transform: translateY(-2px); z-index: 5; }
         .kpi-card:hover::before { opacity: 1; }
 
         .kpi-card .kpi-icon {
