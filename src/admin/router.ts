@@ -2139,7 +2139,8 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
         if (periodActive) {
           try {
             const counted = await st.countWorkflowNodeMessages(
-              workflowId, mapping.workflow_node_id, start.slice(0, 10), end.slice(0, 10)
+              workflowId, mapping.workflow_node_id, start.slice(0, 10), end.slice(0, 10),
+              { approxTotal: typeof t.messages === 'number' ? t.messages : undefined }
             );
             periodCount = counted.count;
             periodCredits = counted.credits;
