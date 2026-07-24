@@ -1938,6 +1938,11 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
 
   type Found = { workflowId: number; nodeId: number | null; accountId: number | null; accountLabel: string; workflowName?: string };
   const byUtm = new Map<string, Found[]>();
+  // Links MANUAIS (criados direto no encurtador, sem workflow — o caso dos disparos N8N,
+  // confirmado via dump em produção: source='manual', _source_id/_sub_source_id nulos).
+  // Vínculo possível: utm -> conta (cliques por link no período; envios não existem via API).
+  type FoundManual = { accountId: number | null; accountLabel: string };
+  const manualByUtm = new Map<string, FoundManual[]>();
   const errors: string[] = [];
   // Clareza de dados: reporta o que foi varrido, pra "0 vinculados" nunca mais ser um mistério.
   const scanned: { workflow: string; account: string; links: number; linksComUtm: number }[] = [];
@@ -1978,9 +1983,28 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
         errors.push(`links ${wf.name} (${acc.label}): ${err.message}`);
       }
     }
+
+    // Segunda passada: links MANUAIS da conta (fora de qualquer workflow). Varre todos os
+    // links paginados e pega os source='manual' com utm_campaign na URL de destino.
+    try {
+      const allLinks = await st.getAllLinks();
+      const manualLinks = allLinks.filter((l: any) => l?.source === 'manual');
+      let linksComUtm = 0;
+      for (const link of manualLinks) {
+        const utm = extractUtmCampaignFromUrl(link?.url);
+        if (!utm) continue;
+        linksComUtm++;
+        const list = manualByUtm.get(utm) || [];
+        list.push({ accountId: acc.accountId, accountLabel: acc.label });
+        manualByUtm.set(utm, list);
+      }
+      scanned.push({ workflow: '(links manuais, sem workflow)', account: acc.label, links: manualLinks.length, linksComUtm });
+    } catch (err: any) {
+      errors.push(`links manuais (${acc.label}): ${err.message}`);
+    }
   }
 
-  const linked: { utm_campaign: string; workflow_id: number; workflow_node_id: number | null; account: string; ambiguous: boolean }[] = [];
+  const linked: { utm_campaign: string; workflow_id: number | null; workflow_node_id: number | null; account: string; ambiguous: boolean; manual?: boolean }[] = [];
   for (const [utm, entries] of byUtm) {
     // Dedup: o mesmo link pode aparecer mais de uma vez; o que importa é quantos
     // (workflow, node, conta) DISTINTOS apontam pra esse utm.
@@ -2012,61 +2036,28 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
     linked.push({ utm_campaign: utm, workflow_id: choice.workflowId, workflow_node_id: choice.nodeId, account: choice.accountLabel, ambiguous });
   }
 
-  logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados, ${scanned.length} workflows varridos (${errors.length} erros)`);
-  res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
-}));
-
-// GET /admin/clientes/:id/sms-debug/links-dump - DIAGNÓSTICO TEMPORÁRIO: vendas chegam com utm
-// ...NeuromindProN8N mas o auto-vínculo (que varre GET /links?source=Workflow) não acha nenhum
-// link com esse utm. Esse dump pagina TODOS os links da(s) conta(s) — sem filtro de source — e
-// devolve os que casam com ?q= (busca no utm e na URL), com o registro completo (source,
-// _source_id, _sub_source_id, name) pra descobrir onde o link mora. Remover após o diagnóstico.
-adminRouter.get('/clientes/:id/sms-debug/links-dump', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const q = ((req.query.q as string) || '').toLowerCase();
-  const brand = req.query.brand as string | undefined;
-
-  const accounts = await getSlickTextAccounts(clientId);
-  const targets = brand ? accounts.filter(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, '')) : accounts;
-  if (targets.length === 0) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
-
-  const out: any[] = [];
-  for (const acc of targets) {
-    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
-    const http = (st as any).http;
-    let offset = 0;
-    let total = 0;
-    for (let page = 0; page < 40; page++) {
-      const resp = await http.get('/links', { params: { offset, limit: 100 } });
-      const items: any[] = Array.isArray(resp.data) ? resp.data : (resp.data?.data ?? []);
-      if (items.length === 0) break;
-      total += items.length;
-      for (const l of items) {
-        const utm = extractUtmCampaignFromUrl(l?.url) || '';
-        const hay = `${utm} ${l?.url || ''} ${l?.name || ''}`.toLowerCase();
-        if (!q || hay.includes(q)) {
-          out.push({
-            account: acc.label,
-            link_id: l?.link_id,
-            name: l?.name,
-            utm,
-            source: l?.source,
-            _source_id: l?._source_id,
-            sub_source: l?.sub_source,
-            _sub_source_id: l?._sub_source_id,
-            active: l?.active,
-            created: l?.created,
-            url: (l?.url || '').slice(0, 160),
-          });
-        }
-      }
-      if (items.length < 100) break;
-      offset += 100;
+  // Vínculos de links MANUAIS — só pros utms que NÃO saíram de workflow (workflow ganha:
+  // tem envios por período e node; manual só tem cliques por link).
+  for (const [utm, entries] of manualByUtm) {
+    if (byUtm.has(utm)) continue;
+    const accountsDistinct = [...new Map(entries.map(e => [`${e.accountId}`, e])).values()];
+    if (accountsDistinct.length > 1) {
+      logger.warn(CTX, `Auto-vínculo: utm_campaign "${utm}" tem links manuais em ${accountsDistinct.length} contas diferentes — pulado`);
+      continue;
     }
-    out.push({ account: acc.label, _scanTotal: total });
+    const choice = accountsDistinct[0];
+    await query(
+      `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id, updated_at)
+       VALUES ($1, $2, NULL, 'ManualLink', NULL, $3, NOW())
+       ON CONFLICT (client_id, utm_campaign)
+       DO UPDATE SET slicktext_campaign_id = NULL, source_type = 'ManualLink', workflow_node_id = NULL, st_account_id = $3, updated_at = NOW()`,
+      [clientId, utm, choice.accountId]
+    );
+    linked.push({ utm_campaign: utm, workflow_id: null, workflow_node_id: null, account: choice.accountLabel, ambiguous: false, manual: true });
   }
 
-  res.json({ q, matches: out });
+  logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados, ${scanned.length} workflows varridos (${errors.length} erros)`);
+  res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
@@ -2143,7 +2134,7 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
     return;
   }
 
-  const mapping = await queryOne<{ slicktext_campaign_id: number; source_type: string; workflow_node_id: number | null; st_account_id: number | null }>(
+  const mapping = await queryOne<{ slicktext_campaign_id: number | null; source_type: string; workflow_node_id: number | null; st_account_id: number | null }>(
     `SELECT slicktext_campaign_id, source_type, workflow_node_id, st_account_id FROM sms_campaign_map WHERE client_id = $1 AND utm_campaign = $2`,
     [clientId, utmCampaign]
   );
@@ -2160,6 +2151,63 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
   }
 
   const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
+
+  // Links MANUAIS (caso N8N, confirmado via dump em produção): a mensagem usa links criados
+  // direto no encurtador (source='manual'), sem workflow/node associado. O que a API oferece:
+  //   - CLIQUES por link no período: /analytics/links/clicks?_link_id=X ✔ (soma dos links do utm)
+  //   - ENVIOS por mensagem: NÃO EXISTEM (nenhum source pra filtrar em /messages) — estampado
+  //     como indisponível no frontend, nunca mascarado com zero ou vitalício de outra coisa.
+  if (mapping.source_type === 'ManualLink') {
+    try {
+      const { start, end } = await resolveSlickTextDateRange(req);
+      const allLinks = await st.getAllLinks();
+      const myLinks = allLinks.filter((l: any) =>
+        l?.source === 'manual' && extractUtmCampaignFromUrl(l?.url) === utmCampaign && Number.isInteger(l?.link_id)
+      );
+      if (myLinks.length === 0) {
+        res.json({
+          linked: true, sourceType: 'ManualLink', scope: 'manual-links', count: null,
+          message: 'Nenhum link manual com esse utm_campaign encontrado na conta SlickText vinculada.',
+        });
+        return;
+      }
+      // Sequencial — respeita o rate limit; são poucos links por mensagem (tipicamente 3).
+      let clicks: number | null = null;
+      for (const link of myLinks) {
+        const c = await st.getLinkClicksForLink(link.link_id, link?.name || null, start, end).catch(() => null);
+        if (c !== null) clicks = (clicks ?? 0) + c;
+      }
+      res.json({
+        linked: true,
+        sourceType: 'ManualLink',
+        scope: 'manual-links',
+        lifetime: false,
+        // Envios por mensagem não existem pra link manual — count null + flag explícita pro
+        // frontend estampar o motivo (clareza de dados: indisponível ≠ zero).
+        count: null,
+        sendsUnavailable: true,
+        message: 'Mensagem disparada com links manuais do encurtador (fora de workflow) — a API da SlickText não expõe envios por mensagem nesse caso. Cliques do período são reais, somados pelos links dessa mensagem.',
+        clicks,
+        clicksIsPeriod: clicks !== null,
+        clicksFieldFound: clicks !== null,
+        linkCount: myLinks.length,
+        capped: false,
+        pages: 1,
+      });
+    } catch (err: any) {
+      logger.error(CTX, `Falha ao consultar cliques de links manuais (utm ${utmCampaign}, client ${clientId}): ${err.message}`);
+      res.json({ linked: true, count: null, message: `Erro ao consultar SlickText: ${err.message}` });
+    }
+    return;
+  }
+
+  // Daqui pra baixo o vínculo é Workflow/Campaign — exige o ID da SlickText (só linhas
+  // ManualLink têm slicktext_campaign_id NULL; um NULL aqui é registro incompleto).
+  if (mapping.slicktext_campaign_id == null) {
+    res.json({ linked: true, count: null, message: 'Vínculo sem workflow/campaign da SlickText (registro incompleto) — revincule esta mensagem.' });
+    return;
+  }
+  const sourceId = mapping.slicktext_campaign_id;
   const sourceType = mapping.source_type === 'Workflow' ? 'Workflow' : 'Campaign';
 
   try {
@@ -2172,7 +2220,7 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
       // - CLIQUES por link: filtrados por período via /analytics/links/clicks?group=_link_id ✔
       //   — e como cada link carrega o utm_campaign na URL, cliques por MENSAGEM no período
       //   saem somando os links daquele utm. Cada número abaixo é rotulado como o que é.
-      const workflowId = mapping.slicktext_campaign_id;
+      const workflowId = sourceId;
       const [workflowPeriodCount, clicksGrouped, allLinks] = await Promise.all([
         st.getMessageAnalyticsForSource('Workflow', workflowId, start, end)
           .then(d => d?.totals?.total ?? null).catch(() => null),

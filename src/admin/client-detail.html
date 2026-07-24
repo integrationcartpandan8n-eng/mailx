@@ -3406,6 +3406,22 @@
             if (cached.linked === false) {
                 return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular</button></div>`;
             }
+            // Links MANUAIS (caso N8N): mensagem disparada com links avulsos do encurtador —
+            // a API não expõe envios por mensagem, mas os CLIQUES do período são reais (por
+            // link). Estampa o motivo em vez de um "indisponível" genérico (clareza de dados).
+            if (cached.sendsUnavailable) {
+                const tipManual = (cached.message || 'Links manuais do encurtador (fora de workflow) — a API da SlickText não expõe envios por mensagem nesse caso.').replace(/"/g, '&quot;');
+                let manualClicksHtml;
+                if (typeof cached.clicks === 'number' && cached.clicksIsPeriod) {
+                    const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
+                    manualClicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+                } else {
+                    manualClicksHtml = `<small class="envios-clicks-muted">cliques indisponíveis</small>`;
+                }
+                return `<div class="rank-envios" id="${id}">
+                    <span class="envios-count" style="color:var(--warning)"><i class="fas fa-triangle-exclamation" style="font-size:0.7rem; margin-right:0.25rem"></i>envios n/d <span class="kpi-tip" tabindex="0" data-tip="${tipManual}">ⓘ</span><small style="color:var(--warning)">links manuais — sem envios via API</small>${manualClicksHtml}</span>
+                </div>`;
+            }
             if (cached.count == null) {
                 return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
             }
