@@ -430,6 +430,21 @@ export class SlickTextClient {
   }
 
   /**
+   * Cliques POR LINK de um workflow, filtrados por PERÍODO — endpoint do gráfico "Click
+   * Performance" do painel, confirmado por captura real:
+   * GET /analytics/links/clicks?link_source=Workflow&_link_source_id={id}&group=_link_id
+   * devolve {totals:{total,average}, groups:[{name: <nome do link>, total, period:{...}}]}.
+   * Como cada link tem a URL com o utm_campaign, dá pra somar cliques do período por
+   * mensagem casando os nomes dos links (via getLinks) com os groups daqui.
+   */
+  async getLinkClicksGrouped(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+    const res = await this.http.get('/analytics/links/clicks', {
+      params: { link_source: 'Workflow', _link_source_id: workflowId, group: '_link_id', start, end, compare: '', frequency: '', timezone, noCache: 0 },
+    });
+    return res.data;
+  }
+
+  /**
    * Total de mensagens enviadas de um source (Workflow/Campaign) no PERÍODO — endpoint do
    * gráfico "Messages Sent" do painel, confirmado por captura: devolve
    * {totals:{total,average},groups:[{name:'Messages',period:{...}}]}.
