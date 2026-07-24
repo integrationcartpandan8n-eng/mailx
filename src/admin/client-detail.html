@@ -3366,7 +3366,9 @@
                 ? `<i class="fas fa-triangle-exclamation envios-scope-warning" title="Vinculado ao workflow inteiro (${cached.workflowName ? escapeHtml(cached.workflowName) : 'sem nome'}) — se esse workflow tiver mais de uma mensagem, esse número pode somar todas juntas. Vincule pelo ID da mensagem específica pra separar." style="color:var(--warning); margin-left:0.3rem; cursor:help; font-size:0.7rem"></i>`
                 : '';
 
-            return `<div class="rank-envios" id="${id}">
+            const sourceName = cached.nodeName || cached.workflowName || '';
+            const countTitle = sourceName ? `SlickText: ${sourceName.replace(/"/g, '&quot;')} — no período selecionado` : 'Envios no período selecionado';
+            return `<div class="rank-envios" id="${id}" title="${countTitle}">
                 <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${scopeWarningHtml}${ratioHtml}${clicksHtml}</span>
             </div>`;
         }
@@ -3907,10 +3909,22 @@
 
                 window.__smsGranularData = data;
                 window.__creditosAutomacaoCache = {}; // período mudou — descarta cálculo anterior
+
+                // Envios/cliques também são POR PERÍODO — manter o cache antigo misturaria
+                // envios de um período com vendas de outro (razões envios/venda sem sentido).
+                // Descarta e recarrega automaticamente as linhas que já estavam carregadas.
+                const previouslyLoaded = Object.keys(window.__smsSendsCache || {})
+                    .filter(k => typeof window.__smsSendsCache[k] === 'object');
+                window.__smsSendsCache = {};
+
                 section.style.display = 'block';
                 content.style.display = 'block';
                 renderSmsGranular();
                 clearDataLoadError('desempenho por mensagem SMS');
+
+                data.rows
+                    .filter(r => previouslyLoaded.includes(r.utm_campaign))
+                    .forEach(r => loadSmsCampaignSends(r.utm_campaign, r.vendas || 0));
             } catch (e) {
                 reportDataLoadError('desempenho por mensagem SMS', e);
                 loading.style.display = 'none';
