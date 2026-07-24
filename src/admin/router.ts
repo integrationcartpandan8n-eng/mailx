@@ -2060,55 +2060,6 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
-// GET /admin/clientes/:id/sms-debug/link-clicks-probe - DIAGNÓSTICO TEMPORÁRIO: o painel da
-// SlickText mostra cliques nos links manuais (N8N), mas nossa consulta com _link_id volta 0 —
-// a API ignora parâmetro desconhecido em silêncio (mesmo padrão do bug das datas). Testa
-// vários formatos de filtro de uma vez pra descobrir o que /analytics/links/clicks aceita
-// pra link avulso. ?link=<link_id> (default 195041) &brand= &start= &end=. Remover após.
-adminRouter.get('/clientes/:id/sms-debug/link-clicks-probe', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const linkId = parseInt((req.query.link as string) || '195041');
-  const brand = (req.query.brand as string) || '27972';
-  const start = (req.query.start as string) || '2026-07-01 00:00:00';
-  const end = (req.query.end as string) || '2026-07-24 23:59:59';
-
-  const accounts = await getSlickTextAccounts(clientId);
-  const acc = accounts.find(a => a.st_brand_id.replace(/\D/g, '') === brand.replace(/\D/g, ''));
-  if (!acc) { res.status(400).json({ error: 'Conta não encontrada.' }); return; }
-  const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
-  const http = (st as any).http;
-
-  // v2: /analytics/links/clicks não enxerga links manuais nem filtrado nem sem filtro
-  // (confirmado em produção — groups nunca incluem os N8N, em nenhum período). Os contadores
-  // do painel (All/Unique/Bot) vêm de outro lugar. Candidatos testados de uma vez:
-  const common = { start, end, compare: '', frequency: '', timezone: 'UTC', noCache: 0 };
-  const variants: { name: string; path: string; params: any }[] = [
-    { name: 'A_link_detail_completo', path: `/links/${linkId}`, params: {} },
-    { name: 'B_link_clicks_sub', path: `/links/${linkId}/clicks`, params: {} },
-    { name: 'C_link_clicks_sub_periodo', path: `/links/${linkId}/clicks`, params: { start, end } },
-    { name: 'D_link_stats_sub', path: `/links/${linkId}/stats`, params: {} },
-    { name: 'E_link_analytics_sub', path: `/links/${linkId}/analytics`, params: {} },
-    { name: 'F_analytics_link_path', path: `/analytics/links/${linkId}`, params: {} },
-    { name: 'G_analytics_links_lista', path: '/analytics/links', params: { _link_id: linkId, ...common } },
-    { name: 'H_clicks_source_Manual', path: '/analytics/links/clicks', params: { link_source: 'Manual Creation', group: '_link_id', ...common } },
-    { name: 'I_links_lista_com_stats', path: '/links', params: { _link_id: linkId } },
-    { name: 'J_clicks_lista_crua', path: '/clicks', params: { _link_id: linkId, offset: 0, limit: 5 } },
-  ];
-
-  const out: any[] = [];
-  for (const v of variants) {
-    try {
-      const resp = await http.get(v.path, { params: v.params });
-      // Resposta CRUA (limitada) — o objetivo é descobrir os NOMES DOS CAMPOS de clique.
-      out.push({ variant: v.name, status: resp.status, raw: JSON.stringify(resp.data).slice(0, 900) });
-    } catch (err: any) {
-      out.push({ variant: v.name, erro: err.message, body: JSON.stringify(err?.response?.data ?? null).slice(0, 200) });
-    }
-  }
-
-  res.json({ probe: 'v2', linkId, brand, start, end, results: out });
-}));
-
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
@@ -2201,14 +2152,18 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
 
   const st = new SlickTextClient(account.st_api_token, account.st_brand_id);
 
-  // Links MANUAIS (caso N8N, confirmado via dump em produção): a mensagem usa links criados
-  // direto no encurtador (source='manual'), sem workflow/node associado. O que a API oferece:
-  //   - CLIQUES por link no período: /analytics/links/clicks?_link_id=X ✔ (soma dos links do utm)
-  //   - ENVIOS por mensagem: NÃO EXISTEM (nenhum source pra filtrar em /messages) — estampado
-  //     como indisponível no frontend, nunca mascarado com zero ou vitalício de outra coisa.
+  // Links MANUAIS (caso N8N, confirmado via dump + probes em produção): a mensagem usa links
+  // criados direto no encurtador (source='manual'), sem workflow/node associado. O que a API
+  // oferece pra eles (probes v1/v2 esgotaram os caminhos):
+  //   - CLIQUES: só o total VITALÍCIO, nos campos clicks/unique_clicks/bot_clicks do próprio
+  //     registro do link (GET /links/{id}) — os mesmos All/Unique/Bot do painel. NÃO existe
+  //     filtro de período: /analytics/links/clicks ignora links manuais (groups nunca os
+  //     incluem, em nenhum período) e /links/{id}/clicks|stats|analytics são 404.
+  //   - ENVIOS por mensagem: NÃO EXISTEM (nenhum source pra filtrar em /messages).
+  // Regra de clareza: cliques vitalícios ROTULADOS, envios estampados como indisponíveis —
+  // nunca mascarado com zero ou com número de outra janela sem aviso.
   if (mapping.source_type === 'ManualLink') {
     try {
-      const { start, end } = await resolveSlickTextDateRange(req);
       const allLinks = await st.getAllLinks();
       const myLinks = allLinks.filter((l: any) =>
         l?.source === 'manual' && extractUtmCampaignFromUrl(l?.url) === utmCampaign && Number.isInteger(l?.link_id)
@@ -2220,12 +2175,7 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
         });
         return;
       }
-      // Sequencial — respeita o rate limit; são poucos links por mensagem (tipicamente 3).
-      let clicks: number | null = null;
-      for (const link of myLinks) {
-        const c = await st.getLinkClicksForLink(link.link_id, link?.name || null, start, end).catch(() => null);
-        if (c !== null) clicks = (clicks ?? 0) + c;
-      }
+      const sum = (field: string) => myLinks.reduce((s: number, l: any) => s + (typeof l?.[field] === 'number' ? l[field] : 0), 0);
       res.json({
         linked: true,
         sourceType: 'ManualLink',
@@ -2235,10 +2185,12 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
         // frontend estampar o motivo (clareza de dados: indisponível ≠ zero).
         count: null,
         sendsUnavailable: true,
-        message: 'Mensagem disparada com links manuais do encurtador (fora de workflow) — a API da SlickText não expõe envios por mensagem nesse caso. Cliques do período são reais, somados pelos links dessa mensagem.',
-        clicks,
-        clicksIsPeriod: clicks !== null,
-        clicksFieldFound: clicks !== null,
+        message: 'Mensagem disparada com links manuais do encurtador (fora de workflow) — a API da SlickText não expõe envios por mensagem nem cliques por período nesse caso. Cliques mostrados são o total desde a criação dos links (vitalício).',
+        clicks: null,
+        clicksIsPeriod: false,
+        clicksFieldFound: false,
+        lifetimeClicks: sum('clicks'),
+        lifetimeBotClicks: sum('bot_clicks'),
         linkCount: myLinks.length,
         capped: false,
         pages: 1,
