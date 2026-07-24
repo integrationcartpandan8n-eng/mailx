@@ -381,8 +381,13 @@ export class SlickTextClient {
    * ATENÇÃO: apesar do nome do path, esse endpoint com `_workflow_id` na query devolve SÓ
    * {totals:{total,average},groups:[...]} — nada de messages/clicks/links (confirmado via
    * probe em produção com token; a resposta rica fica em getWorkflowAnalyticsById).
+   *
+   * timezone default UTC (aqui e nos demais métodos de analytics com período): as janelas de
+   * data do dashboard vêm do CURRENT_DATE do Postgres (UTC) e as vendas são filtradas por
+   * created_at em UTC — a SlickText precisa interpretar start/end no MESMO fuso, senão a razão
+   * envios/venda compara janelas diferentes (o painel deles usa America/New_York, nós não).
    */
-  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
     const res = await this.http.get('/analytics/workflows', {
       params: { _workflow_id: workflowId, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -419,7 +424,7 @@ export class SlickTextClient {
    * {totals:{total,average},groups:[{name:'Messages',period:{...}}]}.
    * start/end "YYYY-MM-DD HH:mm:ss".
    */
-  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
     const res = await this.http.get('/analytics/messages', {
       params: { source, _source_id: sourceId, attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -437,7 +442,7 @@ export class SlickTextClient {
    *
    * start/end no formato "YYYY-MM-DD HH:mm:ss".
    */
-  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = 'America/New_York'): Promise<any> {
+  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
     const res = await this.http.get(`/analytics/workflows/${workflowId}/nodes/${nodeId}`, {
       params: { start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
