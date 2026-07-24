@@ -1882,6 +1882,112 @@ adminRouter.post('/clientes/:id/sms-campaign-map', asyncHandler(async (req: Requ
   res.json({ ok: true });
 }));
 
+/**
+ * Extrai o utm_campaign de uma URL de link da SlickText. As URLs vêm com o utm_campaign
+ * exato do checkout (ex: utm_campaign=Upsell-MS0001A-NeuromindPro-NovaConta630off) — a
+ * mesma string gravada em webhook_logs.utm_campaign quando a venda entra. new URL() pode
+ * falhar em URLs com placeholders {{email}}, então cai pro regex.
+ */
+function extractUtmCampaignFromUrl(url: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const utm = parsed.searchParams.get('utm_campaign');
+    if (utm) return utm;
+  } catch { /* URL inválida (placeholders etc.) — tenta regex abaixo */ }
+  const m = url.match(/[?&]utm_campaign=([^&\s]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// POST /admin/clientes/:id/sms-campaign-map/auto - Auto-vincula mensagens aos workflows/nodes da
+// SlickText SEM digitação manual. Como: o analytics de cada workflow (GET /analytics/workflows?
+// _workflow_id=X) devolve os LINKS do workflow, e cada link traz a URL completa do checkout — que
+// contém o utm_campaign exato da venda — e o _sub_source_id, que é o workflow_node_id da mensagem
+// que contém aquele link. Cruzando os dois, o vínculo utm_campaign -> (workflow, node, conta) sai
+// sozinho. Se o mesmo utm_campaign aparecer em MAIS de um node/workflow (link reutilizado), cai pro
+// vínculo de workflow inteiro (node null) pra não atribuir errado — e reporta a ambiguidade.
+adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const accounts = await getSlickTextAccounts(clientId);
+  if (accounts.length === 0) {
+    res.status(400).json({ error: 'SlickText não configurado para este cliente.' });
+    return;
+  }
+
+  // Janela larga de propósito: queremos descobrir TODOS os links já usados, não os do período.
+  const start = '2000-01-01 00:00:00';
+  const end = '2100-01-01 00:00:00';
+
+  type Found = { workflowId: number; nodeId: number | null; accountId: number | null; accountLabel: string; workflowName?: string };
+  const byUtm = new Map<string, Found[]>();
+  const errors: string[] = [];
+
+  for (const acc of accounts) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    let workflows: { workflow_id: number; name: string }[] = [];
+    try {
+      workflows = await st.getWorkflows();
+    } catch (err: any) {
+      errors.push(`workflows (${acc.label}): ${err.message}`);
+      continue;
+    }
+    // Sequencial por conta — respeita o rate limit de 8 req/s da SlickText.
+    for (const wf of workflows) {
+      try {
+        const analytics = await st.getWorkflowAnalytics(wf.workflow_id, start, end);
+        const links = analytics?.links || {};
+        for (const linkId of Object.keys(links)) {
+          const link = links[linkId];
+          const utm = extractUtmCampaignFromUrl(link?.url);
+          if (!utm) continue;
+          const nodeId = Number.isInteger(link?._sub_source_id) ? link._sub_source_id : null;
+          const entry: Found = { workflowId: wf.workflow_id, nodeId, accountId: acc.accountId, accountLabel: acc.label, workflowName: wf.name };
+          const list = byUtm.get(utm) || [];
+          list.push(entry);
+          byUtm.set(utm, list);
+        }
+      } catch (err: any) {
+        errors.push(`analytics ${wf.name} (${acc.label}): ${err.message}`);
+      }
+    }
+  }
+
+  const linked: { utm_campaign: string; workflow_id: number; workflow_node_id: number | null; account: string; ambiguous: boolean }[] = [];
+  for (const [utm, entries] of byUtm) {
+    // Dedup: o mesmo link pode aparecer mais de uma vez; o que importa é quantos
+    // (workflow, node, conta) DISTINTOS apontam pra esse utm.
+    const distinct = [...new Map(entries.map(e => [`${e.accountId}:${e.workflowId}:${e.nodeId}`, e])).values()];
+    let choice: Found;
+    let ambiguous = false;
+    if (distinct.length === 1) {
+      choice = distinct[0];
+    } else {
+      const workflowsDistinct = [...new Set(distinct.map(e => `${e.accountId}:${e.workflowId}`))];
+      if (workflowsDistinct.length === 1) {
+        // Mesmo workflow, nodes diferentes — o utm pertence ao workflow mas não dá pra cravar o
+        // node; vincula no nível do workflow (a UI avisa com ⚠ que pode somar mensagens).
+        choice = { ...distinct[0], nodeId: null };
+        ambiguous = true;
+      } else {
+        // Workflows/contas diferentes disputando o mesmo utm — não vincula pra não atribuir errado.
+        logger.warn(CTX, `Auto-vínculo: utm_campaign "${utm}" aparece em ${workflowsDistinct.length} workflows diferentes — pulado`);
+        continue;
+      }
+    }
+    await query(
+      `INSERT INTO sms_campaign_map (client_id, utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id, updated_at)
+       VALUES ($1, $2, $3, 'Workflow', $4, $5, NOW())
+       ON CONFLICT (client_id, utm_campaign)
+       DO UPDATE SET slicktext_campaign_id = $3, source_type = 'Workflow', workflow_node_id = $4, st_account_id = $5, updated_at = NOW()`,
+      [clientId, utm, choice.workflowId, choice.nodeId, choice.accountId]
+    );
+    linked.push({ utm_campaign: utm, workflow_id: choice.workflowId, workflow_node_id: choice.nodeId, account: choice.accountLabel, ambiguous });
+  }
+
+  logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados (${errors.length} erros)`);
+  res.json({ ok: true, linked, errors: errors.length ? errors : undefined });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo

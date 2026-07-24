@@ -1440,6 +1440,7 @@
                         <div class="sms-granular-sub" id="sms-granular-subtitle">Receita líquida atribuída via UTM · SMS</div>
                     </div>
                     <div class="sms-granular-controls">
+                        <button type="button" class="btn btn-outline" id="autoLinkBtn" onclick="autoLinkSmsCampaigns()" style="font-size:0.72rem; padding:0.4rem 0.8rem" title="Cruza automaticamente cada mensagem com o workflow/mensagem da SlickText pelo utm_campaign dos links — sem digitar ID nenhum."><i class="fas fa-wand-magic-sparkles"></i> Auto-vincular</button>
                         <div class="period-tabs" id="sms-granular-view">
                             <button type="button" class="period-btn active" data-view="mensagem">Por Mensagem</button>
                             <button type="button" class="period-btn" data-view="produto">Por Produto</button>
@@ -3498,6 +3499,55 @@
             }
 
             setTimeout(() => (document.getElementById('linkCampaignSelect') || input)?.focus(), 50);
+        }
+
+        // Auto-vínculo: o backend cruza o utm_campaign dos links de cada workflow da SlickText
+        // (todas as contas) com as mensagens da tabela — zero digitação de ID. Ver rota
+        // POST /sms-campaign-map/auto pro racional completo.
+        async function autoLinkSmsCampaigns() {
+            const btn = document.getElementById('autoLinkBtn');
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Vinculando...';
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/sms-campaign-map/auto`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.ok) {
+                    showModal('Erro', data.error || 'Falha no auto-vínculo.');
+                    return;
+                }
+                const linked = data.linked || [];
+                const ambiguous = linked.filter(l => l.ambiguous);
+                const rows = window.__smsGranularData?.rows || [];
+                const rowUtms = new Set(rows.map(r => r.utm_campaign));
+                const matchedVisible = linked.filter(l => rowUtms.has(l.utm_campaign));
+
+                // Descarta caches e recarrega os contadores das linhas visíveis já vinculadas
+                window.__smsSendsCache = {};
+                window.__creditosAutomacaoCache = {};
+                renderSmsGranular();
+                matchedVisible.forEach(l => {
+                    const row = rows.find(r => r.utm_campaign === l.utm_campaign);
+                    loadSmsCampaignSends(l.utm_campaign, row?.vendas || 0);
+                });
+
+                let body = `<b>${linked.length}</b> mensagem(ns) vinculada(s) automaticamente pelos links dos workflows, sendo <b>${matchedVisible.length}</b> visíveis na tabela deste período.`;
+                if (ambiguous.length > 0) {
+                    body += `<br><br>⚠ ${ambiguous.length} delas usam o mesmo link em mais de uma mensagem do workflow — ficaram vinculadas ao workflow inteiro (número pode somar mensagens juntas).`;
+                }
+                if (data.errors?.length) {
+                    body += `<br><br>Erros parciais:<br><small>${data.errors.map(escapeHtml).join('<br>')}</small>`;
+                }
+                if (linked.length === 0) {
+                    body = 'Nenhum utm_campaign encontrado nos links dos workflows da SlickText. Confere se as URLs das mensagens têm utm_campaign, ou vincula manualmente.';
+                }
+                showModal(linked.length > 0 ? '✅ Auto-vínculo concluído' : 'Nada vinculado', body);
+            } catch (e) {
+                showModal('Erro', 'Falha no auto-vínculo: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
         }
 
         function closeLinkCampaignModal() {
