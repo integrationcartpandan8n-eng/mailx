@@ -1914,13 +1914,18 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
     return;
   }
 
-  // Janela larga de propósito: queremos descobrir TODOS os links já usados, não os do período.
-  const start = '2000-01-01 00:00:00';
-  const end = '2100-01-01 00:00:00';
+  // Janela larga mas SEGURA: queremos descobrir todos os links já usados, não os do período.
+  // Fim fica abaixo de 2038 (limite de timestamp 32-bit — ano 2100 fazia o backend da SlickText
+  // devolver vazio SEM erro, foi a causa do primeiro "0 vinculados" em produção).
+  const todayRow = await queryOne<{ tomorrow: string }>(`SELECT (CURRENT_DATE + 1)::text as tomorrow`);
+  const start = '2015-01-01 00:00:00';
+  const end = `${todayRow?.tomorrow || '2037-12-31'} 23:59:59`;
 
   type Found = { workflowId: number; nodeId: number | null; accountId: number | null; accountLabel: string; workflowName?: string };
   const byUtm = new Map<string, Found[]>();
   const errors: string[] = [];
+  // Clareza de dados: reporta o que foi varrido, pra "0 vinculados" nunca mais ser um mistério.
+  const scanned: { workflow: string; account: string; links: number; linksComUtm: number }[] = [];
 
   for (const acc of accounts) {
     const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
@@ -1936,16 +1941,19 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
       try {
         const analytics = await st.getWorkflowAnalytics(wf.workflow_id, start, end);
         const links = analytics?.links || {};
+        let linksComUtm = 0;
         for (const linkId of Object.keys(links)) {
           const link = links[linkId];
           const utm = extractUtmCampaignFromUrl(link?.url);
           if (!utm) continue;
+          linksComUtm++;
           const nodeId = Number.isInteger(link?._sub_source_id) ? link._sub_source_id : null;
           const entry: Found = { workflowId: wf.workflow_id, nodeId, accountId: acc.accountId, accountLabel: acc.label, workflowName: wf.name };
           const list = byUtm.get(utm) || [];
           list.push(entry);
           byUtm.set(utm, list);
         }
+        scanned.push({ workflow: wf.name, account: acc.label, links: Object.keys(links).length, linksComUtm });
       } catch (err: any) {
         errors.push(`analytics ${wf.name} (${acc.label}): ${err.message}`);
       }
@@ -1984,8 +1992,8 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
     linked.push({ utm_campaign: utm, workflow_id: choice.workflowId, workflow_node_id: choice.nodeId, account: choice.accountLabel, ambiguous });
   }
 
-  logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados (${errors.length} erros)`);
-  res.json({ ok: true, linked, errors: errors.length ? errors : undefined });
+  logger.info(CTX, `Auto-vínculo client ${clientId}: ${linked.length} utm_campaigns vinculados, ${scanned.length} workflows varridos (${errors.length} erros)`);
+  res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas

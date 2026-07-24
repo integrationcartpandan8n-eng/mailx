@@ -3531,15 +3531,23 @@
                     loadSmsCampaignSends(l.utm_campaign, row?.vendas || 0);
                 });
 
-                let body = `<b>${linked.length}</b> mensagem(ns) vinculada(s) automaticamente pelos links dos workflows, sendo <b>${matchedVisible.length}</b> visíveis na tabela deste período.`;
-                if (ambiguous.length > 0) {
-                    body += `<br><br>⚠ ${ambiguous.length} delas usam o mesmo link em mais de uma mensagem do workflow — ficaram vinculadas ao workflow inteiro (número pode somar mensagens juntas).`;
+                const scanned = data.scanned || [];
+                const totalLinks = scanned.reduce((s, w) => s + (w.links || 0), 0);
+                let body;
+                if (linked.length > 0) {
+                    body = `<b>${linked.length}</b> mensagem(ns) vinculada(s) automaticamente pelos links dos workflows, sendo <b>${matchedVisible.length}</b> visíveis na tabela deste período.`;
+                    if (ambiguous.length > 0) {
+                        body += `<br><br>⚠ ${ambiguous.length} delas usam o mesmo link em mais de uma mensagem do workflow — ficaram vinculadas ao workflow inteiro (número pode somar mensagens juntas).`;
+                    }
+                } else {
+                    body = `Nenhum utm_campaign encontrado. Varremos <b>${scanned.length}</b> workflow(s) com <b>${totalLinks}</b> link(s) no total.`;
+                    if (scanned.length > 0) {
+                        body += `<br><br><small>${scanned.map(w => `${escapeHtml(w.workflow)} (${escapeHtml(w.account)}): ${w.links} link(s), ${w.linksComUtm} com utm_campaign`).join('<br>')}</small>`;
+                    }
+                    body += '<br><br>Se os links existem na SlickText mas não aparecem aqui, me avisa que investigamos juntos.';
                 }
                 if (data.errors?.length) {
                     body += `<br><br>Erros parciais:<br><small>${data.errors.map(escapeHtml).join('<br>')}</small>`;
-                }
-                if (linked.length === 0) {
-                    body = 'Nenhum utm_campaign encontrado nos links dos workflows da SlickText. Confere se as URLs das mensagens têm utm_campaign, ou vincula manualmente.';
                 }
                 showModal(linked.length > 0 ? '✅ Auto-vínculo concluído' : 'Nada vinculado', body);
             } catch (e) {
