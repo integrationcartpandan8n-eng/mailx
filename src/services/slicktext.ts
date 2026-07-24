@@ -26,6 +26,35 @@ export interface SlickTextAnalytics {
   campaigns?: any;
 }
 
+/**
+ * Semáforo por marca: limita requests simultâneos à SlickText por brand. Achado da
+ * auditoria: várias contagens por período disparadas juntas (cada uma com ~35 sondas)
+ * disputavam o rate limit de 8 req/s — 429s em cascata, linhas levando 30-90s. Com o
+ * gate, as sondas fluem de forma ordenada mesmo com várias contagens em paralelo.
+ */
+const brandGates = new Map<string, { active: number; queue: (() => void)[] }>();
+const MAX_CONCURRENT_PER_BRAND = 4;
+
+async function acquireBrandSlot(brandId: string): Promise<() => void> {
+  let gate = brandGates.get(brandId);
+  if (!gate) {
+    gate = { active: 0, queue: [] };
+    brandGates.set(brandId, gate);
+  }
+  if (gate.active >= MAX_CONCURRENT_PER_BRAND) {
+    await new Promise<void>((resolve) => gate!.queue.push(resolve));
+  }
+  gate.active++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    gate!.active--;
+    const next = gate!.queue.shift();
+    if (next) next();
+  };
+}
+
 export class SlickTextClient {
   private http: AxiosInstance;
   private brandId: string;
@@ -57,13 +86,29 @@ export class SlickTextClient {
       },
     });
 
-    // Rate limit: 8 req/s for V2 — retry on 429
+    // Semáforo por marca — ver acquireBrandSlot (achado da auditoria: sondas em paralelo
+    // esgotavam o rate limit e travavam contagens por 30-90s).
+    this.http.interceptors.request.use(async (config: any) => {
+      config.__releaseSlot = await acquireBrandSlot(numericId);
+      return config;
+    });
+
+    // Rate limit: 8 req/s for V2 — retry com backoff em 429 (até 3 tentativas; a única
+    // tentativa de antes não bastava quando várias contagens rodavam juntas).
     this.http.interceptors.response.use(
-      (res) => res,
+      (res) => {
+        (res.config as any).__releaseSlot?.();
+        return res;
+      },
       async (error) => {
-        if (error.response?.status === 429) {
-          logger.warn(CTX, 'Rate limited — retrying in 1s');
-          await new Promise((r) => setTimeout(r, 1000));
+        error.config?.__releaseSlot?.();
+        const attempt = (error.config.__retry429 || 0) + 1;
+        if (error.response?.status === 429 && attempt <= 3) {
+          const waitMs = 1000 * attempt;
+          logger.warn(CTX, `Rate limited — retry ${attempt}/3 em ${waitMs}ms`);
+          await new Promise((r) => setTimeout(r, waitMs));
+          error.config.__retry429 = attempt;
+          delete error.config.__releaseSlot; // o retry adquire um slot novo no interceptor
           return this.http.request(error.config);
         }
         throw error;
