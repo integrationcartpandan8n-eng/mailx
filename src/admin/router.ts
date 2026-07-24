@@ -1823,6 +1823,16 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     }))
     .sort((a, b) => b.receita_liquida - a.receita_liquida);
 
+  // Achado da auditoria (estado inconsistente): a célula de envios nascia como "Ver envios"
+  // e só virava "Vincular" depois de uma consulta — parecia dado sumindo entre recargas.
+  // Marcando cada linha com has_link, o frontend renderiza "Vincular" direto pras não
+  // vinculadas, sem estado intermediário.
+  const linkedRows = await query<{ utm_campaign: string }>(
+    `SELECT utm_campaign FROM sms_campaign_map WHERE client_id = $1`, [clientId]
+  );
+  const linkedSet = new Set(linkedRows.map(r => r.utm_campaign));
+  const rowsWithLink = rows.map(r => ({ ...r, has_link: linkedSet.has(r.utm_campaign) }));
+
   const total_vendas_sms = rows.reduce((sum, r) => sum + r.vendas, 0);
   const total_receita_liquida_sms = rows.reduce((sum, r) => sum + r.receita_liquida, 0);
 
@@ -1847,7 +1857,7 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     total_vendas_sms,
     total_receita_liquida_sms,
     vendas_sem_rastreio,
-    rows,
+    rows: rowsWithLink,
   });
 }));
 
@@ -2174,6 +2184,10 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           scope: 'node',
           // Com período ativo e contagem ok: count é DO PERÍODO. Fallback: vitalício rotulado.
           lifetime: !(periodActive && periodCount !== null),
+          // Achado da auditoria: quando a contagem por período falha (mesmo após retry) e
+          // caímos no vitalício, o frontend precisa ESTAMPAR que foi falha — não deixar o
+          // número passar por um dado qualquer com rótulo discreto.
+          periodFallback: periodActive && periodCount === null,
           count: periodActive && periodCount !== null ? periodCount : (t.messages ?? 0),
           periodCredits,
           clicks: clicksPeriod, // cliques DO PERÍODO (via links) — null quando indisponível

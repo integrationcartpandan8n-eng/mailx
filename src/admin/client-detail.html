@@ -3392,6 +3392,12 @@
             const cached = window.__smsSendsCache[utmCampaign];
             const id = utmToDomId(utmCampaign);
             if (!cached) {
+                // Linha sabidamente sem vínculo (has_link do /sms-granular): "Vincular" direto,
+                // sem passar por "Ver envios" — achado da auditoria: a alternância entre os dois
+                // estados em recargas parecia dado sumindo.
+                if (window.__smsLinkedMap && window.__smsLinkedMap[utmCampaign] === false) {
+                    return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-link-envios="${encodeURIComponent(utmCampaign)}">Vincular</button></div>`;
+                }
                 return `<div class="rank-envios" id="${id}"><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}">Ver envios</button></div>`;
             }
             if (cached === 'loading') {
@@ -3419,9 +3425,18 @@
             // por node ignora datas — confirmado). Mostrar rotulado, sem razão envios/venda
             // contra as vendas do período (janelas diferentes).
             if (cached.lifetime) {
-                const title = `SlickText: ${sourceName.replace(/"/g, '&quot;')} — envios são o total desde a criação da mensagem (a API não filtra envios POR MENSAGEM por data; o total do fluxo no período aparece em Créditos por Automação). Cliques abaixo são do período selecionado.`;
-                return `<div class="rank-envios" id="${id}" title="${title}">
-                    <span class="envios-count">${cached.count.toLocaleString('pt-BR')}<small class="envios-clicks-muted">envios (vitalício)</small>${clicksHtml}</span>
+                // periodFallback = a contagem por período FALHOU (mesmo após retry) — estampar
+                // como falha em cor de alerta, com botão de retentar. Achado da auditoria: o
+                // rótulo discreto deixava o vitalício passar por número do período.
+                if (cached.periodFallback) {
+                    const tipFalha = 'A contagem de envios DESTE período falhou (instabilidade na API da SlickText) — o número mostrado é o total vitalício da mensagem, NÃO o do período. Clique em recarregar pra tentar de novo.';
+                    return `<div class="rank-envios" id="${id}">
+                        <span class="envios-count" style="color:var(--warning)"><i class="fas fa-triangle-exclamation" style="font-size:0.7rem; margin-right:0.25rem"></i>${cached.count.toLocaleString('pt-BR')} <span class="kpi-tip" tabindex="0" data-tip="${tipFalha}">ⓘ</span><small style="color:var(--warning)">vitalício — período falhou</small><small><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}" style="margin-top:0.25rem">recarregar</button></small>${clicksHtml}</span>
+                    </div>`;
+                }
+                const tipVital = `SlickText: ${sourceName.replace(/"/g, '&quot;')} — envios são o total desde a criação da mensagem (a API não filtra envios POR MENSAGEM por data; o total do fluxo no período aparece em Créditos por Automação). Cliques abaixo são do período selecionado.`;
+                return `<div class="rank-envios" id="${id}">
+                    <span class="envios-count">${cached.count.toLocaleString('pt-BR')} <span class="kpi-tip" tabindex="0" data-tip="${tipVital}">ⓘ</span><small class="envios-clicks-muted">envios (vitalício)</small>${clicksHtml}</span>
                 </div>`;
             }
 
@@ -3437,9 +3452,11 @@
                 ? `<i class="fas fa-triangle-exclamation envios-scope-warning" title="Vinculado ao workflow inteiro (${cached.workflowName ? escapeHtml(cached.workflowName) : 'sem nome'}) — envios/cliques do fluxo TODO no período, pode somar mais de uma mensagem." style="color:var(--warning); margin-left:0.3rem; cursor:help; font-size:0.7rem"></i>`
                 : '';
 
-            const countTitle = sourceName ? `SlickText: ${sourceName.replace(/"/g, '&quot;')} — envios no período selecionado` : 'Envios no período selecionado';
-            return `<div class="rank-envios" id="${id}" title="${countTitle}">
-                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''}${scopeWarningHtml}${ratioHtml}${clicksHtml}</span>
+            // Tooltip estilizado (.kpi-tip) em vez do title nativo — achado da auditoria:
+            // o title exige hover parado de ~1-2s e parecia simplesmente não existir.
+            const countTip = sourceName ? `SlickText: ${sourceName.replace(/"/g, '&quot;')} — envios no período selecionado` : 'Envios no período selecionado';
+            return `<div class="rank-envios" id="${id}">
+                <span class="envios-count">${cached.count.toLocaleString('pt-BR')}${cached.capped ? '+' : ''} <span class="kpi-tip" tabindex="0" data-tip="${countTip}">ⓘ</span>${scopeWarningHtml}${ratioHtml}${clicksHtml}</span>
             </div>`;
         }
 
@@ -4034,6 +4051,10 @@
                 }
 
                 window.__smsGranularData = data;
+                // utm -> tem vínculo? (has_link do backend) — decide "Vincular" vs "Ver envios"
+                // sem estado intermediário (achado da auditoria).
+                window.__smsLinkedMap = {};
+                (data.rows || []).forEach(r => { window.__smsLinkedMap[r.utm_campaign] = r.has_link !== false; });
                 window.__creditosAutomacaoCache = {}; // período mudou — descarta cálculo anterior
 
                 // Envios/cliques também são POR PERÍODO — manter o cache antigo misturaria
