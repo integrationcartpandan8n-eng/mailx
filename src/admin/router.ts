@@ -2167,6 +2167,42 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/list-id-probe - DIAGNÓSTICO TEMPORÁRIO: Conversão por
+// Segmento (SMS) voltou o MESMO total de leads pra Carrinho Abandonado e Compradores — sinal de
+// que o filtro por lista de /analytics/contacts não está sendo aplicado (a SlickText ignora
+// parâmetro desconhecido em silêncio, mesmo padrão do bug de datas encontrado antes). Testa
+// "list_id" (usado hoje) vs "_list_id" (convenção confirmada em todo o resto da API: _source_id,
+// _link_id, _workflow_id, _sub_source_id, _link_source_id) contra as listas reais do cliente.
+// Remover após o diagnóstico.
+adminRouter.get('/clientes/:id/sms-debug/list-id-probe', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const accounts = await getSlickTextAccounts(clientId);
+  if (accounts.length === 0) { res.status(400).json({ error: 'SlickText não configurado.' }); return; }
+
+  const kits = await query<{ name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+    `SELECT name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`, [clientId]
+  );
+  const listIds: { kit: string; type: string; id: number }[] = [];
+  kits.forEach(k => {
+    if (k.st_list_abandono_id) listIds.push({ kit: k.name, type: 'abandono', id: parseInt(k.st_list_abandono_id) });
+    if (k.st_list_compra_id) listIds.push({ kit: k.name, type: 'compra', id: parseInt(k.st_list_compra_id) });
+  });
+
+  const st = new SlickTextClient(accounts[0].st_api_token, accounts[0].st_brand_id);
+  const http = (st as any).http;
+  const out: any[] = [];
+  for (const l of listIds.slice(0, 6)) {
+    const [a, b, c] = await Promise.all([
+      http.get('/analytics/contacts', { params: { list_id: l.id } }).then((r: any) => r.data?.totals?.total ?? r.data?.total ?? null).catch((e: any) => `erro: ${e.message}`),
+      http.get('/analytics/contacts', { params: { _list_id: l.id } }).then((r: any) => r.data?.totals?.total ?? r.data?.total ?? null).catch((e: any) => `erro: ${e.message}`),
+      http.get('/analytics/contacts', {}).then((r: any) => r.data?.totals?.total ?? r.data?.total ?? null).catch((e: any) => `erro: ${e.message}`),
+    ]);
+    out.push({ kit: l.kit, type: l.type, list_id: l.id, com_list_id: a, com__list_id: b, sem_filtro: c });
+  }
+
+  res.json({ results: out });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
