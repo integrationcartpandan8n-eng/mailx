@@ -3741,7 +3741,14 @@
                 </div>`;
             }
             if (cached.count == null) {
-                return `<div class="rank-envios" id="${id}"><span class="envios-muted" title="${(cached.message || '').replace(/"/g, '&quot;')}">indisponível</span></div>`;
+                // O motivo ficava só num title nativo, que exige hover parado e passa
+                // desapercebido — mesma lição do tooltip cortado. Agora vem estampado em cor de
+                // alerta, com o motivo no tooltip estilizado e um botão pra tentar de novo: falha
+                // de consulta e limitação real da API não podem parecer a mesma coisa.
+                const motivo = (cached.message || 'A SlickText não retornou a contagem de envios desta mensagem.').replace(/"/g, '&quot;');
+                return `<div class="rank-envios" id="${id}">
+                    <span class="envios-count" style="color:var(--warning)"><i class="fas fa-triangle-exclamation" style="font-size:0.7rem; margin-right:0.25rem"></i>envios indisponíveis <span class="kpi-tip" tabindex="0" data-tip="${motivo}">ⓘ</span><small><button type="button" class="envios-btn" data-load-envios="${encodeURIComponent(utmCampaign)}" data-vendas="${vendas || 0}" style="margin-top:0.25rem">tentar de novo</button></small></span>
+                </div>`;
             }
             const sourceName = cached.nodeName || cached.workflowName || '';
 
