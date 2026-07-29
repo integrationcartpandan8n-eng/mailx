@@ -3173,7 +3173,20 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
       ]);
 
       if (mapping.workflow_node_id) {
-        const data = await st.getWorkflowNodeAnalytics(workflowId, mapping.workflow_node_id, start, end);
+        // Uma falha aqui NÃO pode apagar a linha: essa chamada só traz o total vitalício e uma
+        // estimativa que acelera a contagem por período — a contagem em si é independente. Antes,
+        // sem proteção, qualquer instabilidade caía no catch geral e a mensagem inteira aparecia
+        // como 'indisponível' (aconteceu em produção com a mensagem de maior receita da Conta 30,
+        // e voltou ao normal só com um recarregar). Duas tentativas e segue sem a estimativa.
+        let data: any = null;
+        for (let tentativa = 1; tentativa <= 2 && data === null; tentativa++) {
+          try {
+            data = await st.getWorkflowNodeAnalytics(workflowId, mapping.workflow_node_id, start, end);
+          } catch (err: any) {
+            logger.warn(CTX, `getWorkflowNodeAnalytics falhou (node ${mapping.workflow_node_id}, tentativa ${tentativa}/2): ${err.message}`);
+            if (tentativa === 1) await new Promise(r => setTimeout(r, 1200));
+          }
+        }
         const t = data?.totals || {};
 
         // Cliques do PERÍODO desta mensagem: soma os groups de cliques cujos nomes batem com
@@ -3233,15 +3246,21 @@ adminRouter.get('/clientes/:id/sms-campaign-sends', asyncHandler(async (req: Req
           // caímos no vitalício, o frontend precisa ESTAMPAR que foi falha — não deixar o
           // número passar por um dado qualquer com rótulo discreto.
           periodFallback: periodActive && periodCount === null,
-          count: periodActive && periodCount !== null ? periodCount : (t.messages ?? 0),
+          // Sem período ativo e sem o vitalício (chamada falhou), count fica null e a linha diz
+          // 'indisponível' com o motivo — melhor que exibir 0 como se não houvesse envio.
+          count: periodActive && periodCount !== null ? periodCount : (t.messages ?? null),
           periodCredits,
           clicks: clicksPeriod, // cliques DO PERÍODO (via links) — null quando indisponível
           clicksIsPeriod: clicksPeriod !== null,
-          lifetimeClicks: t.clicks ?? 0,
+          lifetimeClicks: t.clicks ?? null,
+          nodeAnalyticsFalhou: data === null,
           clicksFieldFound: clicksPeriod !== null,
           capped: periodCapped,
           pages: 1,
           nodeName: data?.workflow_node?.name,
+          message: data === null
+            ? 'A SlickText não respondeu o resumo desta mensagem (instabilidade). Os envios do período podem ainda aparecer; clique em tentar de novo para recarregar.'
+            : undefined,
           workflowId,
           workflowPeriodCount, // envios do WORKFLOW inteiro no período (esse sim filtrado)
         });
