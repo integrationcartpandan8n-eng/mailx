@@ -3016,6 +3016,25 @@
                     <td>${r.taxaHtml}</td>
                 </tr>
             `).join('');
+
+            // Nota de reconciliação: os KPIs no topo da aba contam TODOS os produtos, essa
+            // tabela só os com lista/tag vinculada. Sem essa linha, o mesmo indicador aparece
+            // com dois números na mesma tela e parece erro (achado da auditoria).
+            const foraAb = cs.carrinho_abandonado.vendas_fora_escopo || 0;
+            const foraComp = cs.compradores.vendas_fora_escopo || 0;
+            if (foraAb > 0 || foraComp > 0) {
+                const partes = [];
+                if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s)`);
+                if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões)`);
+                tbody.insertAdjacentHTML('beforeend', `
+                    <tr>
+                        <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                            <i class="fas fa-circle-info" style="color:var(--warning); margin-right:0.35rem"></i>
+                            ${partes.join(' e ')} do período não aparecem aqui — são de produtos sem lista/tag vinculada, que também ficam fora da contagem de leads. Por isso os KPIs no topo da aba mostram números maiores.
+                        </td>
+                    </tr>
+                `);
+            }
         }
 
         window.__clientTabCharts = window.__clientTabCharts || {};
@@ -3362,6 +3381,7 @@
                     // Faturamento total do CLIENTE (todos os canais, mesmo período) + representatividade
                     // do SMS nesse total — seção 3.1.2/3.2 da spec original, aplicada por canal.
                     { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                    { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (r.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas SMS.' },
                     { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento SMS ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
                 ].map(smsKpiCardTip).join('');
 
@@ -4195,6 +4215,7 @@
                 { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
                 { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
                 { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (em.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas de Email.' },
                 { icon: 'fa-percentage purple', label: 'Representatividade Email', value: `${(em.representatividade_email ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento Email ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
             ].map(k => `
                 <div class="kpi-card">
