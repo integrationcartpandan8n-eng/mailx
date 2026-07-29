@@ -2641,6 +2641,25 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
     return { vendas: sel.reduce((a, l) => a + l.vendas, 0), receita: Number(sel.reduce((a, l) => a + l.receita, 0).toFixed(2)) };
   };
 
+  // Prova decisiva de onde está o problema quando um canal mostra zero: olha o SISTEMA INTEIRO
+  // (todos os clientes, todo o histórico). Se nenhuma venda em nenhum cliente chegou com medium
+  // de email, o extrator/atribuição não é o culpado — as vendas não chegam marcadas, e o ajuste
+  // é no link do email. Se OUTRO cliente tem, o caminho é provado ponta a ponta e o problema é
+  // só na marcação deste. Só contagens agregadas, nada por cliente.
+  const mediumsNoSistema = await query<{ utm_medium: string | null; vendas: string; clientes: string }>(`
+    SELECT utm_medium, COUNT(*) AS vendas, COUNT(DISTINCT client_id) AS clientes
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND utm_medium IS NOT NULL
+    GROUP BY utm_medium ORDER BY COUNT(*) DESC LIMIT 30
+  `);
+  const emailNoSistema = await queryOne<{ vendas: string; clientes: string }>(`
+    SELECT COUNT(*) AS vendas, COUNT(DISTINCT client_id) AS clientes
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND (COALESCE(utm_medium, '') ILIKE '%email%' OR COALESCE(tracking_code, '') ILIKE '%autoemail%')
+  `);
+
   res.json({
     periodo: { ativo: period.isToday || !!(period.from && period.to), de: period.from ?? null, ate: period.to ?? null },
     resumo: {
@@ -2659,6 +2678,17 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
       .slice(0, 15)
       .map(l => ({ utm_source: l.utm_source, utm_medium: l.utm_medium, vendas: l.vendas, receita: l.receita })),
     combinacoes: linhas,
+    // Diagnóstico de causa: o canal email nunca recebeu venda marcada em NENHUM cliente?
+    email_no_sistema_inteiro: {
+      vendas_com_medium_de_email: parseInt(emailNoSistema?.vendas || '0'),
+      clientes_com_venda_de_email: parseInt(emailNoSistema?.clientes || '0'),
+      veredito: parseInt(emailNoSistema?.vendas || '0') > 0
+        ? 'O caminho funciona ponta a ponta em outro lugar — o problema é a marcação dos links DESTE cliente.'
+        : 'Nenhuma venda de email marcada em nenhum cliente: os links de email não estão carregando UTM. Não é leitura, é marcação na origem.',
+    },
+    todos_os_mediums_do_sistema: mediumsNoSistema.map(r => ({
+      utm_medium: r.utm_medium, vendas: parseInt(r.vendas), clientes: parseInt(r.clientes),
+    })),
   });
 }));
 
