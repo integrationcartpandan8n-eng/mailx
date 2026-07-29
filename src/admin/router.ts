@@ -1224,6 +1224,78 @@ adminRouter.patch('/clientes/:id/st-credentials', asyncHandler(async (req: Reque
   res.json({ ok: true });
 }));
 
+interface AcAccountRef { accountId: number | null; label: string; ac_api_url: string; ac_api_key: string; }
+
+/**
+ * Todas as contas de ActiveCampaign de um cliente: a principal (clients.ac_api_url/ac_api_key)
+ * mais as adicionais de client_activecampaign_accounts. Mesmo desenho de getSlickTextAccounts —
+ * confirmado com o Murilo que um cliente pode ter mais de uma conta, com divisão de
+ * responsabilidade entre elas (ex: uma cuidando de compra aprovada e outra de abandono).
+ */
+async function getActiveCampaignAccounts(clientId: number | string): Promise<AcAccountRef[]> {
+  const client = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
+    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
+  );
+  const extra = await query<{ id: number; label: string | null; ac_api_url: string; ac_api_key: string }>(
+    `SELECT id, label, ac_api_url, ac_api_key FROM client_activecampaign_accounts WHERE client_id = $1 ORDER BY id`,
+    [clientId]
+  );
+
+  const accounts: AcAccountRef[] = [];
+  if (client?.ac_api_url && client?.ac_api_key) {
+    accounts.push({ accountId: null, label: 'Principal', ac_api_url: client.ac_api_url, ac_api_key: client.ac_api_key });
+  }
+  for (const row of extra) {
+    accounts.push({ accountId: row.id, label: row.label || `Conta ${row.id}`, ac_api_url: row.ac_api_url, ac_api_key: row.ac_api_key });
+  }
+  return accounts;
+}
+
+// GET /admin/clientes/:id/ac-accounts - Lista contas ActiveCampaign adicionais (a principal fica
+// em clients.ac_api_url/ac_api_key). Chave mascarada na resposta.
+adminRouter.get('/clientes/:id/ac-accounts', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const rows = await query<{ id: number; label: string | null; ac_api_url: string; ac_api_key: string }>(
+    `SELECT id, label, ac_api_url, ac_api_key FROM client_activecampaign_accounts WHERE client_id = $1 ORDER BY id`,
+    [clientId]
+  );
+  res.json({
+    accounts: rows.map(r => ({
+      id: r.id,
+      label: r.label,
+      ac_api_url: r.ac_api_url,
+      ac_api_key_masked: r.ac_api_key ? `${r.ac_api_key.slice(0, 6)}...${r.ac_api_key.slice(-4)}` : null,
+    })),
+  });
+}));
+
+// POST /admin/clientes/:id/ac-accounts - Adiciona uma conta ActiveCampaign ADICIONAL.
+adminRouter.post('/clientes/:id/ac-accounts', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const { label, ac_api_url, ac_api_key } = req.body;
+
+  if (!ac_api_url || !ac_api_key) {
+    res.status(400).json({ error: 'ac_api_url e ac_api_key são obrigatórios' });
+    return;
+  }
+
+  const row = await queryOne<{ id: number }>(
+    `INSERT INTO client_activecampaign_accounts (client_id, label, ac_api_url, ac_api_key)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [clientId, label || null, String(ac_api_url).replace(/\/+$/, ''), ac_api_key]
+  );
+  logger.info(CTX, `Client ${clientId}: conta ActiveCampaign adicional criada (id=${row?.id})`);
+  res.json({ ok: true, id: row?.id });
+}));
+
+// DELETE /admin/clientes/:id/ac-accounts/:accountId - Remove uma conta ActiveCampaign adicional.
+adminRouter.delete('/clientes/:id/ac-accounts/:accountId', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string);
+  const accountId = parseInt(req.params.accountId as string);
+  await query(`DELETE FROM client_activecampaign_accounts WHERE id = $1 AND client_id = $2`, [accountId, clientId]);
+  res.json({ ok: true });
+}));
+
 // GET /admin/clientes/:id/st-accounts - Lista contas SlickText adicionais do cliente (além da
 // principal, que fica em clients.st_api_token/st_brand_id). Token mascarado na resposta.
 adminRouter.get('/clientes/:id/st-accounts', asyncHandler(async (req: Request, res: Response) => {
@@ -2226,47 +2298,50 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
   const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
     `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
   );
-  const acTagCheck: any[] = [];
-  // Retrato da conta de AC REGISTRADA: se as tags estiverem em outra conta, aqui aparece vazio ou
-  // com tags de outros produtos — é o que distingue "tag não criada" de "conta errada cadastrada".
-  let acConta: any = { registrada: false };
-  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
-    const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
+  // Varre TODAS as contas de ActiveCampaign do cliente. O objetivo é ver a divisão real: qual
+  // conta tem quais tags, pra saber se uma cuida de compra aprovada e outra de abandono.
+  const acAccounts = await getActiveCampaignAccounts(clientId);
+  const contasAc: any[] = [];
+  for (const acc of acAccounts) {
+    const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
     const acHttp = (ac as any).http;
     try {
       const [tagsRes, listsRes] = await Promise.all([
         acHttp.get('/tags', { params: { limit: 100 } }),
         acHttp.get('/lists', { params: { limit: 100 } }),
       ]);
-      acConta = {
-        registrada: true,
-        url: acCreds.ac_api_url,
-        chave: `...${String(acCreds.ac_api_key).slice(-6)}`,
-        tags_total: tagsRes.data?.meta?.total ?? (tagsRes.data?.tags?.length ?? 0),
-        tags_amostra: (tagsRes.data?.tags ?? []).map((t: any) => t.tag).slice(0, 40),
-        listas: (listsRes.data?.lists ?? []).map((l: any) => l.name).slice(0, 40),
-      };
+      const nomesTags: string[] = (tagsRes.data?.tags ?? []).map((t: any) => t.tag);
+      contasAc.push({
+        conta: acc.label,
+        url: acc.ac_api_url,
+        chave: `...${acc.ac_api_key.slice(-6)}`,
+        tags_total: tagsRes.data?.meta?.total ?? nomesTags.length,
+        // Quantas tags parecem de compra vs de abandono — é o que revela a divisão entre contas.
+        tags_com_compra: nomesTags.filter(n => /compra|purchase|buy|aprovad/i.test(n)).length,
+        tags_com_abandono: nomesTags.filter(n => /abandon|cart/i.test(n)).length,
+        tags_amostra: nomesTags.slice(0, 40),
+        listas: (listsRes.data?.lists ?? []).map((l: any) => l.name).slice(0, 30),
+      });
     } catch (err: any) {
-      acConta = { registrada: true, url: acCreds.ac_api_url, erro: err.message };
+      contasAc.push({ conta: acc.label, url: acc.ac_api_url, erro: err.message });
     }
   }
-  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
-    const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
-    for (const k of kits.filter(k => k.enabled)) {
-      const nomeCompra = `[${k.name}] Compra Aprovada`;
-      const nomeAbandono = `[${k.name}] Abandono de Carrinho`;
+
+  // Para cada produto ativado, procura as tags esperadas em CADA conta — mostra em qual delas
+  // cada tag vive (ou se não existe em nenhuma).
+  const acTagCheck: any[] = [];
+  for (const k of kits.filter(k => k.enabled)) {
+    const achados: any = { produto: k.name, compra_em: [], abandono_em: [] };
+    for (const acc of acAccounts) {
+      const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
       const [tc, ta] = await Promise.all([
-        ac.findTagByName(nomeCompra).catch(() => null),
-        ac.findTagByName(nomeAbandono).catch(() => null),
+        ac.findTagByName(`[${k.name}] Compra Aprovada`).catch(() => null),
+        ac.findTagByName(`[${k.name}] Abandono de Carrinho`).catch(() => null),
       ]);
-      acTagCheck.push({
-        produto: k.name,
-        tag_compra_existe_no_ac: !!tc,
-        tag_abandono_existe_no_ac: !!ta,
-        id_compra: tc?.id ?? null,
-        id_abandono: ta?.id ?? null,
-      });
+      if (tc) achados.compra_em.push({ conta: acc.label, id: tc.id });
+      if (ta) achados.abandono_em.push({ conta: acc.label, id: ta.id });
     }
+    acTagCheck.push(achados);
   }
 
   const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2303,7 +2378,7 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
         && r.listas_candidatas.length > 0).length,
       listas_lidas_da_conta: stListNames.length,
     },
-    ac_conta: acConta,
+    contas_ac: contasAc,
     tags_ac: acTagCheck,
     listas_da_conta: stListNames,
     kits: rows,
