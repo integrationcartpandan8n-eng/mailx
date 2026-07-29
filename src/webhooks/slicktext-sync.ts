@@ -234,6 +234,13 @@ export async function syncSlickTextAbandonedCart(
  * Não cria nada no SlickText — só lê e persiste o ID localmente (compatível com METRICS_ONLY).
  * Retorna a lista de kits que continuam sem correspondência (pra sinalizar no dashboard).
  */
+/** Reduz um nome a letras e dígitos minúsculos, pra comparar "Night Calm" com "NightCalm". */
+function normalizeForMatch(s: string): string {
+  return s
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // tira acento
+    .toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 export async function autoLinkSlickTextLists(
   st: SlickTextClient,
   clientId: number
@@ -268,14 +275,21 @@ export async function autoLinkSlickTextLists(
     let abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
     let compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
 
+    // Comparação normalizada (sem espaço, hífen, pontuação ou caixa): as listas são nomeadas por
+    // FAMÍLIA de produto ("[NeuroMind Pro]") e os produtos vêm do gateway por SKU
+    // ("M1 - NeuroMind Pro (2 Bottles)"), então o casamento é por substring. Sem normalizar, uma
+    // lista "[Night Calm]" não casaria com o produto "UP2 - NightCalm" — mesma família, escrita
+    // diferente. Normalizar remove essa classe inteira de falso negativo.
+    const kitKey = normalizeForMatch(kit.name);
+
     if (!abandonoId) {
       for (const [product, listId] of abandonoByProduct) {
-        if (kit.name.toLowerCase().includes(product.toLowerCase())) { abandonoId = listId; break; }
+        if (kitKey.includes(normalizeForMatch(product))) { abandonoId = listId; break; }
       }
     }
     if (!compraId) {
       for (const [product, listId] of compraByProduct) {
-        if (kit.name.toLowerCase().includes(product.toLowerCase())) { compraId = listId; break; }
+        if (kitKey.includes(normalizeForMatch(product))) { compraId = listId; break; }
       }
     }
 
