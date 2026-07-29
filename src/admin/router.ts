@@ -1534,13 +1534,16 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   // ── Conversão por Segmento ISOLADA por canal (pedido do Murilo: a spec pede a mesma
   // divisão Carrinho Abandonado/Compradores por dentro de cada aba, não só no consolidado). ──
-  // SMS: vendas filtradas por SQL_MAILX_SMS — leads já são os mesmos do SlickText acima
-  // (a lista É a mesma usada na conversão combinada, não tem separação de canal na origem).
+  // Vendas escopadas aos MESMOS produtos que entram nos Leads (pedido do Murilo: sem isso a
+  // Taxa comparava leads de só alguns produtos com vendas de TODOS — inflava a taxa). Leads já
+  // exclui produto sem lista/tag vinculada (ver abandonoIds/compraIds acima); aqui o filtro
+  // espelha isso via product_name = kits.name (mesma correspondência usada em top_products).
   const smsSegParams1: (string | number)[] = [clientId];
   const smsSegPeriod1 = periodSql(period, smsSegParams1);
   const smsSegRecoveries = await queryOne<{ count: string }>(`
     SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_SMS} AND ${SQL_IS_RECOVERY}
+      AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND st_list_abandono_id IS NOT NULL)
       ${smsSegPeriod1 ? `AND ${smsSegPeriod1}` : ''}
   `, smsSegParams1);
   const smsSegParams2: (string | number)[] = [clientId];
@@ -1548,6 +1551,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const smsSegSales = await queryOne<{ count: string }>(`
     SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
       AND ${SQL_MAILX_SMS}
+      AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND st_list_compra_id IS NOT NULL)
       ${smsSegPeriod2 ? `AND ${smsSegPeriod2}` : ''}
   `, smsSegParams2);
   const smsSegRecoveryCount = parseInt(smsSegRecoveries?.count || '0');
@@ -1593,6 +1597,27 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       emailLeadsWarning = 'ActiveCampaign não configurado — Leads de Carrinho Abandonado e Compradores indisponíveis';
     }
   }
+
+  // Vendas de Email escopadas aos mesmos produtos que entram nos Leads acima (mesmo motivo do
+  // SMS: sem isso a Taxa compara leads de só alguns produtos com vendas de TODOS).
+  const emailSegParams1: (string | number)[] = [clientId];
+  const emailSegPeriod1 = periodSql(period, emailSegParams1);
+  const emailSegRecoveries = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL} AND ${SQL_IS_RECOVERY}
+      AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND ac_tag_abandono_id IS NOT NULL)
+      ${emailSegPeriod1 ? `AND ${emailSegPeriod1}` : ''}
+  `, emailSegParams1);
+  const emailSegParams2: (string | number)[] = [clientId];
+  const emailSegPeriod2 = periodSql(period, emailSegParams2);
+  const emailSegSales = await queryOne<{ count: string }>(`
+    SELECT COUNT(*) as count FROM webhook_logs WHERE event_type = 'order.paid' AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+      AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND ac_tag_compra_id IS NOT NULL)
+      ${emailSegPeriod2 ? `AND ${emailSegPeriod2}` : ''}
+  `, emailSegParams2);
+  const emailSegRecoveryCount = parseInt(emailSegRecoveries?.count || '0');
+  const emailSegSalesCount = parseInt(emailSegSales?.count || '0');
 
   // ── Email Marketing KPIs (ActiveCampaign reporting) ──
   // API do AC só aceita "N dias atrás de agora" — "Hoje" mapeia certinho (1 dia),
@@ -1727,21 +1752,24 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     representatividade: totalRevenue > 0
       ? parseFloat(((parseFloat(mailxData?.revenue || '0') / totalRevenue) * 100).toFixed(1))
       : 0,
+    // Consolidado = soma dos dois canais, dos dois lados da conta (leads SlickText + tag do AC,
+    // vendas SMS + Email já escopadas aos produtos com lista/tag vinculada). Antes somava leads
+    // de SMS só com vendas de TODOS os canais/produtos, o que inflava a taxa.
     conversao_por_segmento: {
       carrinho_abandonado: {
-        leads: abandonoLeads,
-        vendas: mailxRecoveryCount,
-        taxa: abandonoLeads > 0
-          ? parseFloat(((mailxRecoveryCount / abandonoLeads) * 100).toFixed(2))
+        leads: abandonoLeads + emailAbandonoLeads,
+        vendas: smsSegRecoveryCount + emailSegRecoveryCount,
+        taxa: (abandonoLeads + emailAbandonoLeads) > 0
+          ? parseFloat((((smsSegRecoveryCount + emailSegRecoveryCount) / (abandonoLeads + emailAbandonoLeads)) * 100).toFixed(2))
           : 0,
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },
       compradores: {
-        leads: compradorLeads,
-        vendas: parseInt(mailxData?.count || '0'),
-        taxa: compradorLeads > 0
-          ? parseFloat(((parseInt(mailxData?.count || '0') / compradorLeads) * 100).toFixed(2))
+        leads: compradorLeads + emailCompradorLeads,
+        vendas: smsSegSalesCount + emailSegSalesCount,
+        taxa: (compradorLeads + emailCompradorLeads) > 0
+          ? parseFloat((((smsSegSalesCount + emailSegSalesCount) / (compradorLeads + emailCompradorLeads)) * 100).toFixed(2))
           : 0,
         leads_source: leadsSource,
         leads_warning: leadsWarning,
@@ -1768,19 +1796,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     conversao_por_segmento_email: {
       carrinho_abandonado: {
         leads: emailAbandonoLeads,
-        vendas: parseInt(emailMailxRecoveries?.count || '0'),
-        taxa: emailAbandonoLeads > 0
-          ? parseFloat(((parseInt(emailMailxRecoveries?.count || '0') / emailAbandonoLeads) * 100).toFixed(2))
-          : 0,
+        vendas: emailSegRecoveryCount,
+        taxa: emailAbandonoLeads > 0 ? parseFloat(((emailSegRecoveryCount / emailAbandonoLeads) * 100).toFixed(2)) : 0,
         leads_source: emailLeadsSource,
         leads_warning: emailLeadsWarning,
       },
       compradores: {
         leads: emailCompradorLeads,
-        vendas: parseInt(emailMailxData?.count || '0'),
-        taxa: emailCompradorLeads > 0
-          ? parseFloat(((parseInt(emailMailxData?.count || '0') / emailCompradorLeads) * 100).toFixed(2))
-          : 0,
+        vendas: emailSegSalesCount,
+        taxa: emailCompradorLeads > 0 ? parseFloat(((emailSegSalesCount / emailCompradorLeads) * 100).toFixed(2)) : 0,
         leads_source: emailLeadsSource,
         leads_warning: emailLeadsWarning,
       },
