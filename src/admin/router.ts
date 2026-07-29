@@ -2267,12 +2267,13 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
-// GET /admin/clientes/:id/sms-debug/kits-vinculo - DIAGNÓSTICO TEMPORÁRIO: o aviso "N produtos
-// sem lista SlickText vinculada" pode estar contando produtos que NUNCA foram ativados (descoberta
-// automática entra com enabled=false e só ganha lista/tag no bootstrap da ativação) — nesse caso o
-// aviso é ruído, não pendência de cadastro. Mostra kit por kit: ativado?, tem lista?, tem tag?, e
-// se existe lista/tag com o nome esperado na conta. Remover após o diagnóstico.
-adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req: Request, res: Response) => {
+// GET /admin/clientes/:id/diagnostico/vinculos - Saúde do cadastro de um cliente, nos DOIS canais:
+// para cada produto, se está ativado, se tem lista da SlickText vinculada (SMS) e se tem tag do
+// ActiveCampaign vinculada (Email) — mais o retrato de cada conta configurada (quantas tags tem,
+// quantas são de compra vs abandono, e em qual conta cada tag de produto vive).
+// É o que distingue as três causas possíveis quando um número aparece zerado ou com aviso:
+// produto nunca ativado, vínculo faltando, ou credencial apontando para a conta errada.
+adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
 
   const kits = await query<{
