@@ -252,8 +252,12 @@ export async function autoLinkSlickTextLists(
     else compraByProduct.set(product, list.contact_list_id);
   }
 
+  // Só produtos ATIVADOS: os descobertos automaticamente entram desativados e só ganham lista no
+  // bootstrap da ativação — contá-los como "sem lista vinculada" enchia o aviso de ruído
+  // (13 dos 15 avisos no cliente de referência eram produtos que ninguém ativou).
   const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT id, name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`,
+    `SELECT id, name, st_list_abandono_id, st_list_compra_id
+     FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
 

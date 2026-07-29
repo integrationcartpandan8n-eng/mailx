@@ -1500,7 +1500,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
         const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
         const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1`,
+          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
         );
 
@@ -1548,9 +1548,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   }>(`
     SELECT
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
-        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND st_list_abandono_id IS NOT NULL)) AS rec_escopo,
+        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL)) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND st_list_compra_id IS NOT NULL)) AS compra_escopo,
+      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_compra_id IS NOT NULL)) AS compra_escopo,
       COUNT(*) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
@@ -1576,7 +1576,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       try {
         const ac = new ActiveCampaignClient(acClientCreds.ac_api_url, acClientCreds.ac_api_key);
         const acKits = await query<{ ac_tag_abandono_id: string | null; ac_tag_compra_id: string | null; name: string }>(
-          `SELECT DISTINCT ac_tag_abandono_id, ac_tag_compra_id, name FROM kits WHERE client_id = $1`,
+          `SELECT DISTINCT ac_tag_abandono_id, ac_tag_compra_id, name FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
         );
         const abandonoTagIds = [...new Set(acKits.map(k => k.ac_tag_abandono_id).filter((v): v is string => !!v))];
@@ -1612,9 +1612,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   }>(`
     SELECT
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
-        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND ac_tag_abandono_id IS NOT NULL)) AS rec_escopo,
+        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_abandono_id IS NOT NULL)) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
+      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
       COUNT(*) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_EMAIL}
@@ -2211,17 +2211,42 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
              ac_tag_compra_id, ac_tag_abandono_id
       FROM kits WHERE client_id = $1 ORDER BY enabled DESC, name`, [clientId]);
 
-  // Nomes que o bootstrap cria — se a lista/tag existe com esse nome mas o kit não aponta pra ela,
-  // é só religar o vínculo; se não existe, precisa criar (ou o produto nunca foi ativado).
+  // Nomes reais das listas da conta e das tags do AC — pra distinguir "não existe" de
+  // "existe mas o nome não casa com o do produto" (esse segundo caso é religável por código).
   const accounts = await getSlickTextAccounts(clientId);
-  const stListNames = new Set<string>();
+  const stListNames: string[] = [];
   for (const acc of accounts) {
     try {
       const lists = await new SlickTextClient(acc.st_api_token, acc.st_brand_id).getLists();
-      lists.forEach((l: any) => l?.name && stListNames.add(String(l.name).toLowerCase()));
-    } catch { /* conta indisponível — reportado como desconhecido abaixo */ }
+      lists.forEach((l: any) => l?.name && stListNames.push(String(l.name)));
+    } catch { /* conta indisponível */ }
   }
 
+  // Nomes das TAGS do ActiveCampaign que o bootstrap criaria, e se existem de fato na conta.
+  const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
+    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
+  );
+  const acTagCheck: any[] = [];
+  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
+    const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
+    for (const k of kits.filter(k => k.enabled)) {
+      const nomeCompra = `[${k.name}] Compra Aprovada`;
+      const nomeAbandono = `[${k.name}] Abandono de Carrinho`;
+      const [tc, ta] = await Promise.all([
+        ac.findTagByName(nomeCompra).catch(() => null),
+        ac.findTagByName(nomeAbandono).catch(() => null),
+      ]);
+      acTagCheck.push({
+        produto: k.name,
+        tag_compra_existe_no_ac: !!tc,
+        tag_abandono_existe_no_ac: !!ta,
+        id_compra: tc?.id ?? null,
+        id_abandono: ta?.id ?? null,
+      });
+    }
+  }
+
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
   const rows = kits.map(k => ({
     produto: k.name,
     ativado: k.enabled,
@@ -2230,11 +2255,12 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
     st_lista_abandono: !!k.st_list_abandono_id,
     ac_tag_compra: !!k.ac_tag_compra_id,
     ac_tag_abandono: !!k.ac_tag_abandono_id,
-    // A lista existe na conta com o nome que o bootstrap usaria?
-    lista_existe_na_conta: {
-      compra: stListNames.has(`[${k.name}] [compra aprovada]`.toLowerCase()),
-      abandono: stListNames.has(`[${k.name}] [abandono de carrinho]`.toLowerCase()),
-    },
+    // Listas da conta cujo nome de produto aparece no nome do kit, ignorando espaço/hífen/caixa —
+    // é assim que o vínculo casa (substring). Vazio num kit ativado = nome não bate nem aproximado.
+    listas_candidatas: stListNames.filter(n => {
+      const m = n.match(/^\[(.+?)\]/);
+      return m ? norm(k.name).includes(norm(m[1])) : false;
+    }),
   }));
 
   const semLista = rows.filter(r => !r.st_lista_abandono || !r.st_lista_compra);
@@ -2247,12 +2273,15 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
       sem_lista_MAS_ativados: semLista.filter(r => r.ativado).length,
       sem_lista_e_nao_ativados: semLista.filter(r => !r.ativado).length,
       sem_tag_ac_mas_ativados: rows.filter(r => r.ativado && (!r.ac_tag_compra || !r.ac_tag_abandono)).length,
-      // Casos onde a lista JÁ EXISTE na conta mas o kit não aponta pra ela: religável por código
-      religavel_sem_criar_nada: rows.filter(r => r.ativado
-        && (!r.st_lista_compra && r.lista_existe_na_conta.compra
-         || !r.st_lista_abandono && r.lista_existe_na_conta.abandono)).length,
-      listas_lidas_da_conta: stListNames.size,
+      // Kit ativado, sem lista, MAS existe lista candidata se ignorarmos espaço/hífen/caixa:
+      // esses são religáveis por código (só normalizar a comparação), sem criar nada na SlickText.
+      religavel_normalizando: rows.filter(r => r.ativado
+        && (!r.st_lista_compra || !r.st_lista_abandono)
+        && r.listas_candidatas.length > 0).length,
+      listas_lidas_da_conta: stListNames.length,
     },
+    tags_ac: acTagCheck,
+    listas_da_conta: stListNames,
     kits: rows,
   });
 }));
@@ -2765,37 +2794,52 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const messageAnalytics = null; // não usado no frontend hoje — ver getMessageAnalytics
     const creditAnalytics = null; // getCreditAnalytics sempre retorna null (endpoint 404 confirmado)
 
-    // Get contact count for each list (product lists) — tenta em TODAS as contas: um list_id só
-    // é válido numa conta específica, as outras retornam 0 (getListContactCount já engole erro).
+    // Contagem de contatos por lista de produto. Só produtos ATIVADOS: os descobertos
+    // automaticamente entram desativados e só ganham lista no bootstrap da ativação, então
+    // incluí-los só produzia ruído de "produto sem lista".
     const kits = await query<{
       name: string;
       st_list_compra_id: string | null;
       st_list_abandono_id: string | null;
     }>(
-      `SELECT name, st_list_compra_id, st_list_abandono_id FROM kits WHERE client_id = $1`,
+      `SELECT name, st_list_compra_id, st_list_abandono_id
+       FROM kits WHERE client_id = $1 AND enabled = true`,
       [clientId]
     );
 
-    const listStats = await Promise.all(kits.map(async (kit) => {
+    // Vários SKUs do mesmo produto COMPARTILHAM a mesma lista (confirmado: as três variações de
+    // Glyco Pulse apontam para o mesmo par de listas). Buscar por kit contava a mesma lista uma
+    // vez por SKU — era o que inflava o card de contatos para várias vezes o tamanho da conta.
+    // Aqui cada lista é buscada UMA vez, e o total soma listas distintas.
+    const distinctListIds = new Set<number>();
+    for (const kit of kits) {
+      if (kit.st_list_compra_id) distinctListIds.add(parseInt(kit.st_list_compra_id));
+      if (kit.st_list_abandono_id) distinctListIds.add(parseInt(kit.st_list_abandono_id));
+    }
+    // Um list_id só é válido numa das contas; as outras devolvem 0 (getListContactCount engole o erro).
+    const countByList = new Map<number, number>();
+    await Promise.all([...distinctListIds].map(async (listId) => {
+      const perAccount = await Promise.all(stClients.map(st => st.getListContactCount(listId)));
+      countByList.set(listId, perAccount.reduce((a, b) => a + b, 0));
+    }));
+
+    const listStats = kits.map((kit) => {
       const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
       const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
-
-      const [compraCounts, abandonoCounts] = await Promise.all([
-        compraId ? Promise.all(stClients.map(st => st.getListContactCount(compraId))) : Promise.resolve([0]),
-        abandonoId ? Promise.all(stClients.map(st => st.getListContactCount(abandonoId))) : Promise.resolve([0]),
-      ]);
-
       return {
         product: kit.name,
         compra_list_id: compraId,
-        compra_contacts: compraCounts.reduce((a, b) => a + b, 0),
+        compra_contacts: compraId != null ? (countByList.get(compraId) ?? 0) : 0,
         abandono_list_id: abandonoId,
-        abandono_contacts: abandonoCounts.reduce((a, b) => a + b, 0),
+        abandono_contacts: abandonoId != null ? (countByList.get(abandonoId) ?? 0) : 0,
       };
-    }));
+    });
 
-    const totalCompra = listStats.reduce((sum, l) => sum + l.compra_contacts, 0);
-    const totalAbandono = listStats.reduce((sum, l) => sum + l.abandono_contacts, 0);
+    // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez.
+    const compraListIds = new Set(kits.map(k => k.st_list_compra_id).filter(Boolean).map(v => parseInt(v as string)));
+    const abandonoListIds = new Set(kits.map(k => k.st_list_abandono_id).filter(Boolean).map(v => parseInt(v as string)));
+    const totalCompra = [...compraListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
+    const totalAbandono = [...abandonoListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
 
     // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') — respeita o período de análise ──
     const period = resolvePeriodFilter(req);
