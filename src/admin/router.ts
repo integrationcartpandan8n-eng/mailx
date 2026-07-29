@@ -1580,6 +1580,81 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ── Desempenho por Caminho (utm_term) — o teste de variação ──
+  // O UTMS_DASH define utm_term como "Produto-CaminhoA/B/C": são variações da mesma mensagem
+  // rodando em paralelo. O dado era gravado e nunca usado, então não havia como saber qual
+  // caminho converte melhor. Agrupa por canal também, porque email e SMS testam separado.
+  const caminhoParams: (string | number)[] = [clientId];
+  const caminhoPeriod = periodSql(period, caminhoParams);
+  const caminhosRaw = await query<{ caminho: string; canal: string; vendas: string; receita: string }>(`
+    SELECT
+      UPPER(SUBSTRING(utm_term FROM 'aminho[^a-zA-Z0-9]*([A-Za-z0-9])')) AS caminho,
+      CASE WHEN ${SQL_IS_SMS} THEN 'SMS' ELSE 'Email' END AS canal,
+      COUNT(*) AS vendas, ${SQL_REVENUE} AS receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND ${SQL_IS_MAILX}
+      AND utm_term ~* 'aminho'
+      ${caminhoPeriod ? `AND ${caminhoPeriod}` : ''}
+    GROUP BY 1, 2
+    HAVING UPPER(SUBSTRING(utm_term FROM 'aminho[^a-zA-Z0-9]*([A-Za-z0-9])')) IS NOT NULL
+    ORDER BY 2, 1
+  `, caminhoParams);
+
+  const desempenhoPorCaminho = (() => {
+    const totalPorCanal = new Map<string, number>();
+    caminhosRaw.forEach(r => totalPorCanal.set(r.canal, (totalPorCanal.get(r.canal) ?? 0) + parseFloat(r.receita)));
+    return caminhosRaw.map(r => {
+      const receita = parseFloat(r.receita);
+      const totalCanal = totalPorCanal.get(r.canal) ?? 0;
+      return {
+        caminho: `Caminho ${r.caminho}`,
+        canal: r.canal,
+        vendas: parseInt(r.vendas),
+        receita,
+        receita_fmt: fmtBRL(receita),
+        // Fatia DENTRO do canal — comparar caminho de SMS com caminho de email não diria nada.
+        share_no_canal: totalCanal > 0 ? parseFloat((receita / totalCanal * 100).toFixed(1)) : 0,
+      };
+    });
+  })();
+
+  // ── Email: automação x campanha (os três mediums do UTMS_DASH) ──
+  // auto-email é automação; campaign-editorial e campaing-promo (a documentação tem essa grafia)
+  // são campanhas. A dash somava tudo em "Faturamento Email" sem distinguir.
+  const emailMediumParams: (string | number)[] = [clientId];
+  const emailMediumPeriod = periodSql(period, emailMediumParams);
+  const emailPorTipo = await queryOne<Record<string, string>>(`
+    SELECT
+      COUNT(*) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%auto-email%') AS automacao_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%auto-email%'), 0) AS automacao_receita,
+      COUNT(*) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%editorial%') AS editorial_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%editorial%'), 0) AS editorial_receita,
+      COUNT(*) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%promo%') AS promo_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE COALESCE(utm_medium, '') ILIKE '%promo%'), 0) AS promo_receita,
+      COUNT(*) FILTER (WHERE COALESCE(utm_medium, '') NOT ILIKE '%auto-email%'
+        AND COALESCE(utm_medium, '') NOT ILIKE '%editorial%'
+        AND COALESCE(utm_medium, '') NOT ILIKE '%promo%') AS outro_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE COALESCE(utm_medium, '') NOT ILIKE '%auto-email%'
+        AND COALESCE(utm_medium, '') NOT ILIKE '%editorial%'
+        AND COALESCE(utm_medium, '') NOT ILIKE '%promo%'), 0) AS outro_receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND ${SQL_MAILX_EMAIL}
+      ${emailMediumPeriod ? `AND ${emailMediumPeriod}` : ''}
+  `, emailMediumParams);
+
+  const emailAutomacaoVsCampanha = (() => {
+    const n = (k: string) => parseInt(emailPorTipo?.[k] || '0');
+    const v = (k: string) => parseFloat(emailPorTipo?.[k] || '0');
+    return [
+      { tipo: 'Automação', medium: 'auto-email', vendas: n('automacao_vendas'), receita: v('automacao_receita') },
+      { tipo: 'Campanha · Editorial', medium: 'campaign-editorial', vendas: n('editorial_vendas'), receita: v('editorial_receita') },
+      { tipo: 'Campanha · Promo', medium: 'campaing-promo', vendas: n('promo_vendas'), receita: v('promo_receita') },
+      { tipo: 'Outro medium', medium: '—', vendas: n('outro_vendas'), receita: v('outro_receita') },
+    ].filter(i => i.vendas > 0).map(i => ({ ...i, receita_fmt: fmtBRL(i.receita) }));
+  })();
+
   // ── Origem do faturamento: para onde vai o dinheiro que NÃO é MailX ──
   // Motivo: o inventário de UTMs mostrou 4.072 vendas / ~$1 milhão "não atribuídas", o que dava a
   // impressão de rastreio quebrado. O payload do Digistore revelou que 99% delas têm afiliado
@@ -1970,6 +2045,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     // vendas SMS + Email já escopadas aos produtos com lista/tag vinculada). Antes somava leads
     // de SMS só com vendas de TODOS os canais/produtos, o que inflava a taxa.
     origem_do_faturamento: origemDoFaturamento,
+    desempenho_por_caminho: desempenhoPorCaminho,
+    email_automacao_vs_campanha: emailAutomacaoVsCampanha,
     conversao_por_segmento: {
       carrinho_abandonado: {
         leads: abandonoLeads + emailAbandonoLeads,
@@ -2087,6 +2164,8 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
 
   const rawRows = await query<{
     utm_campaign: string;
+    ofertas: string[] | null;
+    caminhos: string[] | null;
     event_type: string;
     vendas: string;
     receita_bruta: string;
@@ -2097,6 +2176,11 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
   }>(`
     SELECT
       utm_campaign,
+      -- Oferta (utm_content) e caminho (utm_term) — partes variáveis definidas no UTMS_DASH que
+      -- eram gravadas e nunca usadas. Agregadas como lista porque, em teoria, uma mesma mensagem
+      -- pode ter mais de uma oferta/caminho; na prática é uma de cada.
+      ARRAY_AGG(DISTINCT utm_content) FILTER (WHERE NULLIF(TRIM(COALESCE(utm_content, '')), '') IS NOT NULL) AS ofertas,
+      ARRAY_AGG(DISTINCT utm_term)    FILTER (WHERE NULLIF(TRIM(COALESCE(utm_term, '')), '')    IS NOT NULL) AS caminhos,
       event_type,
       COUNT(*) FILTER (WHERE event_type = 'order.paid')                        AS vendas,
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid'), 0)   AS receita_bruta,
@@ -2128,6 +2212,8 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     mensagem: string;
     tipo_automacao: string;
     produto: string;
+    oferta: string | null;
+    caminho: string | null;
   };
 
   const byCampaign = new Map<string, SmsGranularRow>();
@@ -2148,6 +2234,15 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
         mensagem: parsed.mensagem,
         tipo_automacao: parsed.tipo_automacao,
         produto: parsed.produto,
+        // Só rotula quando há UM valor: várias ofertas/caminhos na mesma mensagem viraria um
+        // número que não representa nenhum deles, então fica nulo e a coluna mostra "—".
+        oferta: row.ofertas?.length === 1 ? row.ofertas[0] : null,
+        // "SoulDetoxDrops-CaminhoA" -> "Caminho A"; guarda só a parte do caminho.
+        caminho: (() => {
+          if (row.caminhos?.length !== 1) return null;
+          const m = row.caminhos[0].match(/caminho\s*([A-Z])/i);
+          return m ? `Caminho ${m[1].toUpperCase()}` : row.caminhos[0];
+        })(),
       };
       byCampaign.set(row.utm_campaign, agg);
     }
