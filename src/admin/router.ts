@@ -2354,6 +2354,90 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/diagnostico/sem-utm - Investiga as vendas que chegam SEM UTM nenhuma
+// (o grosso do não atribuído). Três perguntas, respondidas do payload cru salvo em JSONB:
+//   1. são upsell/downsell dentro do funil? (produto começando com UP/DS/DW) — nesse caso a
+//      compra secundária não herda a marcação da primeira e a atribuição se perde no meio do funil
+//   2. o payload traz algum campo de rastreio que o extrator ignora? (campaignkey, tracking,
+//      custom... — o extrator do Digistore deixa tracking_code sempre nulo)
+//   3. quanto disso é reembolso/chargeback vs venda de verdade
+// Só campos de rastreio são expostos, nada de dado pessoal.
+adminRouter.get('/clientes/:id/diagnostico/sem-utm', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const SEM_UTM = `utm_source IS NULL AND utm_medium IS NULL AND utm_campaign IS NULL`;
+
+  // 1. Concentração por tipo de produto: prefixo do SKU diz se é entrada (M), upsell (UP),
+  //    downsell (DS) ou outra etapa (DW).
+  const porTipo = await query<{ etapa: string; vendas: string; receita: string }>(`
+    SELECT
+      CASE
+        WHEN product_name ~* '^\\s*UP'  THEN 'upsell (UP*)'
+        WHEN product_name ~* '^\\s*DS'  THEN 'downsell (DS*)'
+        WHEN product_name ~* '^\\s*DW'  THEN 'outra etapa (DW*)'
+        WHEN product_name ~* '^\\s*M[0-9]' THEN 'entrada (M*)'
+        WHEN product_name IS NULL THEN '(sem nome de produto)'
+        ELSE 'outros'
+      END AS etapa,
+      COUNT(*) AS vendas, ${SQL_REVENUE} AS receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND client_id = $1 AND ${SEM_UTM}
+    GROUP BY 1 ORDER BY COUNT(*) DESC
+  `, [clientId]);
+
+  // Mesma quebra pras vendas COM UTM, pra comparar: se upsell é maioria só no grupo sem UTM,
+  // a hipótese do funil se confirma.
+  const porTipoComUtm = await query<{ etapa: string; vendas: string }>(`
+    SELECT
+      CASE
+        WHEN product_name ~* '^\\s*UP'  THEN 'upsell (UP*)'
+        WHEN product_name ~* '^\\s*DS'  THEN 'downsell (DS*)'
+        WHEN product_name ~* '^\\s*DW'  THEN 'outra etapa (DW*)'
+        WHEN product_name ~* '^\\s*M[0-9]' THEN 'entrada (M*)'
+        WHEN product_name IS NULL THEN '(sem nome de produto)'
+        ELSE 'outros'
+      END AS etapa,
+      COUNT(*) AS vendas
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND client_id = $1 AND NOT (${SEM_UTM})
+    GROUP BY 1 ORDER BY COUNT(*) DESC
+  `, [clientId]);
+
+  // 2. Quais chaves aparecem no payload dessas vendas — revela campo de rastreio não aproveitado.
+  const chaves = await query<{ chave: string; ocorrencias: string; preenchidas: string }>(`
+    SELECT k AS chave, COUNT(*) AS ocorrencias,
+           COUNT(*) FILTER (WHERE NULLIF(TRIM(COALESCE(payload->>k, '')), '') IS NOT NULL) AS preenchidas
+    FROM webhook_logs w, LATERAL jsonb_object_keys(w.payload) AS k
+    WHERE w.event_type = 'order.paid' AND w.status IN ('processed','processing')
+      AND w.client_id = $1 AND ${SEM_UTM.replace(/utm_/g, 'w.utm_')}
+    GROUP BY k ORDER BY COUNT(*) DESC LIMIT 80
+  `, [clientId]);
+
+  // 3. Campos com cara de rastreio: mostra quantos vêm preenchidos e alguns valores distintos.
+  const candidatos = ['campaignkey', 'tracking', 'tracking_key', 'trackingkey', 'custom',
+    'affiliate', 'affiliate_name', 'sub_id', 'subid', 'tid', 'cid', 'coupon_code', 'voucher'];
+  const rastreio: any[] = [];
+  for (const campo of candidatos) {
+    const r = await queryOne<{ preenchidos: string; exemplos: string[] }>(`
+      SELECT COUNT(*) FILTER (WHERE NULLIF(TRIM(COALESCE(payload->>$2, '')), '') IS NOT NULL) AS preenchidos,
+             (ARRAY_AGG(DISTINCT payload->>$2) FILTER (WHERE NULLIF(TRIM(COALESCE(payload->>$2, '')), '') IS NOT NULL))[1:5] AS exemplos
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+        AND client_id = $1 AND ${SEM_UTM}
+    `, [clientId, campo]);
+    const n = parseInt(r?.preenchidos || '0');
+    if (n > 0) rastreio.push({ campo, vendas_com_valor: n, exemplos: r?.exemplos ?? [] });
+  }
+
+  res.json({
+    sem_utm_por_etapa_do_funil: porTipo.map(r => ({ etapa: r.etapa, vendas: parseInt(r.vendas), receita: parseFloat(r.receita) })),
+    com_utm_por_etapa_do_funil: porTipoComUtm.map(r => ({ etapa: r.etapa, vendas: parseInt(r.vendas) })),
+    campos_de_rastreio_aproveitaveis: rastreio,
+    chaves_do_payload: chaves.map(r => ({ chave: r.chave, ocorrencias: parseInt(r.ocorrencias), preenchidas: parseInt(r.preenchidas) })),
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/utms - Inventário das UTMs que chegam nas vendas do cliente,
 // com a classificação que o dashboard aplica a cada combinação. Responde a pergunta que aparece
 // sempre que um canal mostra zero: "não vendeu por esse canal" ou "vendeu e a atribuição não pegou?".
