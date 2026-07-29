@@ -448,6 +448,15 @@
         .msg-human { font-size: 0.95rem; font-weight: 700; color: var(--text); display: flex; align-items: baseline; gap: 0.4rem; }
         .msg-human .code { font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--text-dim); font-weight: 500; }
         .msg-sub { font-size: 0.82rem; color: var(--text-soft); margin-top: 2px; }
+        /* Oferta (utm_content) e caminho (utm_term) — partes variáveis do padrão de UTM que
+           ficavam gravadas sem aparecer. Ficam numa linha própria, discretas, pra não competir
+           com o nome da mensagem nem exigir coluna nova na grade. */
+        .msg-tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 3px; }
+        .msg-tag {
+            font-size: 0.68rem; padding: 0.1rem 0.4rem; border-radius: 4px;
+            background: var(--surface-3); color: var(--text-dim); white-space: nowrap;
+        }
+        .msg-tag.caminho { color: var(--accent-light); background: var(--accent-subtle); font-weight: 600; }
         .msg-sub .prod { color: #fff; font-weight: 700; }
 
         .rank-pos {
@@ -1421,6 +1430,22 @@
                     </div>
                 </div>
             </div>
+            <div class="card" style="margin-bottom:0" id="caminhoCard">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-code-branch"></i> Desempenho por Caminho</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Variações testadas (utm_term) · no período</span>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Caminho</th><th>Canal</th><th>Vendas</th><th>Receita</th><th>Fatia no canal</th></tr>
+                        </thead>
+                        <tbody id="caminhoBody">
+                            <tr><td colspan="5" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-scale-balanced"></i> Origem do Faturamento</div>
@@ -1497,6 +1522,22 @@
                     <div class="kpi-grid" id="emailMailxKpis">
                         <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                     </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-layer-group"></i> Automação x Campanha</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Pelos mediums do padrão de UTM · no período</span>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Tipo</th><th>utm_medium</th><th>Vendas</th><th>Receita</th></tr>
+                        </thead>
+                        <tbody id="emailTipoBody">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
             <div class="card" style="margin-bottom:0">
@@ -3408,6 +3449,40 @@
                     document.getElementById('rep-total').textContent = data.kpis.faturamento;
                 }
 
+                // Desempenho por caminho (utm_term): qual variação converte melhor.
+                const caminhoBody = document.getElementById('caminhoBody');
+                if (caminhoBody) {
+                    const cams = data.desempenho_por_caminho || [];
+                    const card = document.getElementById('caminhoCard');
+                    // Sem caminho marcado não há o que comparar — esconde em vez de mostrar tabela vazia.
+                    if (card) card.style.display = cams.length === 0 ? 'none' : '';
+                    caminhoBody.innerHTML = cams.map(c => `
+                        <tr>
+                            <td style="font-weight:600">${escapeHtml(c.caminho)}</td>
+                            <td style="color:var(--text-dim)">${escapeHtml(c.canal)}</td>
+                            <td>${c.vendas.toLocaleString('pt-BR')}</td>
+                            <td style="color:var(--success); font-weight:700">${escapeHtml(c.receita_fmt)}</td>
+                            <td><span class="tag ${c.share_no_canal >= 50 ? 'green' : 'gray'}">${c.share_no_canal.toLocaleString('pt-BR')}%</span></td>
+                        </tr>
+                    `).join('');
+                }
+
+                // Email: automação x campanha (os três mediums do padrão de UTM).
+                const emailTipoBody = document.getElementById('emailTipoBody');
+                if (emailTipoBody) {
+                    const tipos = data.email_automacao_vs_campanha || [];
+                    emailTipoBody.innerHTML = tipos.length === 0
+                        ? '<tr><td colspan="4" class="empty-state">Nenhuma venda de email no período</td></tr>'
+                        : tipos.map(t => `
+                            <tr>
+                                <td style="font-weight:600">${escapeHtml(t.tipo)}</td>
+                                <td style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${escapeHtml(t.medium)}</td>
+                                <td>${t.vendas.toLocaleString('pt-BR')}</td>
+                                <td style="color:var(--success); font-weight:700">${escapeHtml(t.receita_fmt)}</td>
+                            </tr>
+                        `).join('');
+                }
+
                 // Origem do faturamento — explica para onde vai o que não é MailX. Sem isso, a
                 // maior parte da receita do cliente aparecia como um buraco não atribuído.
                 const origemBody = document.getElementById('origemFaturamentoBody');
@@ -4146,6 +4221,15 @@
             `;
         }
 
+        // Oferta e caminho da mensagem, quando existem. Só mostra quando o valor é único —
+        // várias ofertas na mesma mensagem não representam nenhuma delas (ver backend).
+        function msgTagsHtml(row) {
+            const tags = [];
+            if (row.caminho) tags.push(`<span class="msg-tag caminho" title="Variação testada (utm_term)">${escapeHtml(row.caminho)}</span>`);
+            if (row.oferta) tags.push(`<span class="msg-tag" title="Oferta da mensagem (utm_content)">${escapeHtml(row.oferta)}</span>`);
+            return tags.length ? `<div class="msg-tags">${tags.join('')}</div>` : '';
+        }
+
         function renderSmsGranularMensagem(data, sym) {
             const total = data.total_receita_liquida_sms || 0;
             const positiveRows = data.rows.filter(r => r.receita_liquida >= 0);
@@ -4164,6 +4248,7 @@
                             <div class="msg-identity">
                                 <div class="msg-human">${msg.human} <span class="code">${msg.raw}</span></div>
                                 <div class="msg-sub">${row.tipo_automacao || '—'} · <span class="prod">${row.produto || '—'}</span></div>
+                                ${msgTagsHtml(row)}
                             </div>
                         </div>
                         ${renderEnviosCell(row.utm_campaign, row.vendas)}
