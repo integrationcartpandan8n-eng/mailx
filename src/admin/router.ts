@@ -2191,8 +2191,11 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     FROM webhook_logs
     WHERE
       client_id = $1
-      AND utm_medium = 'auto-sms'
-      AND utm_source = 'mailx-sms'
+      -- Tolerante a caixa e espaço: com igualdade crua, um "MailX-SMS" ou um "auto-sms " com
+      -- espaço sobrando derrubava a mensagem desta tabela e a mantinha no card de Faturamento
+      -- SMS — o total e a tabela discordavam sem nenhum aviso. Ver /diagnostico/sms.
+      AND LOWER(TRIM(COALESCE(utm_medium, ''))) = 'auto-sms'
+      AND LOWER(TRIM(COALESCE(utm_source, ''))) = 'mailx-sms'
       AND utm_campaign IS NOT NULL
       AND utm_campaign NOT ILIKE '%teste%'
       AND ${dateFilterSql}
@@ -2580,6 +2583,88 @@ adminRouter.get('/clientes/:id/diagnostico/sem-utm', asyncHandler(async (req: Re
     com_utm_por_etapa_do_funil: porTipoComUtm.map(r => ({ etapa: r.etapa, vendas: parseInt(r.vendas) })),
     campos_de_rastreio_aproveitaveis: rastreio,
     chaves_do_payload: chaves.map(r => ({ chave: r.chave, ocorrencias: parseInt(r.ocorrencias), preenchidas: parseInt(r.preenchidas) })),
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/sms - Reconciliação do SMS: o card "Faturamento SMS" e a
+// tabela "Desempenho por Mensagem" usam filtros DIFERENTES, e por isso podem discordar sem aviso.
+//   card:    utm_source/campaign/tracking ILIKE '%mailx%'  E  utm_medium ILIKE '%sms%'
+//   tabela:  utm_source = 'mailx-sms'  E  utm_medium = 'auto-sms'  (igualdade exata, sensível a
+//            maiúsculas)  E  utm_campaign NOT ILIKE '%teste%'
+// Toda venda que passa no primeiro e falha no segundo é receita que aparece no total e não tem
+// linha na tabela. Este endpoint quantifica a diferença e diz o MOTIVO de cada caso, pra decidir
+// entre alinhar os filtros ou declarar a exclusão como intencional.
+adminRouter.get('/clientes/:id/diagnostico/sms', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const params: (string | number)[] = [clientId];
+  const periodSqlStr = periodSql(period, params);
+  const FILTRO_TABELA = `utm_source = 'mailx-sms' AND utm_medium = 'auto-sms'
+    AND utm_campaign IS NOT NULL AND utm_campaign NOT ILIKE '%teste%'`;
+
+  const totais = await queryOne<Record<string, string>>(`
+    SELECT
+      COUNT(*) FILTER (WHERE ${SQL_MAILX_SMS}) AS card_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_MAILX_SMS}), 0) AS card_receita,
+      COUNT(*) FILTER (WHERE ${FILTRO_TABELA}) AS tabela_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE ${FILTRO_TABELA}), 0) AS tabela_receita,
+      COUNT(*) FILTER (WHERE ${SQL_MAILX_SMS} AND NOT (${FILTRO_TABELA})) AS so_no_card,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_MAILX_SMS} AND NOT (${FILTRO_TABELA})), 0) AS so_no_card_receita,
+      COUNT(*) FILTER (WHERE ${FILTRO_TABELA} AND NOT (${SQL_MAILX_SMS})) AS so_na_tabela,
+      COALESCE(SUM(total_price) FILTER (WHERE ${FILTRO_TABELA} AND NOT (${SQL_MAILX_SMS})), 0) AS so_na_tabela_receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      ${periodSqlStr ? `AND ${periodSqlStr}` : ''}
+  `, params);
+
+  // Cada combinação que entra no card e não entra na tabela, com o motivo exato da exclusão.
+  const divParams: (string | number)[] = [clientId];
+  const divPeriod = periodSql(period, divParams);
+  const divergentes = await query<{
+    utm_source: string | null; utm_medium: string | null; utm_campaign: string | null;
+    tracking_code: string | null; vendas: string; receita: string;
+  }>(`
+    SELECT utm_source, utm_medium, utm_campaign, tracking_code,
+           COUNT(*) AS vendas, ${SQL_REVENUE} AS receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND ${SQL_MAILX_SMS} AND NOT (${FILTRO_TABELA})
+      ${divPeriod ? `AND ${divPeriod}` : ''}
+    GROUP BY 1,2,3,4 ORDER BY COUNT(*) DESC LIMIT 40
+  `, divParams);
+
+  const motivo = (r: typeof divergentes[number]): string => {
+    if (!r.utm_campaign) return 'utm_campaign vazia — a tabela agrupa por campanha, sem ela não há linha';
+    if (/teste/i.test(r.utm_campaign)) return 'campanha com "teste" no nome — excluída da tabela de propósito';
+    if (r.utm_source !== 'mailx-sms') {
+      if ((r.utm_source ?? '').toLowerCase() === 'mailx-sms') return `utm_source com caixa diferente ("${r.utm_source}") — a tabela compara com = e não ignora maiúsculas`;
+      if (!r.utm_source && r.tracking_code) return 'marcado por tracking_code (tid/subid), sem utm_source — a tabela só lê UTM';
+      return `utm_source fora do padrão ("${r.utm_source ?? 'vazio'}") — esperado "mailx-sms"`;
+    }
+    if (r.utm_medium !== 'auto-sms') {
+      if ((r.utm_medium ?? '').toLowerCase() === 'auto-sms') return `utm_medium com caixa diferente ("${r.utm_medium}")`;
+      if ((r.utm_medium ?? '') !== (r.utm_medium ?? '').trim()) return `utm_medium com espaço sobrando ("${r.utm_medium}")`;
+      return `utm_medium fora do padrão ("${r.utm_medium ?? 'vazio'}") — esperado "auto-sms" (disparo em massa? o padrão de UTM não define SMS de campanha)`;
+    }
+    return 'motivo não identificado — investigar';
+  };
+
+  const soNoCard = parseInt(totais?.so_no_card || '0');
+  res.json({
+    periodo: { ativo: period.isToday || !!(period.from && period.to), de: period.from ?? null, ate: period.to ?? null },
+    card_faturamento_sms: { vendas: parseInt(totais?.card_vendas || '0'), receita: parseFloat(totais?.card_receita || '0') },
+    tabela_por_mensagem: { vendas: parseInt(totais?.tabela_vendas || '0'), receita: parseFloat(totais?.tabela_receita || '0') },
+    diferenca: {
+      no_card_mas_fora_da_tabela: { vendas: soNoCard, receita: parseFloat(totais?.so_no_card_receita || '0') },
+      na_tabela_mas_fora_do_card: { vendas: parseInt(totais?.so_na_tabela || '0'), receita: parseFloat(totais?.so_na_tabela_receita || '0') },
+      veredito: soNoCard === 0
+        ? 'Card e tabela batem: todo SMS atribuído tem linha na tabela.'
+        : `${soNoCard} venda(s) entram no card e não têm linha na tabela — ver motivos abaixo.`,
+    },
+    divergentes: divergentes.map(r => ({
+      utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
+      vendas: parseInt(r.vendas), receita: parseFloat(r.receita), motivo: motivo(r),
+    })),
   });
 }));
 
