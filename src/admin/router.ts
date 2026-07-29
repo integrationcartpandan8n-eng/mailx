@@ -2586,6 +2586,94 @@ adminRouter.get('/clientes/:id/diagnostico/sem-utm', asyncHandler(async (req: Re
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/validacao-sms - Folha de conferência contra o painel da
+// SlickText. NÃO recalcula envios/cliques de propósito: se recalculasse, estaríamos validando um
+// segundo cálculo em vez da tela. O que ele faz é montar o roteiro — para cada mensagem vinculada,
+// onde exatamente olhar no painel e com qual período — pra comparação ser sempre a mesma coisa
+// contra a mesma coisa. Ordenado por receita: as mensagens que mais importam vêm primeiro.
+adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const limite = Math.min(parseInt((req.query.limit as string) || '8'), 20);
+  const period = resolvePeriodFilter(req);
+  const { start, end } = await resolveSlickTextDateRange(req);
+
+  // Vendas/receita por mensagem, com o mesmo filtro da tabela da tela.
+  const vParams: (string | number)[] = [clientId];
+  const vPeriod = periodSql(period, vParams);
+  const vendasPorMsg = await query<{ utm_campaign: string; vendas: string; receita: string }>(`
+    SELECT utm_campaign, COUNT(*) AS vendas, ${SQL_REVENUE} AS receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND LOWER(TRIM(COALESCE(utm_medium, ''))) = 'auto-sms'
+      AND LOWER(TRIM(COALESCE(utm_source, ''))) = 'mailx-sms'
+      AND utm_campaign IS NOT NULL AND utm_campaign NOT ILIKE '%teste%'
+      ${vPeriod ? `AND ${vPeriod}` : ''}
+    GROUP BY utm_campaign ORDER BY ${SQL_REVENUE} DESC LIMIT ${limite}
+  `, vParams);
+
+  const vinculos = await query<{
+    utm_campaign: string; slicktext_campaign_id: number | null; source_type: string;
+    workflow_node_id: number | null; st_account_id: number | null;
+  }>(`SELECT utm_campaign, slicktext_campaign_id, source_type, workflow_node_id, st_account_id
+      FROM sms_campaign_map WHERE client_id = $1`, [clientId]);
+  const porUtm = new Map(vinculos.map(v => [v.utm_campaign, v]));
+
+  const contas = await getSlickTextAccounts(clientId);
+  const contaPorId = new Map(contas.map(c => [c.accountId, c]));
+  // Nome do fluxo por conta, pra folha dizer o nome que aparece no painel e não só o número.
+  const nomeFluxo = new Map<string, string>();
+  for (const acc of contas) {
+    try {
+      const wfs = await new SlickTextClient(acc.st_api_token, acc.st_brand_id).getWorkflows();
+      wfs.forEach(w => nomeFluxo.set(`${acc.accountId}:${w.workflow_id}`, w.name));
+    } catch { /* conta indisponível — a folha mostra só o id */ }
+  }
+
+  const linhas = vendasPorMsg.map(v => {
+    const vinc = porUtm.get(v.utm_campaign);
+    const conta = vinc ? contaPorId.get(vinc.st_account_id) : undefined;
+    const brand = conta?.st_brand_id.replace(/\D/g, '') ?? null;
+    const wf = vinc?.slicktext_campaign_id ?? null;
+    return {
+      mensagem: v.utm_campaign,
+      vendas: parseInt(v.vendas),
+      receita: parseFloat(v.receita),
+      vinculo: vinc ? {
+        tipo: vinc.source_type,
+        conta: conta?.label ?? '(conta removida)',
+        brand_id: brand,
+        workflow_id: wf,
+        workflow_nome: wf != null ? (nomeFluxo.get(`${vinc.st_account_id}:${wf}`) ?? '(nome não lido)') : null,
+        node_id: vinc.workflow_node_id,
+      } : null,
+      // Onde olhar no painel. Sem isso a conferência vira caça ao tesouro e cada rodada compara
+      // coisas diferentes — foi o que tornou a auditoria anterior trabalhosa.
+      onde_conferir_no_painel: vinc && wf != null && brand
+        ? {
+            url: `https://app.slicktext.com/b${brand}/workflows/${wf}`,
+            caminho: vinc.workflow_node_id
+              ? `Analytics > Workflows > "${nomeFluxo.get(`${vinc.st_account_id}:${wf}`) ?? wf}" > mensagem (node ${vinc.workflow_node_id})`
+              : `Analytics > Workflows > "${nomeFluxo.get(`${vinc.st_account_id}:${wf}`) ?? wf}" (fluxo inteiro)`,
+            periodo_a_selecionar: { de: start.slice(0, 10), ate: end.slice(0, 10) },
+          }
+        : { aviso: vinc ? 'Vínculo sem workflow (link manual) — o painel não tem envios por mensagem nesse caso.' : 'Mensagem sem vínculo — rode o Auto-vincular antes de conferir.' },
+      // Preencher com o que a TELA mostra e com o que o painel mostra.
+      preencher: { dashboard_envios: null, painel_envios: null, dashboard_cliques: null, painel_cliques: null },
+    };
+  });
+
+  res.json({
+    instrucoes: [
+      'Compare o que a TELA do dashboard mostra (não recalculado aqui) com o painel da SlickText.',
+      `Selecione no painel exatamente o período ${start.slice(0, 10)} a ${end.slice(0, 10)}.`,
+      'O painel usa horário de Nova York e o dashboard fecha o dia em UTC — diferença de poucos por cento é fuso, não erro.',
+      'Preencha os quatro campos de cada linha e me devolva; eu calculo os desvios.',
+    ],
+    periodo: { de: start.slice(0, 10), ate: end.slice(0, 10), ativo: period.isToday || !!(period.from && period.to) },
+    mensagens: linhas,
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/sms - Reconciliação do SMS: o card "Faturamento SMS" e a
 // tabela "Desempenho por Mensagem" usam filtros DIFERENTES, e por isso podem discordar sem aviso.
 //   card:    utm_source/campaign/tracking ILIKE '%mailx%'  E  utm_medium ILIKE '%sms%'
