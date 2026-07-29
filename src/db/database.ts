@@ -226,6 +226,25 @@ export async function initDatabase(): Promise<void> {
         -- client_slicktext_accounts.id quando o vínculo é de uma conta adicional.
         ALTER TABLE sms_campaign_map ADD COLUMN IF NOT EXISTS st_account_id INTEGER REFERENCES client_slicktext_accounts(id) ON DELETE SET NULL;
 
+        -- Confirmado com o Murilo: um cliente pode ter MAIS DE UMA conta de ActiveCampaign,
+        -- com divisão de responsabilidade entre elas (ex: uma conta cuidando de compra aprovada e
+        -- outra de abandono de carrinho). Mesmo desenho já usado pra SlickText: clients.ac_api_url/
+        -- ac_api_key continuam sendo a conta "principal" e esta tabela guarda as ADICIONAIS.
+        CREATE TABLE IF NOT EXISTS client_activecampaign_accounts (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          label VARCHAR(255),
+          ac_api_url VARCHAR(255) NOT NULL,
+          ac_api_key VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+
+        -- Qual conta de AC atende cada produto. NULL = conta principal (clients.ac_api_url).
+        -- Necessário porque as tags de um produto podem viver numa conta e não na outra.
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS ac_account_id INTEGER
+          REFERENCES client_activecampaign_accounts(id) ON DELETE SET NULL;
+
         -- Diagnóstico N8N (dump real em produção): mensagens de listas alimentadas pelo n8n
         -- usam links criados MANUALMENTE no encurtador da SlickText (source='manual', sem
         -- workflow nem node associado). Pra vincular essas utms, slicktext_campaign_id passa

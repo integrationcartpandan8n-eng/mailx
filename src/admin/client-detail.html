@@ -1634,6 +1634,34 @@
                     <button class="btn btn-accent" onclick="saveAcCredentials()" style="height:36px">Salvar</button>
                 </div>
             </div>
+
+            <!-- Contas ActiveCampaign adicionais — mesmo cliente pode ter mais de uma conta, com
+                 divisão de responsabilidade entre elas (confirmado com o Murilo). A de cima é a
+                 "principal"; as tags de um produto podem viver em qualquer uma delas. -->
+            <div class="card-body" style="border-top:1px solid var(--border); padding-top:1rem">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.6rem">
+                    <span style="font-size:0.78rem; color:var(--text-dim); font-weight:600">Contas adicionais <span class="kpi-tip" tabindex="0" data-tip="Use isso quando o cliente roda email por mais de uma conta de ActiveCampaign — por exemplo uma cuidando de compra aprovada e outra de abandono de carrinho. As métricas de email somam todas as contas.">ⓘ</span></span>
+                    <button class="btn btn-outline" style="font-size:0.72rem; padding:0.35rem 0.7rem" onclick="toggleForm('acAccountForm')"><i class="fas fa-plus"></i> Adicionar conta</button>
+                </div>
+                <div id="acAccountsList" style="display:flex; flex-direction:column; gap:0.4rem; margin-bottom:0.6rem"></div>
+                <div class="inline-form" id="acAccountForm">
+                    <div class="form-row">
+                        <div>
+                            <label>Rótulo (opcional)</label>
+                            <input type="text" id="newAcAccountLabel" placeholder="Ex: Group Future Now">
+                        </div>
+                        <div>
+                            <label>AC API URL *</label>
+                            <input type="url" id="newAcAccountUrl" placeholder="https://suaconta.api-us1.com">
+                        </div>
+                        <div>
+                            <label>AC API Key *</label>
+                            <input type="password" id="newAcAccountKey" placeholder="chave da API">
+                        </div>
+                        <button class="btn btn-accent" onclick="addAcAccount()" style="height:36px">Adicionar</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- SlickText SMS Credentials -->
@@ -2008,6 +2036,7 @@
                     stBrandDisplay.textContent = '';
                 }
                 loadStAccountsList();
+                loadAcAccountsList();
 
                 // Load per-client stats
                 loadClientStats();
@@ -2164,6 +2193,79 @@
                 }
             } catch (e) {
                 showModal('Erro', e.message);
+            }
+        }
+
+        // ── Contas ActiveCampaign adicionais (cliente com mais de uma conta, com divisão de
+        //    responsabilidade entre elas — ex: uma pra compra aprovada, outra pra abandono) ──
+        async function loadAcAccountsList() {
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/ac-accounts`);
+                const data = await res.json();
+                window.__acAccounts = data.accounts || [];
+            } catch (e) {
+                window.__acAccounts = [];
+            }
+            renderAcAccountsList();
+        }
+
+        function renderAcAccountsList() {
+            const el = document.getElementById('acAccountsList');
+            if (!el) return;
+            const accounts = window.__acAccounts || [];
+            if (accounts.length === 0) {
+                el.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted)">Nenhuma conta adicional — só a principal acima.</div>';
+                return;
+            }
+            el.innerHTML = accounts.map(a => `
+                <div style="display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.7rem; background:var(--surface-3); border-radius:8px; font-size:0.78rem; flex-wrap:wrap">
+                    <i class="fas fa-envelope-open-text" style="color:var(--accent-light)"></i>
+                    <span style="font-weight:600">${escapeHtml(a.label || `Conta ${a.id}`)}</span>
+                    <span style="color:var(--text-dim)">${escapeHtml(a.ac_api_url || '')}</span>
+                    <span style="color:var(--text-muted); font-family:monospace">${escapeHtml(a.ac_api_key_masked || '')}</span>
+                    <button class="btn btn-outline" style="margin-left:auto; font-size:0.68rem; padding:0.25rem 0.5rem; color:var(--danger)" onclick="deleteAcAccount(${a.id})"><i class="fas fa-trash"></i></button>
+                </div>
+            `).join('');
+        }
+
+        async function addAcAccount() {
+            const label = document.getElementById('newAcAccountLabel').value.trim();
+            const url = document.getElementById('newAcAccountUrl').value.trim();
+            const key = document.getElementById('newAcAccountKey').value.trim();
+
+            if (!url || !key) {
+                alert('Preencha a URL e a chave da API da conta adicional.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API}/clientes/${clientId}/ac-accounts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: label || null, ac_api_url: url, ac_api_key: key })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('newAcAccountLabel').value = '';
+                    document.getElementById('newAcAccountUrl').value = '';
+                    document.getElementById('newAcAccountKey').value = '';
+                    document.getElementById('acAccountForm').classList.remove('show');
+                    loadAcAccountsList();
+                } else {
+                    alert(data.error || 'Falha ao adicionar conta.');
+                }
+            } catch (e) {
+                alert('Falha ao adicionar conta: ' + e.message);
+            }
+        }
+
+        async function deleteAcAccount(accountId) {
+            if (!confirm('Remover essa conta adicional de ActiveCampaign? As métricas de email dela saem do total.')) return;
+            try {
+                await fetch(`${API}/clientes/${clientId}/ac-accounts/${accountId}`, { method: 'DELETE' });
+                loadAcAccountsList();
+            } catch (e) {
+                alert('Falha ao remover conta: ' + e.message);
             }
         }
 
