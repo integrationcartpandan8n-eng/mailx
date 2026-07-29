@@ -1423,6 +1423,22 @@
             </div>
             <div class="card" style="margin-bottom:0">
                 <div class="card-header">
+                    <div class="card-title"><i class="fas fa-scale-balanced"></i> Origem do Faturamento</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">No período · todas as origens</span>
+                </div>
+                <div class="card-body" style="padding:0">
+                    <table class="kit-table">
+                        <thead>
+                            <tr><th>Origem</th><th>Vendas</th><th>Receita</th><th>Fatia</th></tr>
+                        </thead>
+                        <tbody id="origemFaturamentoBody">
+                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:0">
+                <div class="card-header">
                     <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento</div>
                     <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista (a API da SlickText não filtra contatos por lista e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com lista vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com lista</span>
                 </div>
@@ -3390,6 +3406,26 @@
                     repEl.style.color = repPercent >= 5 ? 'var(--success)' : repPercent >= 2 ? 'var(--warning)' : 'var(--accent-light)';
                     document.getElementById('rep-mailx').textContent = data.kpis.faturamento_mailx;
                     document.getElementById('rep-total').textContent = data.kpis.faturamento;
+                }
+
+                // Origem do faturamento — explica para onde vai o que não é MailX. Sem isso, a
+                // maior parte da receita do cliente aparecia como um buraco não atribuído.
+                const origemBody = document.getElementById('origemFaturamentoBody');
+                if (origemBody) {
+                    const origens = data.origem_do_faturamento || [];
+                    origemBody.innerHTML = origens.length === 0
+                        ? '<tr><td colspan="4" class="empty-state">Nenhuma venda no período</td></tr>'
+                        : origens.map(o => `
+                            <tr>
+                                <td style="font-weight:600">
+                                    ${o.e_mailx ? '<i class="fas fa-circle" style="color:var(--success); font-size:0.5rem; margin-right:0.4rem"></i>' : '<i class="fas fa-circle" style="color:var(--text-muted); font-size:0.5rem; margin-right:0.4rem"></i>'}${escapeHtml(o.origem)}
+                                    ${o.nota ? ` <span class="kpi-tip" tabindex="0" data-tip="${o.nota.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}
+                                </td>
+                                <td>${o.vendas.toLocaleString('pt-BR')}</td>
+                                <td style="${o.e_mailx ? 'color:var(--success); font-weight:700' : ''}">${escapeHtml(o.receita_fmt)}</td>
+                                <td><span class="tag ${o.e_mailx ? 'green' : 'gray'}">${o.share.toLocaleString('pt-BR')}%</span></td>
+                            </tr>
+                        `).join('');
                 }
 
                 // Conversão por Segmento (consolidado) + versões isoladas por canal (Email/SMS)

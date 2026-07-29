@@ -1580,6 +1580,55 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
   const fmtBRL = (v: number) => `${symbol}\u00A0` + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // ── Origem do faturamento: para onde vai o dinheiro que NÃO é MailX ──
+  // Motivo: o inventário de UTMs mostrou 4.072 vendas / ~$1 milhão "não atribuídas", o que dava a
+  // impressão de rastreio quebrado. O payload do Digistore revelou que 99% delas têm afiliado
+  // identificado — é receita de afiliado, que chega pelo rastreio próprio do gateway (aff=) e não
+  // carrega UTM. O dado existia na coluna affiliate_name e não era mostrado em lugar nenhum.
+  // Explicitar isso responde de imediato por que a representatividade da MailX é o que é.
+  const origemParams: (string | number)[] = [clientId];
+  const origemPeriod = periodSql(period, origemParams);
+  const origem = await queryOne<Record<string, string>>(`
+    SELECT
+      COUNT(*) FILTER (WHERE ${SQL_MAILX_SMS}) AS sms_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_MAILX_SMS}), 0) AS sms_receita,
+      COUNT(*) FILTER (WHERE ${SQL_MAILX_EMAIL}) AS email_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE ${SQL_MAILX_EMAIL}), 0) AS email_receita,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NOT NULL) AS afiliado_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NOT NULL), 0) AS afiliado_receita,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NULL
+        AND (utm_source IS NOT NULL OR utm_medium IS NOT NULL OR utm_campaign IS NOT NULL)) AS outra_utm_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NULL
+        AND (utm_source IS NOT NULL OR utm_medium IS NOT NULL OR utm_campaign IS NOT NULL)), 0) AS outra_utm_receita,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NULL
+        AND utm_source IS NULL AND utm_medium IS NULL AND utm_campaign IS NULL) AS sem_rastreio_vendas,
+      COALESCE(SUM(total_price) FILTER (WHERE NOT ${SQL_IS_MAILX} AND NULLIF(TRIM(COALESCE(affiliate_name, '')), '') IS NULL
+        AND utm_source IS NULL AND utm_medium IS NULL AND utm_campaign IS NULL), 0) AS sem_rastreio_receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
+      ${origemPeriod ? `AND ${origemPeriod}` : ''}
+  `, origemParams);
+
+  const origemDoFaturamento = (() => {
+    const n = (k: string) => parseInt(origem?.[k] || '0');
+    const v = (k: string) => parseFloat(origem?.[k] || '0');
+    const itens = [
+      { origem: 'MailX · SMS', vendas: n('sms_vendas'), receita: v('sms_receita'), e_mailx: true },
+      { origem: 'MailX · Email', vendas: n('email_vendas'), receita: v('email_receita'), e_mailx: true },
+      { origem: 'Afiliado', vendas: n('afiliado_vendas'), receita: v('afiliado_receita'), e_mailx: false,
+        nota: 'Rastreio próprio do gateway (aff=), sem UTM — não passa pela MailX.' },
+      { origem: 'Outra origem com UTM', vendas: n('outra_utm_vendas'), receita: v('outra_utm_receita'), e_mailx: false,
+        nota: 'Mídia paga do próprio cliente (Facebook, Taboola etc).' },
+      { origem: 'Sem rastreio', vendas: n('sem_rastreio_vendas'), receita: v('sem_rastreio_receita'), e_mailx: false,
+        nota: 'Nem UTM nem afiliado — direto, orgânico ou link sem marcação.' },
+    ];
+    const totalReceita = itens.reduce((a, i) => a + i.receita, 0);
+    return itens
+      .filter(i => i.vendas > 0)
+      .map(i => ({ ...i, receita_fmt: fmtBRL(i.receita), share: totalReceita > 0 ? parseFloat((i.receita / totalReceita * 100).toFixed(1)) : 0 }))
+      .sort((a, b) => b.receita - a.receita);
+  })();
+
   // ── Conversão por Segmento: leads via SlickText (lista Compra/Abandono). ──
   // Vitalício — CONFIRMADO via probe em produção que /analytics/contacts NÃO aceita filtro
   // por lista (list_id e _list_id devolvem o mesmo total do brand inteiro, igual sem filtro
@@ -1920,6 +1969,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     // Consolidado = soma dos dois canais, dos dois lados da conta (leads SlickText + tag do AC,
     // vendas SMS + Email já escopadas aos produtos com lista/tag vinculada). Antes somava leads
     // de SMS só com vendas de TODOS os canais/produtos, o que inflava a taxa.
+    origem_do_faturamento: origemDoFaturamento,
     conversao_por_segmento: {
       carrinho_abandonado: {
         leads: abandonoLeads + emailAbandonoLeads,
