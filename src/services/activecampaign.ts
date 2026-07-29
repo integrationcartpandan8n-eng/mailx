@@ -133,9 +133,15 @@ export class ActiveCampaignClient {
   // ── Reporting ──
 
   /**
-   * Aggregates send/open/click totals across all campaigns sent in the last `daysBack` days.
-   * Iterates campaigns in DESC sdate order, stops once a campaign older than the window is seen.
-   * Status 5 = sent (per AC docs).
+   * Soma envios/aberturas/cliques das campanhas disparadas nos últimos `daysBack` dias.
+   * Percorre em ordem decrescente de data e para na primeira fora da janela.
+   *
+   * Conta campanha que REALMENTE ENVIOU (send_amt > 0), não por código de status: sonda contra as
+   * contas reais mostrou que os emails de automação — justamente os que interessam, como
+   * "[AUTO] [COMPRA APROVADA]" com 196 envios e 37 aberturas — ficam com status 1, e não 5. Filtrar
+   * por status 5 descartava tudo isso e sobravam só campanhas manuais de teste com 1 a 5 envios
+   * (numa das contas, 100% das campanhas são status 1 e o engajamento vinha zerado).
+   * Quem nunca enviou tem send_amt 0 e sai da conta naturalmente, sem depender da semântica do status.
    */
   async getCampaignsAggregate(daysBack: number = 30): Promise<{
     campaigns: number;
@@ -164,9 +170,10 @@ export class ActiveCampaignClient {
           stop = true;
           break;
         }
-        if (String(c.status) !== '5') continue;
+        const enviados = parseInt(c.send_amt || '0', 10);
+        if (enviados <= 0) continue; // rascunho/agendada que ainda não saiu
         totals.campaigns++;
-        totals.send_amt += parseInt(c.send_amt || '0', 10);
+        totals.send_amt += enviados;
         totals.opens += parseInt(c.opens || '0', 10);
         totals.uniqueopens += parseInt(c.uniqueopens || '0', 10);
         totals.linkclicks += parseInt(c.linkclicks || '0', 10);
@@ -225,8 +232,12 @@ export class ActiveCampaignClient {
    * paginar os registros. Vitalício — a API de contatos por tag não filtra por período.
    */
   async getContactCountByTag(tagId: string): Promise<number> {
+    // `tagid` vai no TOPO, não dentro de filters[] — confirmado por sonda contra as contas reais:
+    // filters[tagid], filters[tag] e tag são ignorados em silêncio e devolvem o total da conta
+    // inteira (era o que fazia os dois segmentos mostrarem o mesmo número). Só `tagid` devolve
+    // número menor que o total e diferente por tag.
     const res = await this.http.get('/contacts', {
-      params: { limit: 1, 'filters[tagid]': tagId },
+      params: { limit: 1, tagid: tagId },
     });
     return parseInt(res.data?.meta?.total || '0', 10);
   }

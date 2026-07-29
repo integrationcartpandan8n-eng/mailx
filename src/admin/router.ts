@@ -1769,16 +1769,29 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     status: 'not_configured' as 'not_configured' | 'error' | 'ok',
     status_message: 'ActiveCampaign não configurado para este cliente.' as string,
   };
-  const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
-    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
-  );
-  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
+  // Soma TODAS as contas de ActiveCampaign do cliente, não só a principal — mesmo tratamento já
+  // dado a contatos/créditos das contas SlickText. Sem isso, uma conta adicional que dispara email
+  // (a Group Future Now, por exemplo) ficava invisível no engajamento.
+  const acAccountsForMetrics = await getActiveCampaignAccounts(clientId);
+  if (acAccountsForMetrics.length > 0) {
     try {
-      const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
-      const [agg, newContacts] = await Promise.all([
-        ac.getCampaignsAggregate(acDaysBack),
-        ac.getNewContactsCount(acDaysBack),
-      ]);
+      const porConta = await Promise.all(acAccountsForMetrics.map(async (acc) => {
+        const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
+        const [agg, novos] = await Promise.all([
+          ac.getCampaignsAggregate(acDaysBack),
+          ac.getNewContactsCount(acDaysBack),
+        ]);
+        return { agg, novos };
+      }));
+      const agg = porConta.reduce((acc, r) => ({
+        campaigns: acc.campaigns + r.agg.campaigns,
+        send_amt: acc.send_amt + r.agg.send_amt,
+        opens: acc.opens + r.agg.opens,
+        uniqueopens: acc.uniqueopens + r.agg.uniqueopens,
+        linkclicks: acc.linkclicks + r.agg.linkclicks,
+        uniquelinkclicks: acc.uniquelinkclicks + r.agg.uniquelinkclicks,
+      }), { campaigns: 0, send_amt: 0, opens: 0, uniqueopens: 0, linkclicks: 0, uniquelinkclicks: 0 });
+      const newContacts = porConta.reduce((sum, r) => sum + r.novos, 0);
       const mailxRev = parseFloat(emailMailxData?.revenue || '0');
       const ctr = agg.send_amt > 0 ? (agg.uniquelinkclicks / agg.send_amt) * 100 : 0;
       const openRate = agg.send_amt > 0 ? (agg.uniqueopens / agg.send_amt) * 100 : 0;
@@ -2312,84 +2325,6 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
-// GET /admin/clientes/:id/ac-debug/probe - DIAGNÓSTICO TEMPORÁRIO: a contagem de contatos por
-// TAG devolve o MESMO número pros dois segmentos (160.836 em ambos) — assinatura de filtro
-// ignorado, igual ao bug do list_id da SlickText. Testa várias formas do filtro contra a conta
-// real e compara com o total sem filtro: a forma correta é a que devolve número MENOR e
-// DIFERENTE por tag. Também investiga por que o engajamento (CTR/abertura) vem zerado.
-// Remover após o diagnóstico.
-adminRouter.get('/clientes/:id/ac-debug/probe', asyncHandler(async (req: Request, res: Response) => {
-  const clientId = req.params.id as string;
-  const accounts = await getActiveCampaignAccounts(clientId);
-  if (accounts.length === 0) { res.status(400).json({ error: 'ActiveCampaign não configurado.' }); return; }
-
-  const out: any[] = [];
-  for (const acc of accounts) {
-    const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
-    const http = (ac as any).http;
-    const bloco: any = { conta: acc.label, url: acc.ac_api_url };
-
-    // Controle: total de contatos SEM filtro nenhum. Toda variante que devolver esse mesmo
-    // número está com o filtro sendo ignorado.
-    try {
-      const r = await http.get('/contacts', { params: { limit: 1 } });
-      bloco.total_sem_filtro = r.data?.meta?.total ?? null;
-    } catch (e: any) { bloco.total_sem_filtro = `erro: ${e.message}`; }
-
-    // Pega duas tags reais (uma de compra, uma de abandono) pra testar os filtros.
-    let tagCompra: any = null, tagAbandono: any = null;
-    try {
-      const tags = await ac.listTags();
-      tagCompra = tags.find(t => /\]\s*compra aprovada\s*$/i.test(t.tag)) ?? null;
-      tagAbandono = tags.find(t => /\]\s*abandono\s*$/i.test(t.tag)) ?? null;
-      bloco.tag_compra_testada = tagCompra?.tag ?? null;
-      bloco.tag_abandono_testada = tagAbandono?.tag ?? null;
-    } catch (e: any) { bloco.erro_tags = e.message; }
-
-    // Formas candidatas do filtro por tag. Roda pras DUAS tags: se as duas derem o mesmo
-    // número, o filtro está sendo ignorado, mesmo que o número não seja o total.
-    const variantes: Array<{ nome: string; params: (id: string) => any; path?: string }> = [
-      { nome: 'A_filters[tagid]  (usado hoje)', params: id => ({ limit: 1, 'filters[tagid]': id }) },
-      { nome: 'B_tagid  (topo)',                params: id => ({ limit: 1, tagid: id }) },
-      { nome: 'C_filters[tag]',                 params: id => ({ limit: 1, 'filters[tag]': id }) },
-      { nome: 'D_tag',                          params: id => ({ limit: 1, tag: id }) },
-      { nome: 'E_contactTags_filters[tag]',     params: id => ({ limit: 1, 'filters[tag]': id }), path: '/contactTags' },
-    ];
-
-    bloco.filtro_por_tag = [];
-    for (const v of variantes) {
-      const linha: any = { variante: v.nome };
-      for (const [rotulo, tag] of [['compra', tagCompra], ['abandono', tagAbandono]] as const) {
-        if (!tag) { linha[rotulo] = 'sem tag pra testar'; continue; }
-        try {
-          const r = await http.get(v.path ?? '/contacts', { params: v.params(tag.id) });
-          linha[rotulo] = r.data?.meta?.total ?? (Array.isArray(r.data?.contactTags) ? `${r.data.contactTags.length} itens` : null);
-        } catch (e: any) { linha[rotulo] = `erro ${e.response?.status ?? ''}: ${e.message}`; }
-      }
-      bloco.filtro_por_tag.push(linha);
-    }
-
-    // Engajamento zerado: quantas campanhas existem, com que status e de quando é a mais recente.
-    try {
-      const r = await http.get('/campaigns', { params: { limit: 20, 'orders[sdate]': 'DESC' } });
-      const camps: any[] = r.data?.campaigns ?? [];
-      bloco.campanhas = {
-        total_na_conta: r.data?.meta?.total ?? camps.length,
-        // status 5 = enviada (é o que getCampaignsAggregate soma); ver quais status existem
-        status_das_20_recentes: [...new Set(camps.map(c => String(c.status)))],
-        amostra: camps.slice(0, 8).map(c => ({
-          nome: c.name, status: c.status, enviada_em: c.sdate,
-          enviados: c.send_amt, abertos_unicos: c.uniqueopens, cliques_unicos: c.uniquelinkclicks,
-        })),
-      };
-    } catch (e: any) { bloco.campanhas = { erro: e.message }; }
-
-    out.push(bloco);
-  }
-
-  res.json({ contas: out });
-}));
-
 // GET /admin/clientes/:id/diagnostico/vinculos - Saúde do cadastro de um cliente, nos DOIS canais:
 // para cada produto, se está ativado, se tem lista da SlickText vinculada (SMS) e se tem tag do
 // ActiveCampaign vinculada (Email) — mais o retrato de cada conta configurada (quantas tags tem,
@@ -2418,10 +2353,6 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
     } catch { /* conta indisponível */ }
   }
 
-  // Nomes das TAGS do ActiveCampaign que o bootstrap criaria, e se existem de fato na conta.
-  const acCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
-    `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
-  );
   // Varre TODAS as contas de ActiveCampaign do cliente. O objetivo é ver a divisão real: qual
   // conta tem quais tags, pra saber se uma cuida de compra aprovada e outra de abandono.
   const acAccounts = await getActiveCampaignAccounts(clientId);
@@ -2456,14 +2387,20 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
   const acTagCheck: any[] = [];
   for (const k of kits.filter(k => k.enabled)) {
     const achados: any = { produto: k.name, compra_em: [], abandono_em: [] };
+    // Casa por FAMÍLIA com comparação normalizada — mesma regra do auto-vínculo real. A busca
+    // anterior era por nome de SKU e com o sufixo das listas da SlickText ("Abandono de Carrinho"),
+    // e por isso não achava nada mesmo com as tags existindo.
+    const kitKey = k.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
     for (const acc of acAccounts) {
       const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
-      const [tc, ta] = await Promise.all([
-        ac.findTagByName(`[${k.name}] Compra Aprovada`).catch(() => null),
-        ac.findTagByName(`[${k.name}] Abandono de Carrinho`).catch(() => null),
-      ]);
-      if (tc) achados.compra_em.push({ conta: acc.label, id: tc.id });
-      if (ta) achados.abandono_em.push({ conta: acc.label, id: ta.id });
+      const tags = await ac.listTags().catch(() => [] as Array<{ id: string; tag: string }>);
+      for (const t of tags) {
+        const m = t.tag.match(/^\[(.+?)\]\s*(compra aprovada|abandono)\s*$/i);
+        if (!m) continue;
+        const fam = m[1].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!fam || !kitKey.includes(fam)) continue;
+        (/compra/i.test(m[2]) ? achados.compra_em : achados.abandono_em).push({ conta: acc.label, tag: t.tag, id: t.id });
+      }
     }
     acTagCheck.push(achados);
   }
