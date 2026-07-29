@@ -2364,9 +2364,18 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
     utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign_prefixo: r.utm_campaign,
     vendas: parseInt(r.vendas), receita: parseFloat(r.receita),
     classificacao: classificar(r),
-    // Tem cara de email mas não está sendo atribuída? É o caso que explica "faturamento email = 0".
-    suspeita_email_perdido: classificar(r) === 'NAO_ATRIBUIDA' && /mail|email|ac|activecampaign|newsletter|broadcast/i
-      .test(`${r.utm_source ?? ''} ${r.utm_medium ?? ''} ${r.utm_campaign ?? ''}`),
+    // Marca tráfego que PARECE da MailX mas não está sendo atribuído. Os padrões precisam ser
+    // específicos: uma primeira versão usava o token 'ac' e casava com "Taboola_Acc-015",
+    // marcando ~$89 mil de mídia paga como email perdido. Agora exige palavra inteira ou nome de
+    // ferramenta de email, e trata SMS separadamente (foi assim que 'smsbrdcst' apareceu).
+    suspeita_email_perdido: classificar(r) === 'NAO_ATRIBUIDA'
+      && /(^|[^a-z])(e-?mails?|activecampaign|newsletter|klaviyo|mailchimp|sendgrid|broadcast)([^a-z]|$)/i
+        .test(`${r.utm_source ?? ''} ${r.utm_medium ?? ''} ${r.utm_campaign ?? ''}`),
+    suspeita_sms_perdido: classificar(r) === 'NAO_ATRIBUIDA'
+      && /(^|[^a-z])(sms|smsbrdcst|slicktext|shorturl|slk1)([^a-z]|$)/i
+        .test(`${r.utm_source ?? ''} ${r.utm_medium ?? ''} ${r.utm_campaign ?? ''}`),
+    // Venda sem UTM nenhuma: nem MailX nem mídia paga — direto/orgânico ou link sem marcação.
+    sem_utm: !r.utm_source && !r.utm_medium && !r.utm_campaign,
   }));
 
   const soma = (f: (l: typeof linhas[number]) => boolean) => {
@@ -2380,8 +2389,17 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
       EMAIL: soma(l => l.classificacao === 'EMAIL'),
       SMS: soma(l => l.classificacao === 'SMS'),
       NAO_ATRIBUIDA: soma(l => l.classificacao === 'NAO_ATRIBUIDA'),
+      // Dentro do não atribuído, separa o que é ruído esperado do que merece investigação:
+      sem_utm_nenhuma: soma(l => l.sem_utm),
       suspeitas_de_email_perdido: soma(l => l.suspeita_email_perdido),
+      suspeitas_de_sms_perdido: soma(l => l.suspeita_sms_perdido),
     },
+    // Maiores fontes não atribuídas, pra olho humano julgar o que é mídia paga do cliente e o
+    // que pode ser MailX sem marcação — mais confiável que qualquer heurística.
+    top_nao_atribuidas: linhas
+      .filter(l => l.classificacao === 'NAO_ATRIBUIDA' && !l.sem_utm)
+      .slice(0, 15)
+      .map(l => ({ utm_source: l.utm_source, utm_medium: l.utm_medium, vendas: l.vendas, receita: l.receita })),
     combinacoes: linhas,
   });
 }));
