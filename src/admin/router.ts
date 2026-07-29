@@ -2195,6 +2195,68 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/sms-debug/kits-vinculo - DIAGNÓSTICO TEMPORÁRIO: o aviso "N produtos
+// sem lista SlickText vinculada" pode estar contando produtos que NUNCA foram ativados (descoberta
+// automática entra com enabled=false e só ganha lista/tag no bootstrap da ativação) — nesse caso o
+// aviso é ruído, não pendência de cadastro. Mostra kit por kit: ativado?, tem lista?, tem tag?, e
+// se existe lista/tag com o nome esperado na conta. Remover após o diagnóstico.
+adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+
+  const kits = await query<{
+    id: number; name: string; enabled: boolean; external_id: string | null;
+    st_list_compra_id: string | null; st_list_abandono_id: string | null;
+    ac_tag_compra_id: string | null; ac_tag_abandono_id: string | null;
+  }>(`SELECT id, name, enabled, external_id, st_list_compra_id, st_list_abandono_id,
+             ac_tag_compra_id, ac_tag_abandono_id
+      FROM kits WHERE client_id = $1 ORDER BY enabled DESC, name`, [clientId]);
+
+  // Nomes que o bootstrap cria — se a lista/tag existe com esse nome mas o kit não aponta pra ela,
+  // é só religar o vínculo; se não existe, precisa criar (ou o produto nunca foi ativado).
+  const accounts = await getSlickTextAccounts(clientId);
+  const stListNames = new Set<string>();
+  for (const acc of accounts) {
+    try {
+      const lists = await new SlickTextClient(acc.st_api_token, acc.st_brand_id).getLists();
+      lists.forEach((l: any) => l?.name && stListNames.add(String(l.name).toLowerCase()));
+    } catch { /* conta indisponível — reportado como desconhecido abaixo */ }
+  }
+
+  const rows = kits.map(k => ({
+    produto: k.name,
+    ativado: k.enabled,
+    origem: k.external_id ? 'descoberto automaticamente' : 'cadastrado à mão',
+    st_lista_compra: !!k.st_list_compra_id,
+    st_lista_abandono: !!k.st_list_abandono_id,
+    ac_tag_compra: !!k.ac_tag_compra_id,
+    ac_tag_abandono: !!k.ac_tag_abandono_id,
+    // A lista existe na conta com o nome que o bootstrap usaria?
+    lista_existe_na_conta: {
+      compra: stListNames.has(`[${k.name}] [compra aprovada]`.toLowerCase()),
+      abandono: stListNames.has(`[${k.name}] [abandono de carrinho]`.toLowerCase()),
+    },
+  }));
+
+  const semLista = rows.filter(r => !r.st_lista_abandono || !r.st_lista_compra);
+  res.json({
+    resumo: {
+      kits_total: rows.length,
+      ativados: rows.filter(r => r.ativado).length,
+      nao_ativados: rows.filter(r => !r.ativado).length,
+      sem_lista_total: semLista.length,
+      sem_lista_MAS_ativados: semLista.filter(r => r.ativado).length,
+      sem_lista_e_nao_ativados: semLista.filter(r => !r.ativado).length,
+      sem_tag_ac_mas_ativados: rows.filter(r => r.ativado && (!r.ac_tag_compra || !r.ac_tag_abandono)).length,
+      // Casos onde a lista JÁ EXISTE na conta mas o kit não aponta pra ela: religável por código
+      religavel_sem_criar_nada: rows.filter(r => r.ativado
+        && (!r.st_lista_compra && r.lista_existe_na_conta.compra
+         || !r.st_lista_abandono && r.lista_existe_na_conta.abandono)).length,
+      listas_lidas_da_conta: stListNames.size,
+    },
+    kits: rows,
+  });
+}));
+
 // GET /admin/clientes/:id/sms-campaigns - Lista campanhas E workflows de TODAS as contas
 // SlickText do cliente (id + nome) pra preencher o dropdown de "Vincular" — evita ter que caçar
 // o ID manualmente no painel da SlickText. Um cliente pode ter mais de uma conta rodando o mesmo
