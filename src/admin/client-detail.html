@@ -3044,12 +3044,31 @@
                 </div>
             `;
 
-            contactsEl.innerHTML = kpiCard({
+            // Contatos por segmento (item 3.1.1 da spec): a aba SMS já mostrava a divisão
+            // Compradores / Carrinhos Abandonados; no Email faltava. Vem das tags do
+            // ActiveCampaign, agora que a contagem por tag funciona.
+            const segEmail = (window.__clientStatsData || {}).conversao_por_segmento_email || null;
+            const cardsContatos = [{
                 icon: 'fa-user-plus blue',
                 label: 'Entrada de Contatos',
                 value: em.entrada_contatos || '--',
                 tip: EMAIL_KPI_HINTS['Entrada de Contatos'],
-            });
+            }];
+            if (segEmail) {
+                cardsContatos.push({
+                    icon: 'fa-shopping-bag green',
+                    label: 'Compradores',
+                    value: (segEmail.compradores?.leads ?? 0).toLocaleString('pt-BR'),
+                    tip: 'Contatos com a tag de compra aprovada dos produtos ativados, somando todas as contas de ActiveCampaign. Total atual — a API não filtra contato por tag e por período ao mesmo tempo.',
+                });
+                cardsContatos.push({
+                    icon: 'fa-cart-arrow-down orange',
+                    label: 'Carrinhos Abandonados',
+                    value: (segEmail.carrinho_abandonado?.leads ?? 0).toLocaleString('pt-BR'),
+                    tip: 'Contatos com a tag de abandono de carrinho dos produtos ativados, somando todas as contas de ActiveCampaign. Total atual — a API não filtra contato por tag e por período ao mesmo tempo.',
+                });
+            }
+            contactsEl.innerHTML = cardsContatos.map(kpiCard).join('');
 
             const engagementUnavailable = status === 'not_configured';
             const engagementError = status === 'error';

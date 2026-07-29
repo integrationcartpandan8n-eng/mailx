@@ -2325,6 +2325,67 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/diagnostico/utms - Inventário das UTMs que chegam nas vendas do cliente,
+// com a classificação que o dashboard aplica a cada combinação. Responde a pergunta que aparece
+// sempre que um canal mostra zero: "não vendeu por esse canal" ou "vendeu e a atribuição não pegou?".
+// Uma venda só é atribuída à MailX se utm_source OU utm_campaign contiver 'mailx'; o canal é SMS
+// quando utm_medium contém 'sms'. Qualquer combinação com cara de email fora dessa regra aparece
+// aqui como NAO_ATRIBUIDA e é dinheiro que o dashboard não está creditando a ninguém.
+adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const params: (string | number)[] = [clientId];
+  const periodSqlStr = periodSql(period, params);
+
+  const rows = await query<{
+    utm_source: string | null; utm_medium: string | null; utm_campaign: string | null;
+    vendas: string; receita: string; e_mailx: boolean; e_sms: boolean;
+  }>(`
+    SELECT
+      utm_source, utm_medium,
+      -- agrupa por prefixo da campanha pra não explodir em milhares de linhas por variação
+      NULLIF(SPLIT_PART(COALESCE(utm_campaign, ''), '-', 1), '') AS utm_campaign,
+      COUNT(*) AS vendas,
+      ${SQL_REVENUE} AS receita,
+      ${SQL_IS_MAILX} AS e_mailx,
+      ${SQL_IS_SMS} AS e_sms
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      ${periodSqlStr ? `AND ${periodSqlStr}` : ''}
+    GROUP BY utm_source, utm_medium, 3, e_mailx, e_sms
+    ORDER BY COUNT(*) DESC
+    LIMIT 60
+  `, params);
+
+  const classificar = (r: typeof rows[number]) =>
+    !r.e_mailx ? 'NAO_ATRIBUIDA' : (r.e_sms ? 'SMS' : 'EMAIL');
+
+  const linhas = rows.map(r => ({
+    utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign_prefixo: r.utm_campaign,
+    vendas: parseInt(r.vendas), receita: parseFloat(r.receita),
+    classificacao: classificar(r),
+    // Tem cara de email mas não está sendo atribuída? É o caso que explica "faturamento email = 0".
+    suspeita_email_perdido: classificar(r) === 'NAO_ATRIBUIDA' && /mail|email|ac|activecampaign|newsletter|broadcast/i
+      .test(`${r.utm_source ?? ''} ${r.utm_medium ?? ''} ${r.utm_campaign ?? ''}`),
+  }));
+
+  const soma = (f: (l: typeof linhas[number]) => boolean) => {
+    const sel = linhas.filter(f);
+    return { vendas: sel.reduce((a, l) => a + l.vendas, 0), receita: Number(sel.reduce((a, l) => a + l.receita, 0).toFixed(2)) };
+  };
+
+  res.json({
+    periodo: { ativo: period.isToday || !!(period.from && period.to), de: period.from ?? null, ate: period.to ?? null },
+    resumo: {
+      EMAIL: soma(l => l.classificacao === 'EMAIL'),
+      SMS: soma(l => l.classificacao === 'SMS'),
+      NAO_ATRIBUIDA: soma(l => l.classificacao === 'NAO_ATRIBUIDA'),
+      suspeitas_de_email_perdido: soma(l => l.suspeita_email_perdido),
+    },
+    combinacoes: linhas,
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/vinculos - Saúde do cadastro de um cliente, nos DOIS canais:
 // para cada produto, se está ativado, se tem lista da SlickText vinculada (SMS) e se tem tag do
 // ActiveCampaign vinculada (Email) — mais o retrato de cada conta configurada (quantas tags tem,
