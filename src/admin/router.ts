@@ -2641,23 +2641,33 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
     return { vendas: sel.reduce((a, l) => a + l.vendas, 0), receita: Number(sel.reduce((a, l) => a + l.receita, 0).toFixed(2)) };
   };
 
-  // Prova decisiva de onde está o problema quando um canal mostra zero: olha o SISTEMA INTEIRO
-  // (todos os clientes, todo o histórico). Se nenhuma venda em nenhum cliente chegou com medium
-  // de email, o extrator/atribuição não é o culpado — as vendas não chegam marcadas, e o ajuste
-  // é no link do email. Se OUTRO cliente tem, o caminho é provado ponta a ponta e o problema é
-  // só na marcação deste. Só contagens agregadas, nada por cliente.
+  // Prova de onde está o problema quando um canal mostra zero. Precisa ser exata pra não
+  // afirmar o que não sabe: conta vendas de email ATRIBUÍDAS À MAILX em OUTROS clientes (é isso
+  // que prova o caminho ponta a ponta) e, separado, qualquer medium com cara de email em
+  // qualquer cliente — inclusive este — mostrando quais são, pra não confundir ruído com prova.
+  const emailOutrosClientes = await queryOne<{ vendas: string; clientes: string }>(`
+    SELECT COUNT(*) AS vendas, COUNT(DISTINCT client_id) AS clientes
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND client_id IS DISTINCT FROM $1
+      AND ${SQL_MAILX_EMAIL}
+  `, [clientId]);
+
+  const mediumsComCaraDeEmail = await query<{ utm_medium: string | null; vendas: string; deste_cliente: string }>(`
+    SELECT utm_medium, COUNT(*) AS vendas,
+           COUNT(*) FILTER (WHERE client_id IS NOT DISTINCT FROM $1) AS deste_cliente
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
+      AND COALESCE(utm_medium, '') ILIKE '%email%'
+    GROUP BY utm_medium ORDER BY COUNT(*) DESC LIMIT 10
+  `, [clientId]);
+
   const mediumsNoSistema = await query<{ utm_medium: string | null; vendas: string; clientes: string }>(`
     SELECT utm_medium, COUNT(*) AS vendas, COUNT(DISTINCT client_id) AS clientes
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND status IN ('processed','processing')
       AND utm_medium IS NOT NULL
     GROUP BY utm_medium ORDER BY COUNT(*) DESC LIMIT 30
-  `);
-  const emailNoSistema = await queryOne<{ vendas: string; clientes: string }>(`
-    SELECT COUNT(*) AS vendas, COUNT(DISTINCT client_id) AS clientes
-    FROM webhook_logs
-    WHERE event_type = 'order.paid' AND status IN ('processed','processing')
-      AND (COALESCE(utm_medium, '') ILIKE '%email%' OR COALESCE(tracking_code, '') ILIKE '%autoemail%')
   `);
 
   res.json({
@@ -2678,14 +2688,21 @@ adminRouter.get('/clientes/:id/diagnostico/utms', asyncHandler(async (req: Reque
       .slice(0, 15)
       .map(l => ({ utm_source: l.utm_source, utm_medium: l.utm_medium, vendas: l.vendas, receita: l.receita })),
     combinacoes: linhas,
-    // Diagnóstico de causa: o canal email nunca recebeu venda marcada em NENHUM cliente?
-    email_no_sistema_inteiro: {
-      vendas_com_medium_de_email: parseInt(emailNoSistema?.vendas || '0'),
-      clientes_com_venda_de_email: parseInt(emailNoSistema?.clientes || '0'),
-      veredito: parseInt(emailNoSistema?.vendas || '0') > 0
-        ? 'O caminho funciona ponta a ponta em outro lugar — o problema é a marcação dos links DESTE cliente.'
-        : 'Nenhuma venda de email marcada em nenhum cliente: os links de email não estão carregando UTM. Não é leitura, é marcação na origem.',
-    },
+    // Diagnóstico de causa. Só afirma o que os números sustentam.
+    email_no_sistema_inteiro: (() => {
+      const outros = parseInt(emailOutrosClientes?.vendas || '0');
+      const clientesOutros = parseInt(emailOutrosClientes?.clientes || '0');
+      return {
+        vendas_de_email_mailx_em_outros_clientes: outros,
+        outros_clientes_com_venda_de_email: clientesOutros,
+        mediums_com_cara_de_email_no_sistema: mediumsComCaraDeEmail.map(r => ({
+          utm_medium: r.utm_medium, vendas: parseInt(r.vendas), deste_cliente: parseInt(r.deste_cliente),
+        })),
+        veredito: outros > 0
+          ? `O caminho está provado: ${outros} venda(s) de email atribuídas à MailX em ${clientesOutros} outro(s) cliente(s). A leitura funciona — o problema é a marcação dos links DESTE cliente.`
+          : 'Nenhuma venda de email atribuída à MailX em nenhum cliente. Como o SMS chega atribuído pelo mesmo caminho, a leitura não é o gargalo: os links de email não estão carregando UTM. Ainda assim, sem um caso funcionando em outro cliente, isso é inferência forte e não prova — confirme abrindo o link de uma campanha no ActiveCampaign.',
+      };
+    })(),
     todos_os_mediums_do_sistema: mediumsNoSistema.map(r => ({
       utm_medium: r.utm_medium, vendas: parseInt(r.vendas), clientes: parseInt(r.clientes),
     })),
