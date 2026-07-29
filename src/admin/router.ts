@@ -1633,44 +1633,89 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const smsSegRecoveryFora = parseInt(smsSeg?.rec_total || '0') - smsSegRecoveryCount;
   const smsSegSalesFora = parseInt(smsSeg?.compra_total || '0') - smsSegSalesCount;
 
-  // Email: leads via TAG do ActiveCampaign (kits.ac_tag_compra_id/ac_tag_abandono_id) — o
-  // equivalente às listas do SlickText, mas pro canal email. Vitalício (a API de contatos por
-  // tag não filtra por período) — rotulado, igual ao padrão já usado pro SlickText/vitalício.
+  // Email: leads via TAG do ActiveCampaign, em TODAS as contas do cliente.
+  // Realidade confirmada em produção: as tags são nomeadas por FAMÍLIA de produto
+  // ("[Glyco Pulse] Compra Aprovada") enquanto os produtos chegam do gateway por SKU
+  // ("M2 - Glyco Pulse (3 Bottles)") — buscar por nome exato nunca achava nada. O casamento é
+  // por substring normalizada, igual ao que já funciona pras listas da SlickText. E como o mesmo
+  // produto pode ter tag em mais de uma conta, os contatos somam as contas (nunca a mesma tag
+  // duas vezes). Vitalício: a API não filtra contatos por tag e por período ao mesmo tempo.
   let emailAbandonoLeads = 0;
   let emailCompradorLeads = 0;
   let emailLeadsSource: 'ac_tag' | 'unavailable' = 'unavailable';
   let emailLeadsWarning: string | null = null;
   {
-    const acClientCreds = await queryOne<{ ac_api_url: string | null; ac_api_key: string | null }>(
-      `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
+    const acAccounts = await getActiveCampaignAccounts(clientId);
+    const enabledKits = await query<{ id: number; name: string }>(
+      `SELECT id, name FROM kits WHERE client_id = $1 AND enabled = true`, [clientId]
     );
-    if (acClientCreds?.ac_api_url && acClientCreds?.ac_api_key) {
-      try {
-        const ac = new ActiveCampaignClient(acClientCreds.ac_api_url, acClientCreds.ac_api_key);
-        const acKits = await query<{ ac_tag_abandono_id: string | null; ac_tag_compra_id: string | null; name: string }>(
-          `SELECT DISTINCT ac_tag_abandono_id, ac_tag_compra_id, name FROM kits WHERE client_id = $1 AND enabled = true`,
-          [clientId]
-        );
-        const abandonoTagIds = [...new Set(acKits.map(k => k.ac_tag_abandono_id).filter((v): v is string => !!v))];
-        const compraTagIds = [...new Set(acKits.map(k => k.ac_tag_compra_id).filter((v): v is string => !!v))];
-        const unmatchedAc = acKits.filter(k => !k.ac_tag_abandono_id && !k.ac_tag_compra_id);
 
-        const [abandonoTagCounts, compraTagCounts] = await Promise.all([
-          Promise.all(abandonoTagIds.map(id => ac.getContactCountByTag(id).catch(() => 0))),
-          Promise.all(compraTagIds.map(id => ac.getContactCountByTag(id).catch(() => 0))),
-        ]);
-        emailAbandonoLeads = abandonoTagCounts.reduce((a, b) => a + b, 0);
-        emailCompradorLeads = compraTagCounts.reduce((a, b) => a + b, 0);
-        emailLeadsSource = 'ac_tag';
-        if (unmatchedAc.length > 0) {
-          emailLeadsWarning = `${unmatchedAc.length} produto(s) sem tag do ActiveCampaign vinculada: ${unmatchedAc.map(k => k.name).join(', ')}`;
-        }
-      } catch (err: any) {
-        logger.error('Admin', `Falha ao buscar leads via ActiveCampaign (client ${clientId}): ${err.message}`);
-        emailLeadsWarning = 'Falha ao consultar ActiveCampaign — Leads de Carrinho Abandonado e Compradores temporariamente indisponíveis';
-      }
-    } else {
+    if (acAccounts.length === 0) {
       emailLeadsWarning = 'ActiveCampaign não configurado — Leads de Carrinho Abandonado e Compradores indisponíveis';
+    } else if (enabledKits.length === 0) {
+      emailLeadsWarning = 'Nenhum produto ativado — sem base para calcular leads';
+    } else {
+      const norm = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase().replace(/[^a-z0-9]/g, '');
+      const kitKeys = enabledKits.map(k => ({ id: k.id, name: k.name, key: norm(k.name) }));
+      const cobertos = new Set<number>();
+      // Chave "conta:tagId" garante que a mesma tag não seja contada duas vezes, mas a mesma
+      // família em contas diferentes conta as duas (são contatos distintos).
+      const contarCompra = new Map<string, () => Promise<number>>();
+      const contarAbandono = new Map<string, () => Promise<number>>();
+      let falhas = 0;
+
+      for (const acc of acAccounts) {
+        const ac = new ActiveCampaignClient(acc.ac_api_url, acc.ac_api_key);
+        let tags: Array<{ id: string; tag: string }>;
+        try {
+          tags = await ac.listTags();
+        } catch (err: any) {
+          logger.warn('Admin', `Falha ao listar tags do AC (client ${clientId}, conta ${acc.label}): ${err.message}`);
+          falhas++;
+          continue;
+        }
+
+        for (const t of tags) {
+          // "[Família] Compra Aprovada" / "[Família] Abandono" — o padrão que o bootstrap cria
+          // e que o Nicollas mantém à mão. Ignora Reembolso/Chargeback/Rastreio/Cartão Recusado.
+          const m = t.tag.match(/^\[(.+?)\]\s*(compra aprovada|abandono)\s*$/i);
+          if (!m) continue;
+          const familiaKey = norm(m[1]);
+          if (!familiaKey) continue;
+          const kitsDaFamilia = kitKeys.filter(k => k.key.includes(familiaKey));
+          if (kitsDaFamilia.length === 0) continue; // tag de produto de outro cliente na mesma conta
+
+          kitsDaFamilia.forEach(k => cobertos.add(k.id));
+          const alvo = /compra/i.test(m[2]) ? contarCompra : contarAbandono;
+          alvo.set(`${acc.accountId ?? 'principal'}:${t.id}`, () => ac.getContactCountByTag(t.id));
+
+          // Persiste o vínculo: é o que o escopo de vendas usa pra saber quais produtos contar.
+          const coluna = /compra/i.test(m[2]) ? 'ac_tag_compra_id' : 'ac_tag_abandono_id';
+          await query(
+            `UPDATE kits SET ${coluna} = $1, ac_account_id = $2
+             WHERE client_id = $3 AND enabled = true AND id = ANY($4::int[]) AND ${coluna} IS NULL`,
+            [t.id, acc.accountId, clientId, kitsDaFamilia.map(k => k.id)]
+          );
+        }
+      }
+
+      const [compras, abandonos] = await Promise.all([
+        Promise.all([...contarCompra.values()].map(fn => fn().catch(() => 0))),
+        Promise.all([...contarAbandono.values()].map(fn => fn().catch(() => 0))),
+      ]);
+      emailCompradorLeads = compras.reduce((a, b) => a + b, 0);
+      emailAbandonoLeads = abandonos.reduce((a, b) => a + b, 0);
+
+      const semTag = kitKeys.filter(k => !cobertos.has(k.id));
+      if (falhas === acAccounts.length) {
+        emailLeadsWarning = 'Falha ao consultar ActiveCampaign — Leads de Carrinho Abandonado e Compradores temporariamente indisponíveis';
+      } else {
+        emailLeadsSource = 'ac_tag';
+        if (semTag.length > 0) {
+          emailLeadsWarning = `${semTag.length} produto(s) sem tag do ActiveCampaign: ${semTag.map(k => k.name).join(', ')}`;
+        }
+      }
     }
   }
 

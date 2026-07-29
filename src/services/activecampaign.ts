@@ -202,6 +202,24 @@ export class ActiveCampaignClient {
   }
 
   /**
+   * Todas as tags da conta, paginadas. Necessário pro auto-vínculo por FAMÍLIA de produto:
+   * as tags são nomeadas "[Glyco Pulse] Compra Aprovada" (família) e os produtos chegam do
+   * gateway por SKU ("M2 - Glyco Pulse (3 Bottles)"), então não dá pra buscar por nome exato —
+   * é preciso ler a lista e casar por substring.
+   */
+  async listTags(maxPages = 10): Promise<Array<{ id: string; tag: string }>> {
+    const all: Array<{ id: string; tag: string }> = [];
+    for (let page = 0; page < maxPages; page++) {
+      const res = await this.http.get('/tags', { params: { limit: 100, offset: page * 100 } });
+      const items: any[] = res.data?.tags ?? [];
+      if (items.length === 0) break;
+      all.push(...items.map((t: any) => ({ id: String(t.id), tag: String(t.tag) })));
+      if (items.length < 100) break;
+    }
+    return all;
+  }
+
+  /**
    * Total de contatos com uma TAG específica (equivalente às listas de segmento do SlickText,
    * usado com kits.ac_tag_compra_id/ac_tag_abandono_id). limit:1 pra só ler meta.total sem
    * paginar os registros. Vitalício — a API de contatos por tag não filtra por período.
