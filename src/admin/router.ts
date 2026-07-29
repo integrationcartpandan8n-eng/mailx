@@ -2227,6 +2227,29 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
     `SELECT ac_api_url, ac_api_key FROM clients WHERE id = $1`, [clientId]
   );
   const acTagCheck: any[] = [];
+  // Retrato da conta de AC REGISTRADA: se as tags estiverem em outra conta, aqui aparece vazio ou
+  // com tags de outros produtos — é o que distingue "tag não criada" de "conta errada cadastrada".
+  let acConta: any = { registrada: false };
+  if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
+    const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
+    const acHttp = (ac as any).http;
+    try {
+      const [tagsRes, listsRes] = await Promise.all([
+        acHttp.get('/tags', { params: { limit: 100 } }),
+        acHttp.get('/lists', { params: { limit: 100 } }),
+      ]);
+      acConta = {
+        registrada: true,
+        url: acCreds.ac_api_url,
+        chave: `...${String(acCreds.ac_api_key).slice(-6)}`,
+        tags_total: tagsRes.data?.meta?.total ?? (tagsRes.data?.tags?.length ?? 0),
+        tags_amostra: (tagsRes.data?.tags ?? []).map((t: any) => t.tag).slice(0, 40),
+        listas: (listsRes.data?.lists ?? []).map((l: any) => l.name).slice(0, 40),
+      };
+    } catch (err: any) {
+      acConta = { registrada: true, url: acCreds.ac_api_url, erro: err.message };
+    }
+  }
   if (acCreds?.ac_api_url && acCreds?.ac_api_key) {
     const ac = new ActiveCampaignClient(acCreds.ac_api_url, acCreds.ac_api_key);
     for (const k of kits.filter(k => k.enabled)) {
@@ -2280,6 +2303,7 @@ adminRouter.get('/clientes/:id/sms-debug/kits-vinculo', asyncHandler(async (req:
         && r.listas_candidatas.length > 0).length,
       listas_lidas_da_conta: stListNames.length,
     },
+    ac_conta: acConta,
     tags_ac: acTagCheck,
     listas_da_conta: stListNames,
     kits: rows,
