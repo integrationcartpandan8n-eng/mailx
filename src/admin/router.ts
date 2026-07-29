@@ -28,10 +28,20 @@ const CTX = 'Admin';
 // legado (source/campaign sem hífen) para registros antigos sem medium.
 // ─────────────────────────────────────────────────────────────
 
-/** Venda atribuída à MailX (qualquer canal). */
+/**
+ * Venda atribuída à MailX (qualquer canal).
+ *
+ * Inclui tracking_code porque ClickBank e Buygoods NÃO ACEITAM UTM — a documentação UTMS_DASH
+ * define que a marcação vai no `tid` (ClickBank) e no `subid` (Buygoods), no formato
+ * "Mailx_AutoEmail_..." / "MailxSMS_AutoSMS_...". Esse valor é guardado cru em
+ * webhook_logs.tracking_code. Sem olhar essa coluna, toda venda MailX vinda desses dois
+ * gateways seria registrada e não atribuída a ninguém — o ClickBank ainda não está ativo,
+ * então nada foi perdido até agora, mas passaria a ser invisível no dia que ligasse.
+ */
 const SQL_IS_MAILX = `(
   COALESCE(utm_source, '')   ILIKE '%mailx%'
   OR COALESCE(utm_campaign, '') ILIKE '%mailx%'
+  OR COALESCE(tracking_code, '') ILIKE '%mailx%'
 )`;
 
 /** Canal SMS: medium contém 'sms'; fallback legado se medium nulo. */
@@ -44,6 +54,11 @@ const SQL_IS_SMS = `(
       OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
     )
   )
+  -- ClickBank/Buygoods: o canal vem no próprio código de rastreio, que começa com
+  -- "MailxSMS_AutoSMS_" no SMS e "Mailx_AutoEmail_" no email. Tokens específicos em vez de
+  -- procurar 'sms' solto, pra nome de produto com essas letras não classificar errado.
+  OR COALESCE(tracking_code, '') ILIKE '%mailxsms%'
+  OR COALESCE(tracking_code, '') ILIKE '%autosms%'
 )`;
 
 /** MailX via SMS. */
@@ -56,6 +71,7 @@ const SQL_MAILX_EMAIL = `(${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS})`;
 const SQL_IS_RECOVERY = `(
   COALESCE(utm_campaign, '') ILIKE '%carrinhoabandonado%'
   OR COALESCE(utm_source, '') ILIKE '%carrinhoabandonado%'
+  OR COALESCE(tracking_code, '') ILIKE '%carrinhoabandonado%'
 )`;
 
 /** Medium de automação (auto-email / auto-sms). */
@@ -69,7 +85,20 @@ const SQL_MEDIUM_CAMPAIGN = `(
 )`;
 
 /** Campanha de upsell. */
-const SQL_IS_UPSELL = `COALESCE(utm_campaign, '') ILIKE '%upsell%'`;
+/**
+ * Upsell — a automação de pós-compra. Duas grafias circulam para o MESMO evento: a
+ * documentação UTMS_DASH chama de "Automação Compra Aprovada (Upsell)" e usa
+ * "CompraAprovada" na campanha, enquanto os disparos em produção usam "Upsell".
+ * As duas contam, nos dois caminhos (utm_campaign e tid/subid) — antes só "Upsell" era
+ * reconhecido via UTM, então um cliente que seguisse a documentação à risca teria upsell
+ * zerado sem nenhum aviso.
+ */
+const SQL_IS_UPSELL = `(
+  COALESCE(utm_campaign, '')    ILIKE '%upsell%'
+  OR COALESCE(utm_campaign, '') ILIKE '%compraaprovada%'
+  OR COALESCE(tracking_code, '') ILIKE '%upsell%'
+  OR COALESCE(tracking_code, '') ILIKE '%compraaprovada%'
+)`;
 
 /** Receita normalizada (Fase A garante NUMERIC ou NULL). */
 const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
