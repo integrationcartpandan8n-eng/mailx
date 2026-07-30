@@ -2817,6 +2817,102 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/snapshots-listas - O retrato diário das listas está sendo
+// gravado, e o cálculo de leads por período já resolve?
+//
+// Existe porque leads por período dependem de DOIS retratos (o do fim do período menos o da véspera
+// do início), e o primeiro só passou a ser gravado no deploy de hoje. Sem uma forma de olhar, a
+// única checagem possível seria esperar o dia virar e confiar — e um caminho de código que nunca
+// rodou não é um caminho que funciona, é um que ainda não falhou.
+//
+// O que este endpoint mostra: se as linhas estão de fato sendo escritas (a gravação é silenciosa de
+// propósito, para uma falha nela não derrubar o /stats), quais datas cada lista já tem, e — para o
+// período pedido — qual das duas pontas falta em cada lista. Assim dá para ver hoje que a
+// canalização está certa, e amanhã ver o número aparecer.
+adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+
+  const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+    `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+    [clientId]
+  );
+  const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
+  const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+  const todas = [...new Set([...abandonoIds, ...compraIds])];
+
+  const retratos = await query<{ list_id: string; st_account_id: number | null; snapshot_date: string; contact_count: string }>(
+    `SELECT list_id, st_account_id, snapshot_date::text AS snapshot_date, contact_count
+     FROM list_contact_snapshots WHERE client_id = $1
+     ORDER BY list_id, snapshot_date DESC`,
+    [clientId]
+  );
+
+  const porLista = new Map<string, Array<{ data: string; contatos: number; conta: number | null }>>();
+  for (const r of retratos) {
+    const arr = porLista.get(r.list_id) ?? [];
+    arr.push({ data: r.snapshot_date.slice(0, 10), contatos: parseInt(r.contact_count), conta: r.st_account_id });
+    porLista.set(r.list_id, arr);
+  }
+
+  // Roda o MESMO cálculo que o /stats usa — não uma reimplementação. Se este devolver null, o da
+  // tela devolve null também, e o motivo aparece na lista de pendências abaixo.
+  const delta = period.from && period.to
+    ? await leadsPorPeriodoViaSnapshots(clientId, abandonoIds, compraIds, period.from, period.to)
+    : null;
+
+  const diagnosticoPorLista = todas.map(id => {
+    const rs = porLista.get(id) ?? [];
+    const datas = rs.map(r => r.data);
+    return {
+      list_id: id,
+      segmento: abandonoIds.includes(id) ? (compraIds.includes(id) ? 'abandono e compra' : 'abandono') : 'compra',
+      retratos_gravados: rs.length,
+      datas,
+      contagem_mais_recente: rs[0]?.contatos ?? null,
+      falta: rs.length === 0
+        ? 'nenhum retrato — abra a aba SMS do cliente uma vez para gravar o primeiro'
+        : rs.length === 1
+          ? `só o retrato de ${datas[0]} — falta um segundo dia para haver diferença`
+          : null,
+    };
+  });
+
+  const semRetrato = diagnosticoPorLista.filter(l => l.retratos_gravados === 0).length;
+  const comUmSo = diagnosticoPorLista.filter(l => l.retratos_gravados === 1).length;
+
+  res.json({
+    periodo_pedido: { de: period.from ?? null, ate: period.to ?? null, ativo: !!(period.from && period.to) },
+    gravacao: {
+      listas_ativas: todas.length,
+      listas_com_retrato: todas.length - semRetrato,
+      listas_sem_nenhum_retrato: semRetrato,
+      listas_com_apenas_um_dia: comUmSo,
+      veredito: semRetrato === todas.length
+        ? 'NADA GRAVADO — a gravação não está acontecendo. Abra a aba SMS do cliente e recarregue aqui; se continuar zero, é bug.'
+        : semRetrato > 0
+          ? 'Gravação funcionando, mas nem toda lista tem retrato — normal se alguma lista não respondeu à SlickText hoje.'
+          : 'GRAVAÇÃO OK — todas as listas ativas têm retrato.',
+    },
+    calculo_de_leads_por_periodo: delta
+      ? { resolve: true, leads_abandono: delta.abandono, leads_compra: delta.compra, retrato_inicial: delta.baseDate, retrato_final: delta.endDate }
+      : {
+          resolve: false,
+          motivo: !(period.from && period.to)
+            ? 'Sem período no parâmetro — passe ?from=YYYY-MM-DD&to=YYYY-MM-DD. Sem período a tela usa o total vitalício de propósito, não por falta de dado.'
+            : comUmSo > 0 || semRetrato > 0
+              ? 'Ainda não há dois retratos que cubram as duas pontas do período. É o esperado até o segundo dia de gravação — e é exatamente por isso que a tela cai no total vitalício ROTULADO, em vez de mostrar um número menor sem explicar.'
+              : 'Há retratos, mas nenhum dentro da tolerância de 3 dias das pontas do período pedido. Tente um período que termine hoje.',
+        },
+    listas: diagnosticoPorLista,
+    como_confirmar_amanha: [
+      'Rode este endpoint com ?from= e ?to= terminando no dia de hoje.',
+      'Quando calculo_de_leads_por_periodo.resolve virar true, a aba SMS passa a mostrar "entraram no período" com as datas na célula de Leads.',
+      'Até lá a célula diz "total da lista (vitalício)" em amarelo — que é a resposta correta, não uma falha.',
+    ],
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/probe-bot-clicks - Os cliques de bot estão DENTRO ou FORA do
 // campo `clicks` do link?
 //
