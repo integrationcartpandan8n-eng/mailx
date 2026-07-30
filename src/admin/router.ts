@@ -2674,6 +2674,68 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
+// CRÉDITO?
+//
+// Achado que motivou a sonda: o painel da marca 27972 em 01–29/07 mostrou 13.081 no gráfico
+// "Workflow Messages Sent" e 39.215 no "Workflow Message Credits Used". O nosso
+// getWorkflowMessagesTotalForBrand devolveu 38.191 pro mesmo recorte — 2,9x o número de envios e
+// quase o número de créditos. Se o endpoint devolve trecho/crédito, então workflowPeriodCount
+// (que alimenta o card de créditos e os envios de vínculo por fluxo) nunca foi envio, e chamar
+// aquilo de "envio" na tela está errado desde sempre.
+//
+// A sonda varia um parâmetro por vez e mostra o total cru de cada variante, junto do alvo do
+// painel, pra decidir por comparação em vez de por suposição. Também traz a contagem real via
+// paginação do /messages num fluxo pequeno, que é a única contagem de mensagem que não depende
+// da semântica desse endpoint.
+adminRouter.get('/clientes/:id/diagnostico/probe-envios', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const { start, end } = await resolveSlickTextDateRange(req);
+  const contas = await getSlickTextAccounts(clientId);
+  const saida = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const base = { start, end, compare: '', frequency: '', timezone: 'UTC', noCache: 0 };
+    const variantes: Record<string, any> = {
+      'source=Workflow + attempted=1 (o que usamos hoje)': { source: 'Workflow', attempted: 1, ...base },
+      'source=Workflow sem attempted': { source: 'Workflow', ...base },
+      'source=Workflow + attempted=0': { source: 'Workflow', attempted: 0, ...base },
+      'sem source (marca inteira)': { ...base },
+      'source=Workflow + direction=outgoing': { source: 'Workflow', direction: 'outgoing', ...base },
+    };
+
+    const resultados: Record<string, any> = {};
+    for (const [nome, params] of Object.entries(variantes)) {
+      try {
+        const d = await st.rawMessageAnalytics(params);
+        resultados[nome] = {
+          total: d?.totals?.total ?? null,
+          // Campos irmãos do total: se existir um credits/segments ao lado, a dúvida acaba aqui.
+          outros_campos_em_totals: d?.totals ? Object.keys(d.totals) : null,
+          totals_completo: d?.totals ?? null,
+          nomes_dos_groups: Array.isArray(d?.groups) ? d.groups.map((g: any) => g?.name) : null,
+        };
+      } catch (err: any) {
+        resultados[nome] = { erro: err.message };
+      }
+    }
+
+    saida.push({ conta: acc.label, brand_id: acc.st_brand_id.replace(/\D/g, ''), variantes: resultados });
+  }
+
+  res.json({
+    periodo: { de: start.slice(0, 10), ate: end.slice(0, 10) },
+    o_que_comparar: {
+      painel_envios_marca_27972: 13081,
+      painel_creditos_marca_27972: 39215,
+      nosso_numero_atual_marca_27972: 38191,
+      leitura: 'A variante cujo total ficar perto de 13.081 é a que devolve MENSAGEM. Perto de 39.215 é CRÉDITO/TRECHO.',
+    },
+    contas: saida,
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/cobertura-automacao - Quanto dos envios de automação da
 // conta está coberto pelas mensagens que temos vinculadas.
 //
