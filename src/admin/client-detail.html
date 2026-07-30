@@ -4084,10 +4084,20 @@
             }
         });
 
-        // ── Créditos por Automação — soma os envios (≈ créditos) de todas as mensagens ──
-        // ── de um mesmo tipo de automação (Carrinho Abandonado / Upsell) ──
-        // 1 envio ≈ 1 crédito na maioria dos casos, mas mensagem longa (>160 caracteres)
-        // pode consumir mais de 1 crédito da SlickText — por isso é rotulado como estimativa.
+        // ── Créditos por Automação — créditos consumidos pelas mensagens de um mesmo tipo ──
+        // ── de automação (Carrinho Abandonado / Upsell) ──
+        //
+        // NÃO é 1 envio = 1 crédito. Conferido contra o painel da SlickText (Vitrex, 01–29/07):
+        // 13.081 envios de automação consumiram 39.215 créditos — ou seja 3,0 créditos por envio,
+        // porque as mensagens passam de 160 caracteres e cada trecho de 160 é um crédito. Tratar
+        // 1:1 subestimava o custo em três vezes.
+        //
+        // Como resolvemos: o /messages devolve `message_credits` por mensagem, e a contagem por
+        // período já soma isso (periodCredits) sempre que a fatia é pequena o bastante pra ser
+        // varrida. Quando dá pra medir, mostramos crédito MEDIDO. Quando a fatia é grande demais
+        // pra varrer, calibramos pela razão medida nas mensagens que couberam, e o rótulo diz de
+        // onde veio a razão. Sem nenhuma amostra, não inventamos um número — mostramos os envios
+        // e dizemos que o crédito não foi medido.
         function isUpsellTipo(tipo) {
             return /upsell|compra aprovada/i.test(tipo || '');
         }
@@ -4117,10 +4127,33 @@
                 const periodoLabel = cached.isPeriod
                     ? `no período · ${cached.workflows} fluxo${cached.workflows === 1 ? '' : 's'}`
                     : 'total vitalício (API não filtra por data)';
+                const vinc = `${cached.linkedCount}/${rows.length} mensagens vinculadas`;
+
+                // Sem razão medida: não estimamos crédito nenhum — mostramos o envio, que é o
+                // que realmente sabemos, e dizemos que o crédito não foi medido.
+                if (cached.ratio == null) {
+                    return `<div class="creditos-auto-card">
+                        <div class="n">${cached.total.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
+                        <div class="l">${label}</div>
+                        <div class="d">envios ${periodoLabel} · ${vinc}<br>
+                            <span style="color:var(--warning)">créditos não medidos</span>
+                            <span class="kpi-tip" tabindex="0" data-tip="Cada envio pode custar mais de 1 crédito (mensagem acima de 160 caracteres é cobrada por trecho). Nenhuma das mensagens deste grupo teve fatia pequena o bastante para a SlickText devolver o crédito real, então não estimamos: o número acima são envios, não créditos.">ⓘ</span>
+                        </div>
+                    </div>`;
+                }
+
+                const creditos = Math.round(cached.total * cached.ratio);
+                const medido = cached.ratioMedidoIntegral;
+                const tip = medido
+                    ? `Crédito real somado da SlickText (campo message_credits de cada mensagem). Razão observada: ${cached.ratio.toFixed(2)} créditos por envio.`
+                    : `Fatia grande demais para somar o crédito de cada mensagem, então a razão foi medida nas ${cached.sampledMsgs.toLocaleString('pt-BR')} mensagens que couberam (${cached.ratio.toFixed(2)} créditos por envio) e aplicada ao total. É estimativa calibrada, não contagem.`;
                 return `<div class="creditos-auto-card">
-                    <div class="n">${cached.total.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
+                    <div class="n">${creditos.toLocaleString('pt-BR')}${cached.anyCapped ? '+' : ''}</div>
                     <div class="l">${label}</div>
-                    <div class="d">≈ créditos ${periodoLabel} · ${cached.linkedCount}/${rows.length} mensagens vinculadas</div>
+                    <div class="d">${medido ? 'créditos medidos' : '≈ créditos estimados'} ${periodoLabel}
+                        <span class="kpi-tip" tabindex="0" data-tip="${tip}">ⓘ</span><br>
+                        ${cached.total.toLocaleString('pt-BR')} envios · ${cached.ratio.toFixed(2)} créd/envio · ${vinc}
+                    </div>
                 </div>`;
             };
 
@@ -4180,7 +4213,23 @@
                 isPeriod = false;
             }
 
-            window.__creditosAutomacaoCache[key] = { total, linkedCount, anyCapped, isPeriod, workflows: byWorkflow.size };
+            // Razão crédito/envio MEDIDA: só das mensagens em que a SlickText devolveu o crédito
+            // real (periodCredits vem da varredura do message_credits). Se todas as mensagens do
+            // grupo foram medidas, o número é contagem; se só parte, é razão calibrada aplicada ao
+            // total — os dois casos são rotulados diferente no card.
+            const medidas = results.filter(r =>
+                r && typeof r.periodCredits === 'number' && r.periodCredits > 0 && typeof r.count === 'number' && r.count > 0
+            );
+            const sampledMsgs = medidas.reduce((s, r) => s + r.count, 0);
+            const sampledCredits = medidas.reduce((s, r) => s + r.periodCredits, 0);
+            const ratio = sampledMsgs > 0 ? sampledCredits / sampledMsgs : null;
+            const comCount = results.filter(r => r && typeof r.count === 'number' && r.count > 0);
+            const ratioMedidoIntegral = ratio != null && medidas.length === comCount.length;
+
+            window.__creditosAutomacaoCache[key] = {
+                total, linkedCount, anyCapped, isPeriod, workflows: byWorkflow.size,
+                ratio, sampledMsgs, ratioMedidoIntegral,
+            };
             renderCreditosAutomacao();
         }
 

@@ -2674,6 +2674,113 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/cobertura-automacao - Quanto dos envios de automação da
+// conta está coberto pelas mensagens que temos vinculadas.
+//
+// Por que existe: a conferência mensagem-por-mensagem contra o painel é impossível — o painel da
+// SlickText (Analytics > Workflows) só mostra agregado da MARCA INTEIRA, sem quebra por mensagem.
+// O que o painel dá, e que serve como contra-prova de verdade, é o total de envios de automação do
+// período ("Workflow Messages Sent"). Esse total também existe na API sem _source_id, então aqui a
+// gente compara: total da marca × soma dos workflows que temos vinculados. Se a cobertura é alta, a
+// tabela por mensagem está olhando praticamente toda a automação; se é baixa, existe automação
+// rodando fora do nosso mapeamento e o desempenho por mensagem conta uma parte da história.
+//
+// Créditos: o /usage é vitalício, mas o saldo restante é o que importa operacionalmente — fluxo
+// ativo com crédito no fim para de enviar sem erro nenhum, e do nosso lado isso parece só uma
+// queda de envios. Por isso o saldo vem aqui junto com a média diária de consumo do período.
+adminRouter.get('/clientes/:id/diagnostico/cobertura-automacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const { start, end } = await resolveSlickTextDateRange(req);
+  const dias = Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000));
+
+  const vinculos = await query<{ slicktext_campaign_id: number | null; st_account_id: number | null; source_type: string }>(
+    `SELECT DISTINCT slicktext_campaign_id, st_account_id, source_type
+     FROM sms_campaign_map WHERE client_id = $1 AND source_type = 'Workflow' AND slicktext_campaign_id IS NOT NULL`,
+    [clientId]
+  );
+
+  const contas = await getSlickTextAccounts(clientId);
+  const resultado = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const brand = acc.st_brand_id.replace(/\D/g, '');
+    const meusWorkflows = vinculos
+      .filter(v => v.st_account_id === acc.accountId)
+      .map(v => v.slicktext_campaign_id as number);
+
+    const [totalMarca, usage, todosWorkflows] = await Promise.all([
+      st.getWorkflowMessagesTotalForBrand(start, end).catch(() => null),
+      st.getBrandUsage().catch(() => null),
+      st.getWorkflows().catch(() => null),
+    ]);
+
+    // Envios de cada workflow vinculado no período, um por um (o total por workflow é filtrado
+    // por data de verdade — só o por-mensagem não é).
+    const porWorkflow = [];
+    for (const wfId of meusWorkflows) {
+      const total = await st.getMessageAnalyticsForSource('Workflow', wfId, start, end)
+        .then(d => d?.totals?.total ?? null)
+        .catch(() => null);
+      porWorkflow.push({
+        workflow_id: wfId,
+        nome: todosWorkflows?.find(w => w.workflow_id === wfId)?.name ?? '(nome não lido)',
+        envios_no_periodo: total,
+      });
+    }
+
+    const somaVinculada = porWorkflow.reduce((s, w) => s + (w.envios_no_periodo ?? 0), 0);
+    const algumFalhou = porWorkflow.some(w => w.envios_no_periodo === null);
+    const cobertura = totalMarca && totalMarca > 0 && !algumFalhou
+      ? Math.round((somaVinculada / totalMarca) * 1000) / 10
+      : null;
+
+    // Fluxos ativos que não têm nenhuma mensagem nossa vinculada: são a explicação natural de
+    // uma cobertura menor que 100%, e vale saber o nome deles antes de suspeitar de erro.
+    const naoVinculados = (todosWorkflows ?? [])
+      .filter(w => !meusWorkflows.includes(w.workflow_id))
+      .map(w => ({ workflow_id: w.workflow_id, nome: w.name, status: w.status ?? null }));
+
+    const mediaDiaria = somaVinculada > 0 ? Math.round(somaVinculada / dias) : null;
+    resultado.push({
+      conta: acc.label,
+      brand_id: brand,
+      painel: `https://app.slicktext.com/b${brand}/analytics/workflows`,
+      envios_automacao_da_marca_no_periodo: totalMarca,
+      envios_dos_workflows_vinculados: algumFalhou ? null : somaVinculada,
+      cobertura_pct: cobertura,
+      workflows_vinculados: porWorkflow,
+      workflows_sem_vinculo: naoVinculados,
+      creditos: usage ? {
+        disponiveis: usage.credits_available,
+        usados_vitalicio: usage.credits_used,
+        // Alerta operacional, não estatística: fluxo ativo + saldo curto = automação para calada.
+        dias_de_folga_estimados: mediaDiaria && mediaDiaria > 0
+          ? Math.round((usage.credits_available / mediaDiaria) * 10) / 10
+          : null,
+        aviso: usage.credits_available < 5000
+          ? 'SALDO BAIXO — os fluxos ativos param de enviar quando o crédito acabar, sem erro visível. Recarregar.'
+          : null,
+      } : null,
+      observacao: algumFalhou
+        ? 'Pelo menos um workflow não respondeu; a soma e a cobertura ficam em branco em vez de mostrar um número menor que a realidade.'
+        : null,
+    });
+  }
+
+  res.json({
+    periodo: { de: start.slice(0, 10), ate: end.slice(0, 10), dias, ativo: period.isToday || !!(period.from && period.to) },
+    como_ler: [
+      'envios_automacao_da_marca_no_periodo é o MESMO número do gráfico "Workflow Messages Sent" do painel — é a contra-prova externa.',
+      'cobertura_pct diz quanto desse total está em workflows que temos vinculados. Abaixo de 100% não é erro: workflows_sem_vinculo lista o resto.',
+      'O painel NÃO quebra envios por mensagem — só por marca. Portanto o número por mensagem da tabela não tem contra-prova no painel, apenas esta checagem no agregado.',
+      'Créditos: 1 envio quase nunca é 1 crédito (mensagem acima de 160 caracteres é cobrada por trecho).',
+    ],
+    contas: resultado,
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/sms - Reconciliação do SMS: o card "Faturamento SMS" e a
 // tabela "Desempenho por Mensagem" usam filtros DIFERENTES, e por isso podem discordar sem aviso.
 //   card:    utm_source/campaign/tracking ILIKE '%mailx%'  E  utm_medium ILIKE '%sms%'
