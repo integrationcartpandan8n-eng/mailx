@@ -616,6 +616,21 @@ export class SlickTextClient {
   }
 
   /**
+   * Total de mensagens de AUTOMAÇÃO da marca inteira no período — mesmo número do gráfico
+   * "Workflow Messages Sent" do painel (conferido: 13.081 na Vitrex em 01–29/07). É o
+   * denominador honesto pra saber quanto dos envios de automação da conta está coberto pelas
+   * mensagens que temos vinculadas: sem ele, a soma dos vínculos não tem com o que ser comparada.
+   * Sem _source_id — o filtro é só `source=Workflow`.
+   */
+  async getWorkflowMessagesTotalForBrand(start: string, end: string, timezone = 'UTC'): Promise<number | null> {
+    const res = await this.http.get('/analytics/messages', {
+      params: { source: 'Workflow', attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
+    });
+    const total = res.data?.totals?.total;
+    return typeof total === 'number' ? total : null;
+  }
+
+  /**
    * Analytics de UMA mensagem específica (nó) dentro de um workflow, filtrado por
    * período — CONFIRMADO contra a API real (mesma origem do getWorkflowAnalytics).
    * `totals.messages` = envios dessa mensagem no período; `totals.clicks` = cliques;
