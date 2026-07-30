@@ -617,7 +617,10 @@ export class SlickTextClient {
 
   /**
    * Total de mensagens de AUTOMAÇÃO da marca inteira no período — mesmo número do gráfico
-   * "Workflow Messages Sent" do painel (conferido: 13.081 na Vitrex em 01–29/07). É o
+   * "Workflow Messages Sent" do painel. CONFERIDO contra o painel na marca 30571 em 01–29/07:
+   * 13.116 aqui contra 13.081 lá, 0,27% de desvio (fuso — o painel fecha o dia em Nova York e a
+   * gente em UTC). É a única validação externa que a plataforma permite, porque o painel só
+   * agrega por marca e não quebra por mensagem. É o
    * denominador honesto pra saber quanto dos envios de automação da conta está coberto pelas
    * mensagens que temos vinculadas: sem ele, a soma dos vínculos não tem com o que ser comparada.
    * Sem _source_id — o filtro é só `source=Workflow`.
@@ -631,12 +634,18 @@ export class SlickTextClient {
   }
 
   /**
-   * Chamada crua de /analytics/messages com os params que o chamador quiser — existe pra sondar a
-   * SEMÂNTICA do endpoint. Motivo: o painel mostrou 13.081 envios de automação na marca 27972 em
-   * 01–29/07 e este endpoint (com attempted=1) devolveu 38.191 pra mesma marca e período — 2,9x
-   * mais, quase exatamente o número do gráfico de CRÉDITOS (39.215). Ou seja, há forte suspeita de
-   * que o total venha em trechos/créditos e não em mensagens. Enquanto isso não estiver decidido,
-   * nenhum número derivado dele pode ser chamado de "envio".
+   * Chamada crua de /analytics/messages com os params que o chamador quiser — usada pela sonda que
+   * decidiu a SEMÂNTICA do endpoint (ver /diagnostico/probe-envios).
+   *
+   * RESOLVIDO: o total é MENSAGEM ENVIADA, não crédito. A sonda variou attempted (1, 0, ausente),
+   * source e direction: todas as variantes com source=Workflow devolvem o mesmo número, attempted
+   * não altera nada e attempted=0 devolve vazio. Existe um único total por marca e ele é mensagem.
+   *
+   * Houve um susto no meio do caminho que vale registrar pra não se repetir: comparou-se o 38.191
+   * da marca 27972 com o 13.081 lido do painel e a razão deu 2,9x, o que parecia indicar contagem
+   * em trechos. Eram MARCAS DIFERENTES — o painel aberto era o da 30571, cujo total pela API é
+   * 13.116 contra 13.081 do painel (0,27%, fuso horário). Ao conferir contra o painel, confirme
+   * primeiro de qual brand a tela é.
    */
   async rawMessageAnalytics(params: Record<string, any>): Promise<any> {
     const res = await this.http.get('/analytics/messages', { params });

@@ -2677,17 +2677,18 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
 // CRÉDITO?
 //
-// Achado que motivou a sonda: o painel da marca 27972 em 01–29/07 mostrou 13.081 no gráfico
-// "Workflow Messages Sent" e 39.215 no "Workflow Message Credits Used". O nosso
-// getWorkflowMessagesTotalForBrand devolveu 38.191 pro mesmo recorte — 2,9x o número de envios e
-// quase o número de créditos. Se o endpoint devolve trecho/crédito, então workflowPeriodCount
-// (que alimenta o card de créditos e os envios de vínculo por fluxo) nunca foi envio, e chamar
-// aquilo de "envio" na tela está errado desde sempre.
+// RESPONDIDO: é MENSAGEM ENVIADA. Todas as variantes com source=Workflow devolvem o mesmo total,
+// attempted não altera nada, attempted=0 devolve vazio e não existe campo irmão de crédito em
+// totals (só total e average). Validado contra o painel na marca 30571 em 01–29/07: 13.116 pela
+// API contra 13.081 no painel — 0,27%, que é o fuso (painel em Nova York, nós em UTC).
 //
-// A sonda varia um parâmetro por vez e mostra o total cru de cada variante, junto do alvo do
-// painel, pra decidir por comparação em vez de por suposição. Também traz a contagem real via
-// paginação do /messages num fluxo pequeno, que é a única contagem de mensagem que não depende
-// da semântica desse endpoint.
+// Fica de aviso o erro que motivou a sonda: comparou-se o 38.191 da marca 27972 com o 13.081 lido
+// de uma tela de painel que era de OUTRA marca (a 30571), a razão deu 2,9x e pareceu que o
+// endpoint contava trechos. Antes de acusar divergência contra o painel, confirme de qual brand a
+// tela é — as duas contas do mesmo cliente têm volumes parecidos e é fácil trocar.
+//
+// A sonda fica no código porque a pergunta volta a cada conta nova: ela varia um parâmetro por vez
+// e mostra o totals cru de cada variante, pra decidir por comparação em vez de por suposição.
 adminRouter.get('/clientes/:id/diagnostico/probe-envios', asyncHandler(async (req: Request, res: Response) => {
   const clientId = req.params.id as string;
   const { start, end } = await resolveSlickTextDateRange(req);
@@ -2726,11 +2727,11 @@ adminRouter.get('/clientes/:id/diagnostico/probe-envios', asyncHandler(async (re
 
   res.json({
     periodo: { de: start.slice(0, 10), ate: end.slice(0, 10) },
-    o_que_comparar: {
-      painel_envios_marca_27972: 13081,
-      painel_creditos_marca_27972: 39215,
-      nosso_numero_atual_marca_27972: 38191,
-      leitura: 'A variante cujo total ficar perto de 13.081 é a que devolve MENSAGEM. Perto de 39.215 é CRÉDITO/TRECHO.',
+    ja_respondido: {
+      conclusao: 'O total é MENSAGEM ENVIADA, não crédito.',
+      evidencia: 'Marca 30571, 01–29/07: 13.116 pela API contra 13.081 no painel (0,27% — fuso horário).',
+      creditos: 'Crédito é outra grandeza: a mesma marca consumiu 39.215 créditos nesses 13.081 envios, 3,0 créditos por envio (mensagem acima de 160 caracteres é cobrada por trecho).',
+      cuidado: 'Ao conferir contra o painel, confirme de qual brand a tela é. As duas contas do cliente têm volumes parecidos e comparar marcas trocadas produz uma divergência de 2,9x que não existe.',
     },
     contas: saida,
   });
