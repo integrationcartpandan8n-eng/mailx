@@ -668,6 +668,69 @@ export class SlickTextClient {
    * resolve, e varrer dezenas de milhares de registros para confirmar o óbvio custaria minutos.
    */
   /**
+   * Amostra as mensagens MAIS RECENTES da marca SEM filtrar por source, e devolve os valores
+   * distintos de `source` junto das mensagens que contêm algum dos link_ids pedidos.
+   *
+   * Por que sem filtro de source: os links manuais se chamam "Lost Cart N8N", e se o n8n dispara
+   * pela API da SlickText em vez de por workflow, essas mensagens não pertencem a workflow nenhum —
+   * varrer os 13 fluxos um a um nunca acharia, por mais fluxos que se varra. Listar os `source` que
+   * de fato existem responde de uma vez se há disparo fora de workflow.
+   *
+   * Lê as últimas páginas: a lista vem em ordem crescente de data (confirmado), e os links manuais
+   * são de junho — o que interessa está no fim.
+   */
+  async amostrarMensagensRecentes(
+    linkIds: number[],
+    paginas = 5
+  ): Promise<{
+    fontes: Record<string, number>;
+    total_aproximado: number;
+    com_link_manual: Array<{ link_id: number; source: string | null; _source_id: number | null; node: number | null; created: string }>;
+  }> {
+    const pegar = async (offset: number, limit: number): Promise<any[]> => {
+      const res = await this.http.get('/messages', { params: { offset, limit } });
+      return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    };
+
+    // Galope com limit=1 pra achar o fim sem baixar conteúdo.
+    let hi = 1000;
+    while (hi < 2_000_000 && (await pegar(hi, 1)).length > 0) hi *= 4;
+    let lo = Math.floor(hi / 4);
+    while (lo + 1000 < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if ((await pegar(mid, 1)).length > 0) lo = mid; else hi = mid;
+    }
+    const total = lo;
+
+    const alvo = new Set(linkIds.map(Number));
+    const fontes: Record<string, number> = {};
+    const achados: Array<{ link_id: number; source: string | null; _source_id: number | null; node: number | null; created: string }> = [];
+
+    for (let p = 0; p < paginas; p++) {
+      const offset = Math.max(0, total - (p + 1) * 100);
+      const itens = await pegar(offset, 100);
+      for (const m of itens) {
+        const src = m?.source == null ? '(null)' : String(m.source);
+        fontes[src] = (fontes[src] ?? 0) + 1;
+        const ids: number[] = Array.isArray(m?._link_ids) ? m._link_ids.map(Number) : [];
+        for (const id of ids) {
+          if (!alvo.has(id)) continue;
+          achados.push({
+            link_id: id,
+            source: m?.source ?? null,
+            _source_id: m?._source_id ?? null,
+            node: m?._sub_source_id != null ? Number(m._sub_source_id) : null,
+            created: String(m?.created ?? ''),
+          });
+        }
+      }
+      if (offset === 0) break;
+    }
+
+    return { fontes, total_aproximado: total, com_link_manual: achados };
+  }
+
+  /**
    * Procura link_ids dentro do campo `_link_ids` das mensagens de um workflow. Mais confiável que
    * casar texto do corpo: `_link_ids` é o vínculo que a própria SlickText registra entre mensagem e
    * link, sem depender de o encurtador aparecer escrito de determinada forma (o corpo traz

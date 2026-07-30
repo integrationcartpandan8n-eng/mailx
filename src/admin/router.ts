@@ -2861,8 +2861,14 @@ adminRouter.get('/clientes/:id/diagnostico/probe-bot-clicks', asyncHandler(async
           bot_clicks_do_registro: l.bot_clicks,
           soma_clicks_mais_bot: l.clicks + l.bot_clicks,
           total_do_analytics: analytics,
-          bate_com: analytics === l.clicks ? 'clicks (BOTS ESTÃO FORA)'
-            : analytics === l.clicks + l.bot_clicks ? 'clicks + bot_clicks (BOTS ESTÃO DENTRO de clicks)'
+          // Tolerância de 1%: exigir igualdade exata dava "inconclusivo" em 8 de 8 casos reais,
+          // quando o padrão era evidente — o analytics ficava 0,1–0,3% abaixo de `clicks` e a
+          // 3–4x de distância de `clicks + bot_clicks`. A sobra de 2 a 7 cliques é ruído de borda
+          // (clique de contato removido, corte de dia), não ambiguidade. Um teste que só aceita
+          // coincidência perfeita não decide nada em dado de produção.
+          bate_com: analytics == null ? 'sem total no analytics'
+            : Math.abs(analytics - l.clicks) <= Math.max(10, l.clicks * 0.01) ? 'clicks (BOTS ESTÃO FORA)'
+            : Math.abs(analytics - (l.clicks + l.bot_clicks)) <= Math.max(10, (l.clicks + l.bot_clicks) * 0.01) ? 'clicks + bot_clicks (BOTS ESTÃO DENTRO de clicks)'
             : 'nenhum dos dois — inconclusivo neste link',
         });
         if (casos.length >= 6) break;
@@ -2993,6 +2999,7 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
       url_destino: l?.url ?? null,
       cliques_vitalicio: l?.clicks ?? null,
     }));
+    const idsManuaisPrecoce = manuais.map(m => Number(m.link_id)).filter(n => Number.isFinite(n));
 
     // Formato de um registro de /messages: o corpo da mensagem está exposto? É a pergunta que
     // decide se o caminho existe. Sem nome de campo assumido — devolve as chaves como vieram.
@@ -3046,7 +3053,7 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
     // contas numa requisição estourou o timeout do nginx (504) — a resposta demorada não é um
     // resultado ruim, é resultado nenhum. Separado assim, cada chamada é curta e o progresso fica
     // com quem chama.
-    const idsManuais = manuais.map(m => Number(m.link_id)).filter(n => Number.isFinite(n));
+    const idsManuais = idsManuaisPrecoce;
     const scan = req.query.scan === '1';
     const wfPedido = req.query.workflow_id ? parseInt(req.query.workflow_id as string) : null;
     const buscas = [];
@@ -3058,6 +3065,14 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
         const achados = await st.acharLinksEmMensagens(wf.workflow_id, idsManuais).catch(() => null);
         if (achados && achados.length > 0) buscas.push({ workflow_id: wf.workflow_id, nome: wf.name, achados });
       }
+    }
+
+    // Plano C: as mensagens mais recentes da marca, SEM filtro de source. Responde de uma vez se
+    // existe disparo fora de workflow (o n8n mandando pela API) — hipótese que varrer fluxo por
+    // fluxo nunca testaria, por mais fluxos que se varra.
+    let fonteDasMensagens: any = null;
+    if (req.query.fontes === '1' && idsManuaisPrecoce.length > 0) {
+      fonteDasMensagens = await st.amostrarMensagensRecentes(idsManuaisPrecoce).catch((e: any) => ({ erro: e.message }));
     }
 
     const filtroOk = Object.values(filtros).some((f: any) => f?.todos_contem_o_link);
@@ -3073,13 +3088,16 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
         ? { rodou: true, workflows_varridos: wfPedido != null ? [wfPedido] : (workflows ?? []).slice(0, 2).map(w => w.workflow_id) }
         : { rodou: false, como_rodar: 'Acrescente ?scan=1&workflow_id=<id> — um workflow por chamada, senão estoura o timeout.' },
       onde_o_link_manual_aparece: buscas,
+      fontes_das_mensagens_recentes: fonteDasMensagens ?? { rodou: false, como_rodar: 'Acrescente ?fontes=1 — lista os valores de `source` que existem de fato e procura os links manuais neles.' },
       veredito: filtroOk
         ? 'ACHADO — /messages filtra por link. Envios do link manual saem direto, por período, sem depender de node.'
-        : !scan
-          ? 'O filtro por link não funcionou. Rode com ?scan=1&workflow_id=<id> para tentar o plano B (achar em qual workflow o link aparece).'
+        : fonteDasMensagens?.com_link_manual?.length > 0
+          ? 'ACHADO PELO PLANO C — o link manual aparece em mensagens reais; veja `source` e `_source_id` delas para saber por onde contar.'
           : buscas.length > 0
             ? 'ACHADO PELO PLANO B — o link manual aparece em mensagens de um workflow conhecido. Dá pra contar por ali.'
-            : 'Não achado nos workflows varridos. Varra os demais antes de concluir — a lista está em workflows_da_conta.',
+            : fonteDasMensagens && !fonteDasMensagens.erro
+              ? 'Não achado. Se `fontes` mostra só Workflow/Campaign, os disparos com link manual não estão nas mensagens recentes desta marca — e aí "envios n/d" é definitivo.'
+              : 'Nada achado ainda. Rode com ?fontes=1 (mais informativo) antes de varrer fluxo por fluxo.',
     });
   }
 
