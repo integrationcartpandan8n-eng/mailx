@@ -3743,9 +3743,15 @@
                     manualClicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
                 } else if (typeof cached.lifetimeClicks === 'number') {
                     // Cliques de link manual só existem como total vitalício (probes esgotaram a
-                    // API) — rotulado, sem razão cliques/venda (janelas diferentes). Bots contados
-                    // pela SlickText vão no tooltip pra leitura honesta do número.
-                    const tipCliques = `Total de cliques desde a criação do${cached.linkCount > 1 ? 's' : ''} ${cached.linkCount || 1} link(s) desta mensagem — a API da SlickText não filtra cliques de link manual por período.${typeof cached.lifetimeBotClicks === 'number' ? ` A própria SlickText contou ${cached.lifetimeBotClicks.toLocaleString('pt-BR')} cliques de bot além desse total.` : ''}`.replace(/"/g, '&quot;');
+                    // API) — rotulado, sem razão cliques/venda (janelas diferentes).
+                    //
+                    // Bots: o tooltip dizia que os cliques de bot vinham "além desse total", como se
+                    // fosse fato. Não era — a API não documenta isso e ninguém mediu. Num dos links
+                    // o bot é 26% do número exibido, então a diferença entre estar dentro ou fora
+                    // decide se a tela mostra 98 ou 72 cliques de pessoa. Enquanto
+                    // /diagnostico/probe-bot-clicks não resolver, o texto declara a dúvida em vez de
+                    // escolher um lado — quem lê precisa saber que o número tem essa margem.
+                    const tipCliques = `Total de cliques desde a criação do${cached.linkCount > 1 ? 's' : ''} ${cached.linkCount || 1} link(s) desta mensagem — a API da SlickText não filtra cliques de link manual por período.${typeof cached.lifetimeBotClicks === 'number' && cached.lifetimeBotClicks > 0 ? ` A SlickText também contou ${cached.lifetimeBotClicks.toLocaleString('pt-BR')} cliques de bot nesses links, e não informa se estão incluídos no total acima — no pior caso os cliques de pessoa são ${Math.max(0, cached.lifetimeClicks - cached.lifetimeBotClicks).toLocaleString('pt-BR')}.` : ''}`.replace(/"/g, '&quot;');
                     manualClicksHtml = `<small class="envios-clicks-muted">${cached.lifetimeClicks.toLocaleString('pt-BR')} cliques (vitalício) <span class="kpi-tip" tabindex="0" data-tip="${tipCliques}">ⓘ</span></small>`;
                 } else {
                     manualClicksHtml = `<small class="envios-clicks-muted">cliques indisponíveis</small>`;

@@ -2817,6 +2817,77 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-bot-clicks - Os cliques de bot estão DENTRO ou FORA do
+// campo `clicks` do link?
+//
+// Importa porque os cliques das mensagens de link manual (N8N) são exibidos a partir de `clicks`,
+// e um dos links tem 98 cliques com 26 bot_clicks — 26%. Se os bots estiverem dentro, a tela mostra
+// 26% de clique a mais do que houve de pessoa. O tooltip afirmava que estavam "além desse total",
+// mas essa afirmação não vinha de medição nenhuma: era suposição escrita como fato.
+//
+// Como decidir: um link de WORKFLOW tem clicks/bot_clicks no registro E aparece no
+// /analytics/links/clicks. Pedindo o analytics com um período largo o bastante pra cobrir a vida
+// inteira do link, o total tem que coincidir com `clicks` (bots fora) ou com `clicks + bot_clicks`
+// (bots dentro). Compara os dois e diz qual bateu.
+adminRouter.get('/clientes/:id/diagnostico/probe-bot-clicks', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+  const inicio = '2020-01-01 00:00:00';
+  const fim = `${new Date().toISOString().slice(0, 10)} 23:59:59`;
+  const saida = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const workflows = await st.getWorkflows().catch(() => null);
+    const casos = [];
+
+    for (const wf of (workflows ?? []).slice(0, 3)) {
+      const [links, clicksGrouped] = await Promise.all([
+        st.getLinks({ source: 'Workflow', _source_id: wf.workflow_id }).catch(() => null),
+        st.getLinkClicksGrouped(wf.workflow_id, inicio, fim).catch(() => null),
+      ]);
+      if (!links || !clicksGrouped) continue;
+
+      const groups: any[] = Array.isArray(clicksGrouped?.groups) ? clicksGrouped.groups : [];
+      for (const l of links) {
+        const g = groups.find((x: any) => x?.name === l?.name);
+        // Só serve como teste quem tem bot > 0: com bot 0 as duas hipóteses dão o mesmo número.
+        if (!g || typeof l?.clicks !== 'number' || !l?.bot_clicks) continue;
+        const analytics = g.total ?? null;
+        casos.push({
+          link_id: l.link_id,
+          nome: l.name,
+          clicks_do_registro: l.clicks,
+          bot_clicks_do_registro: l.bot_clicks,
+          soma_clicks_mais_bot: l.clicks + l.bot_clicks,
+          total_do_analytics: analytics,
+          bate_com: analytics === l.clicks ? 'clicks (BOTS ESTÃO FORA)'
+            : analytics === l.clicks + l.bot_clicks ? 'clicks + bot_clicks (BOTS ESTÃO DENTRO de clicks)'
+            : 'nenhum dos dois — inconclusivo neste link',
+        });
+        if (casos.length >= 6) break;
+      }
+      if (casos.length >= 6) break;
+    }
+
+    const votos = casos.map(c => c.bate_com);
+    const fora = votos.filter(v => v.startsWith('clicks (')).length;
+    const dentro = votos.filter(v => v.startsWith('clicks + ')).length;
+    saida.push({
+      conta: acc.label,
+      brand_id: acc.st_brand_id.replace(/\D/g, ''),
+      casos,
+      veredito: casos.length === 0
+        ? 'Nenhum link de workflow com bot_clicks > 0 nos fluxos testados — sem caso de teste, inconclusivo.'
+        : fora > dentro ? 'BOTS ESTÃO FORA do campo clicks — o número que exibimos já é só de pessoa.'
+        : dentro > fora ? 'BOTS ESTÃO DENTRO do campo clicks — precisamos subtrair bot_clicks do que exibimos.'
+        : 'Empate ou inconclusivo — não mudar nada com base nisso.',
+    });
+  }
+
+  res.json({ periodo_usado: { de: inicio, ate: fim }, contas: saida });
+}));
+
 // GET /admin/clientes/:id/diagnostico/utm-fora-do-padrao - Vendas de SMS cujo utm_medium não é
 // 'auto-sms', e o que cada uma custa em visibilidade.
 //
