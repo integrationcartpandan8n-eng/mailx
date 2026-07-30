@@ -251,6 +251,29 @@ export async function initDatabase(): Promise<void> {
         -- a aceitar NULL — source_type='ManualLink' não tem workflow/campaign; os cliques
         -- saem por link (_link_id) e envios por mensagem não existem via API.
         ALTER TABLE sms_campaign_map ALTER COLUMN slicktext_campaign_id DROP NOT NULL;
+
+        -- Retrato diário de contatos por lista da SlickText. Existe porque a API não permite
+        -- contar contatos de UMA lista dentro de UM período: /analytics/contacts ignora list_id
+        -- (devolve o total do brand) e /lists/{id}/contacts/count só dá o total atual. Sem isso a
+        -- Conversão por Segmento compara leads VITALÍCIOS com vendas DO PERÍODO, e a taxa sai
+        -- aproximada por construção — foi a ressalva que sobrou do pedido "puxar direto da Slick".
+        -- Guardando o total de cada lista uma vez por dia, leads do período passam a ser a
+        -- diferença entre dois retratos, que é exato. Vale só daqui pra frente: período anterior
+        -- ao primeiro retrato continua caindo no vitalício rotulado.
+        -- Gravado de graça, sem chamada extra: o /stats já busca a contagem de cada lista.
+        CREATE TABLE IF NOT EXISTS list_contact_snapshots (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          st_account_id INTEGER,
+          list_id VARCHAR(64) NOT NULL,
+          snapshot_date DATE NOT NULL,
+          contact_count INTEGER NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+        -- COALESCE no índice porque st_account_id nulo (conta principal, cadastro antigo) não
+        -- colide com nada em UNIQUE comum e geraria uma linha nova a cada chamada do /stats.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_list_snapshot_unique
+          ON list_contact_snapshots (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');

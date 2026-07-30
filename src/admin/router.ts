@@ -282,6 +282,99 @@ async function getSlickTextAccounts(clientId: number | string): Promise<SlickTex
 }
 
 /**
+ * Grava o retrato de hoje da contagem de cada lista. Idempotente no dia: chamar o /stats dez
+ * vezes deixa uma linha por lista, com o último valor. Falha aqui NÃO pode derrubar o /stats —
+ * o retrato é para o futuro, o número da tela já está calculado.
+ */
+async function gravarSnapshotDeListas(
+  clientId: string,
+  listas: Array<{ id: string; count: number; accountId: number | null }>
+): Promise<void> {
+  for (const l of listas) {
+    if (l.count <= 0) continue; // lista que não respondeu — gravar 0 criaria degrau falso no delta
+    try {
+      await query(
+        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count)
+         VALUES ($1, $2, $3, CURRENT_DATE, $4)
+         ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
+         DO UPDATE SET contact_count = EXCLUDED.contact_count`,
+        [clientId, l.accountId, l.id, l.count]
+      );
+    } catch (err: any) {
+      logger.warn(CTX, `Falha ao gravar retrato da lista ${l.id} (client ${clientId}): ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Leads ENTRADOS no período = contagem no fim menos contagem na véspera do início, somando as
+ * listas. Devolve null quando os retratos não cobrem o período — e nesse caso quem chama volta pro
+ * vitalício ROTULADO, em vez de mostrar um número menor sem dizer por quê.
+ *
+ * Tolerância de 3 dias em cada ponta: o retrato é gravado quando alguém abre o dashboard, então
+ * pode faltar o dia exato. Fora disso a resposta é null — esticar mais transformaria a "contagem
+ * exata" numa estimativa pior que o vitalício, que ao menos é um número verdadeiro de algo.
+ */
+async function leadsPorPeriodoViaSnapshots(
+  clientId: string,
+  abandonoIds: string[],
+  compraIds: string[],
+  from: string,
+  to: string
+): Promise<{ abandono: number; compra: number; baseDate: string; endDate: string } | null> {
+  const todas = [...new Set([...abandonoIds, ...compraIds])];
+  if (todas.length === 0) return null;
+
+  // Uma consulta só: para cada lista, o retrato mais próximo de cada ponta dentro da tolerância.
+  const rows = await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
+    `WITH base AS (
+       SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date, contact_count
+       FROM list_contact_snapshots
+       WHERE client_id = $1 AND list_id = ANY($2)
+         AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
+       ORDER BY list_id, snapshot_date DESC
+     ), fim AS (
+       SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date, contact_count
+       FROM list_contact_snapshots
+       WHERE client_id = $1 AND list_id = ANY($2)
+         AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
+       ORDER BY list_id, snapshot_date ASC
+     )
+     SELECT * FROM base UNION ALL SELECT * FROM fim`,
+    [clientId, todas, from, to]
+  );
+
+  const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string }>();
+  for (const r of rows) {
+    const e = porLista.get(r.list_id) ?? {};
+    if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; }
+    else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; }
+    porLista.set(r.list_id, e);
+  }
+
+  // Exige as duas pontas em TODAS as listas. Faltando uma, a soma sairia menor que a realidade e
+  // pareceria uma queda de leads — pior que dizer que não dá.
+  const somar = (ids: string[]): number | null => {
+    let t = 0;
+    for (const id of ids) {
+      const e = porLista.get(id);
+      if (!e || e.base == null || e.fim == null) return null;
+      t += Math.max(0, e.fim - e.base); // negativo = descadastro; leads entrados não são negativos
+    }
+    return t;
+  };
+
+  const abandono = somar(abandonoIds);
+  const compra = somar(compraIds);
+  if (abandono === null || compra === null) return null;
+
+  const datas = [...porLista.values()];
+  const baseDate = datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from;
+  const endDate = datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? to;
+  return { abandono, compra, baseDate: String(baseDate).slice(0, 10), endDate: String(endDate).slice(0, 10) };
+}
+
+/**
  * Resolve as credenciais de UMA conta específica (por accountId — null = principal), pra usar
  * em vínculos de mensagem (sms_campaign_map.st_account_id) onde só uma conta importa.
  */
@@ -1713,17 +1806,22 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // Vendas continuam vindo do nosso banco (já são exatas, é conversão real registrada).
   let abandonoLeads = 0;
   let compradorLeads = 0;
-  let leadsSource: 'slicktext_list' | 'unavailable' = 'unavailable';
+  let leadsSource: 'slicktext_list' | 'snapshot_delta' | 'unavailable' = 'unavailable';
   let leadsWarning: string | null = null;
+  let leadsPeriodoInfo: { de: string; ate: string } | null = null;
 
   {
-    const client = await queryOne<{ st_api_token: string; st_brand_id: string }>(
-      `SELECT st_api_token, st_brand_id FROM clients WHERE id = $1`, [clientId]
-    );
-    if (client?.st_api_token && client?.st_brand_id) {
+    // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
+    // este bloco lia apenas clients.st_api_token, então as listas que vivem na segunda conta
+    // devolviam 0 (getListContactCount engole o erro) e entravam na soma como se estivessem
+    // vazias — leads subcontados e taxa de conversão inflada, sem nenhum aviso na tela.
+    const contas = await getSlickTextAccounts(clientId as string);
+    if (contas.length > 0) {
       try {
-        const st = new SlickTextClient(client.st_api_token, client.st_brand_id);
-        const { unmatched } = await autoLinkSlickTextLists(st, parseInt(clientId as string));
+        const clients = contas.map(acc => ({ acc, st: new SlickTextClient(acc.st_api_token, acc.st_brand_id) }));
+        // Auto-vínculo roda na primeira conta (é onde vivem as listas de produto); as demais só
+        // fornecem contagem. `unmatched` continua vindo dela.
+        const { unmatched } = await autoLinkSlickTextLists(clients[0]!.st, parseInt(clientId as string));
         const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
           `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
@@ -1732,19 +1830,52 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
         const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
 
-        const abandonoCounts = await Promise.all(
-          abandonoIds.map(id => st.getListContactCount(parseInt(id)))
-        );
-        const compraCounts = await Promise.all(
-          compraIds.map(id => st.getListContactCount(parseInt(id)))
-        );
+        // Um list_id existe em UMA das contas; nas outras a chamada falha e vira 0. Por isso o
+        // total de cada lista é o MAIOR valor entre as contas, não a soma — somar contaria a
+        // mesma lista de novo se duas contas respondessem.
+        const contarLista = async (listId: string): Promise<{ count: number; accountId: number | null }> => {
+          const porConta = await Promise.all(
+            clients.map(async c => ({ accountId: c.acc.accountId, count: await c.st.getListContactCount(parseInt(listId)) }))
+          );
+          return porConta.reduce((melhor, atual) => (atual.count > melhor.count ? atual : melhor), { count: 0, accountId: null as number | null });
+        };
 
-        abandonoLeads = abandonoCounts.reduce((a, b) => a + b, 0);
-        compradorLeads = compraCounts.reduce((a, b) => a + b, 0);
-        leadsSource = 'slicktext_list';
-        if (unmatched.length > 0) {
-          leadsWarning = `${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`;
+        const abandonoPorLista = await Promise.all(abandonoIds.map(async id => ({ id, ...(await contarLista(id)) })));
+        const compraPorLista = await Promise.all(compraIds.map(async id => ({ id, ...(await contarLista(id)) })));
+
+        // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
+        // período nas próximas consultas (ver tabela list_contact_snapshots).
+        await gravarSnapshotDeListas(clientId as string, [...abandonoPorLista, ...compraPorLista]);
+
+        const abandonoVitalicio = abandonoPorLista.reduce((a, b) => a + b.count, 0);
+        const compraVitalicio = compraPorLista.reduce((a, b) => a + b.count, 0);
+
+        // Leads DO PERÍODO via diferença de retratos, quando existem os dois lados. Só com
+        // período ativo — sem período o vitalício é a resposta certa, não uma aproximação.
+        const periodoAtivo = !!(period.from && period.to);
+        const delta = periodoAtivo
+          ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, period.from!, period.to!)
+          : null;
+
+        if (delta) {
+          abandonoLeads = delta.abandono;
+          compradorLeads = delta.compra;
+          leadsSource = 'snapshot_delta';
+          leadsPeriodoInfo = { de: delta.baseDate, ate: delta.endDate };
+        } else {
+          abandonoLeads = abandonoVitalicio;
+          compradorLeads = compraVitalicio;
+          leadsSource = 'slicktext_list';
         }
+
+        const avisos: string[] = [];
+        if (unmatched.length > 0) {
+          avisos.push(`${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`);
+        }
+        if (leadsSource === 'slicktext_list' && periodoAtivo) {
+          avisos.push('Leads são o total atual de cada lista (vitalício) contra vendas do período — a SlickText não conta contatos por lista e por data ao mesmo tempo. A partir de agora um retrato diário é gravado, e períodos futuros passam a ter leads exatos.');
+        }
+        leadsWarning = avisos.length > 0 ? avisos.join(' · ') : null;
       } catch (err: any) {
         logger.error('Admin', `Falha ao buscar leads via SlickText (client ${clientId}): ${err.message}`);
         leadsSource = 'unavailable';
@@ -2078,6 +2209,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         vendas_fora_escopo: smsSegRecoveryFora,
         taxa: abandonoLeads > 0 ? parseFloat(((smsSegRecoveryCount / abandonoLeads) * 100).toFixed(2)) : 0,
         leads_source: leadsSource,
+        leads_periodo: leadsPeriodoInfo,
         leads_warning: leadsWarning,
       },
       compradores: {
@@ -2086,6 +2218,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         vendas_fora_escopo: smsSegSalesFora,
         taxa: compradorLeads > 0 ? parseFloat(((smsSegSalesCount / compradorLeads) * 100).toFixed(2)) : 0,
         leads_source: leadsSource,
+        leads_periodo: leadsPeriodoInfo,
         leads_warning: leadsWarning,
       },
     },
@@ -2672,6 +2805,80 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
     periodo: { de: start.slice(0, 10), ate: end.slice(0, 10), ativo: period.isToday || !!(period.from && period.to) },
     mensagens: linhas,
   });
+}));
+
+// GET /admin/clientes/:id/diagnostico/probe-link-manual - Dá pra recuperar os envios das mensagens
+// que usam link criado à mão?
+//
+// O problema: duas mensagens (os disparos N8N) usam link com source='manual', criado direto no
+// encurtador. Link manual não pertence a workflow nem a node, e é justamente o node que a API usa
+// pra contar envios por mensagem — então essas linhas mostram "envios n/d". Isso está no relatório
+// como o único item sem solução do pedido 3.3.
+//
+// A saída possível: o link manual foi COLADO dentro da mensagem de algum workflow. Se o corpo das
+// mensagens enviadas trouxer o texto, dá pra achar qual node contém aquele slk1.io e, com o node em
+// mãos, a contagem por período volta a funcionar pelo caminho normal. Esta sonda testa isso: mostra
+// os campos de um registro de /messages (o corpo está lá?) e procura o slug de cada link manual no
+// corpo das mensagens de cada workflow da conta.
+adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+  const saida = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const [todosLinks, workflows] = await Promise.all([
+      st.getAllLinks().catch(() => null),
+      st.getWorkflows().catch(() => null),
+    ]);
+
+    const manuais = (todosLinks ?? [])
+      .filter((l: any) => String(l?.source ?? '').toLowerCase() === 'manual')
+      .map((l: any) => ({
+        link_id: l?.link_id ?? l?.id ?? null,
+        nome: l?.name ?? null,
+        url_curta: l?.short_url ?? l?.shortUrl ?? l?.slug ?? null,
+        url_destino: l?.url ?? null,
+        cliques_vitalicio: l?.clicks ?? null,
+      }));
+
+    // Formato de um registro de /messages: o corpo da mensagem está exposto? É a pergunta que
+    // decide se o caminho existe. Sem nome de campo assumido — devolve as chaves como vieram.
+    let amostraMensagem: any = null;
+    const primeiroWf = workflows?.[0]?.workflow_id;
+    if (primeiroWf) {
+      amostraMensagem = await st.rawMessagesSample(primeiroWf).catch((e: any) => ({ erro: e.message }));
+    }
+
+    // Procura o slug de cada link manual no corpo das mensagens de cada workflow.
+    const buscas = [];
+    const slugs = manuais
+      .map(m => String(m.url_curta ?? '').replace(/^https?:\/\//, '').trim())
+      .filter(s => s.length > 3);
+
+    if (slugs.length > 0 && workflows) {
+      for (const wf of workflows) {
+        const achados = await st.procurarTextoEmMensagens(wf.workflow_id, slugs).catch(() => null);
+        if (achados && achados.length > 0) {
+          buscas.push({ workflow_id: wf.workflow_id, nome: wf.name, achados });
+        }
+      }
+    }
+
+    saida.push({
+      conta: acc.label,
+      brand_id: acc.st_brand_id.replace(/\D/g, ''),
+      links_manuais: manuais,
+      campos_de_um_registro_de_messages: amostraMensagem && !amostraMensagem.erro ? Object.keys(amostraMensagem) : amostraMensagem,
+      amostra_crua: amostraMensagem,
+      onde_o_link_manual_aparece: buscas,
+      veredito: buscas.length > 0
+        ? 'ACHADO — existe node cujo corpo contém o link manual. Dá pra vincular a mensagem a esse node e recuperar os envios por período.'
+        : 'Não achado nesta varredura. Se os campos acima não trouxerem corpo/texto da mensagem, o caminho não existe e "envios n/d" é definitivo.',
+    });
+  }
+
+  res.json({ contas: saida });
 }));
 
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou

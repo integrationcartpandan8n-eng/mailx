@@ -634,6 +634,64 @@ export class SlickTextClient {
   }
 
   /**
+   * Um registro cru de /messages de um workflow — pra descobrir QUAIS CAMPOS existem, em especial
+   * se o corpo/texto da mensagem vem na resposta. Disso depende recuperar os envios das mensagens
+   * que usam link manual (ver /diagnostico/probe-link-manual).
+   */
+  async rawMessagesSample(workflowId: number): Promise<any> {
+    const res = await this.http.get('/messages', {
+      params: { source: 'Workflow', source_id: workflowId, offset: 0, limit: 1 },
+    });
+    const items = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    return items[0] ?? null;
+  }
+
+  /**
+   * Procura pedaços de texto (ex: o slug de um link slk1.io criado à mão) no corpo das mensagens
+   * de um workflow, e devolve o `_sub_source_id` — o node — de cada acerto. É o caminho para
+   * recuperar envios por período de mensagem com link manual: o link não tem node, mas a MENSAGEM
+   * que o contém tem.
+   *
+   * Amostra as duas pontas da lista (primeiras e últimas mensagens) em vez de paginar tudo: o
+   * corpo de uma mensagem de automação não muda ao longo do tempo, então achar uma ocorrência já
+   * resolve, e varrer dezenas de milhares de registros para confirmar o óbvio custaria minutos.
+   */
+  async procurarTextoEmMensagens(
+    workflowId: number,
+    trechos: string[]
+  ): Promise<Array<{ trecho: string; node: number | null; amostra_do_corpo: string }>> {
+    const pegar = async (offset: number): Promise<any[]> => {
+      const res = await this.http.get('/messages', {
+        params: { source: 'Workflow', source_id: workflowId, offset, limit: 100 },
+      });
+      return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    };
+
+    const inicio = await pegar(0);
+    if (inicio.length === 0) return [];
+    // Galope curto pra achar o fim da lista sem paginar tudo.
+    let hi = 100;
+    while (hi < 200_000 && (await pegar(hi)).length > 0) hi *= 4;
+    const fim = hi > 100 ? await pegar(Math.max(0, Math.floor(hi / 4))) : [];
+
+    const achados: Array<{ trecho: string; node: number | null; amostra_do_corpo: string }> = [];
+    const vistos = new Set<string>();
+    for (const item of [...inicio, ...fim]) {
+      // Sem assumir nome de campo: concatena todo valor de texto do registro.
+      const texto = Object.values(item ?? {}).filter(v => typeof v === 'string').join(' ');
+      for (const t of trechos) {
+        if (!texto.includes(t)) continue;
+        const node = item?._sub_source_id ?? item?.sub_source_id ?? null;
+        const chave = `${t}:${node}`;
+        if (vistos.has(chave)) continue;
+        vistos.add(chave);
+        achados.push({ trecho: t, node: node != null ? Number(node) : null, amostra_do_corpo: texto.slice(0, 300) });
+      }
+    }
+    return achados;
+  }
+
+  /**
    * Chamada crua de /analytics/messages com os params que o chamador quiser — usada pela sonda que
    * decidiu a SEMÂNTICA do endpoint (ver /diagnostico/probe-envios).
    *
