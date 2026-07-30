@@ -3170,19 +3170,33 @@
         function renderConversaoSegmentoTable(tbodyId, cs) {
             const tbody = document.getElementById(tbodyId);
             if (!tbody || !cs) return;
-            const abWarning = cs.carrinho_abandonado.leads_warning;
-            const abLeadsCell = abWarning
-                ? `${cs.carrinho_abandonado.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${abWarning.replace(/"/g, '&quot;')}"></i>`
-                : cs.carrinho_abandonado.leads.toLocaleString('pt-BR');
+            // Célula de leads com o ESCOPO estampado. A taxa de conversão só é comparável quando
+            // se sabe se o denominador é do período ou o total acumulado da lista — e por muito
+            // tempo era o acumulado sem dizer. Agora, quando existem retratos diários das listas
+            // cobrindo o período, os leads são a diferença entre dois retratos (exato) e a célula
+            // diz isso; sem retratos, continua vitalício e a célula diz isso também.
+            // .kpi-tip em vez de title nativo: title só aparece depois de 1-2s de hover, e ninguém
+            // descobre por acidente que existe uma ressalva ali.
+            const leadsCell = (seg) => {
+                const n = seg.leads.toLocaleString('pt-BR');
+                const p = seg.leads_periodo;
+                const escopo = seg.leads_source === 'snapshot_delta'
+                    ? `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${p.de} → ${p.ate})` : ''}</small>`
+                    : seg.leads_source === 'slicktext_list'
+                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">total da lista (vitalício)</small>`
+                        : '';
+                const tip = seg.leads_warning
+                    ? ` <span class="kpi-tip" tabindex="0" data-tip="${seg.leads_warning.replace(/"/g, '&quot;')}">ⓘ</span>`
+                    : '';
+                return `${n}${tip}${escopo}`;
+            };
+            const abLeadsCell = leadsCell(cs.carrinho_abandonado);
             const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
             const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
             const abTaxaCell = abTaxaStr === '—'
                 ? `<span style="color:var(--text-dim)">—</span>`
                 : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
-            const compWarning = cs.compradores.leads_warning;
-            const compLeadsCell = compWarning
-                ? `${cs.compradores.leads.toLocaleString('pt-BR')} <i class="fas fa-exclamation-triangle" style="color:var(--warning); margin-left:0.3rem" title="${compWarning.replace(/"/g, '&quot;')}"></i>`
-                : cs.compradores.leads.toLocaleString('pt-BR');
+            const compLeadsCell = leadsCell(cs.compradores);
             tbody.innerHTML = [
                 { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
                 { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },

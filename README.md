@@ -43,6 +43,9 @@ mailx/
 
 > 📘 **Guia de Configuração**: Veja [configuration_guide.md](file:///C:/Users/Pichau/.gemini/antigravity/brain/5e835e3e-2c5c-4eed-949e-0d4c8a4cb42b/configuration_guide.md) para detalhes completos sobre DNS, domínios e integrações externas.
 
+> 📱 **Operação SMS**: [OPERACAO-SMS.md](OPERACAO-SMS.md) — de onde vem cada número da tela, como
+> conferir contra o painel da SlickText, o que a API não permite e a rotina de crédito.
+
 ## Dashboard Admin (Human in the Loop)
 
 Acesse `/admin` para gerenciar tudo visualmente:
