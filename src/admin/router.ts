@@ -2967,13 +2967,23 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
       }
     }
 
-    // Plano B, se nenhum filtro funcionar: procurar o link_id dentro de `_link_ids` das mensagens
-    // de cada workflow. Acha o workflow do link manual, e daí a contagem por período sai pelo
-    // caminho do workflow (que é filtrado por data de verdade).
+    // Plano B: procurar o link_id dentro de `_link_ids` das mensagens de cada workflow. Acha o
+    // workflow do link manual, e daí a contagem por período sai pelo caminho do workflow (que é
+    // filtrado por data de verdade).
+    //
+    // SÓ com ?scan=1, e um workflow por chamada com ?workflow_id=. Varrer os 7 workflows das duas
+    // contas numa requisição estourou o timeout do nginx (504) — a resposta demorada não é um
+    // resultado ruim, é resultado nenhum. Separado assim, cada chamada é curta e o progresso fica
+    // com quem chama.
     const idsManuais = manuais.map(m => Number(m.link_id)).filter(n => Number.isFinite(n));
+    const scan = req.query.scan === '1';
+    const wfPedido = req.query.workflow_id ? parseInt(req.query.workflow_id as string) : null;
     const buscas = [];
-    if (workflows && idsManuais.length > 0) {
-      for (const wf of workflows) {
+    if (scan && workflows && idsManuais.length > 0) {
+      const alvos = wfPedido != null
+        ? workflows.filter(w => w.workflow_id === wfPedido)
+        : workflows.slice(0, 2); // sem workflow_id, só os dois primeiros — pra não repetir o 504
+      for (const wf of alvos) {
         const achados = await st.acharLinksEmMensagens(wf.workflow_id, idsManuais).catch(() => null);
         if (achados && achados.length > 0) buscas.push({ workflow_id: wf.workflow_id, nome: wf.name, achados });
       }
@@ -2987,12 +2997,18 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
       registro_cru_de_um_link: manuaisCrus[0] ?? null,
       campos_de_um_registro_de_messages: amostraMensagem && !amostraMensagem.erro ? Object.keys(amostraMensagem) : amostraMensagem,
       filtro_de_messages_por_link: filtros,
+      workflows_da_conta: (workflows ?? []).map(w => ({ workflow_id: w.workflow_id, nome: w.name })),
+      varredura: scan
+        ? { rodou: true, workflows_varridos: wfPedido != null ? [wfPedido] : (workflows ?? []).slice(0, 2).map(w => w.workflow_id) }
+        : { rodou: false, como_rodar: 'Acrescente ?scan=1&workflow_id=<id> — um workflow por chamada, senão estoura o timeout.' },
       onde_o_link_manual_aparece: buscas,
       veredito: filtroOk
         ? 'ACHADO — /messages filtra por link. Envios do link manual saem direto, por período, sem depender de node.'
-        : buscas.length > 0
-          ? 'ACHADO PELO PLANO B — o link manual aparece em mensagens de um workflow conhecido. Dá pra contar por ali.'
-          : 'Nenhum dos dois caminhos funcionou nesta varredura. Se a amostragem não alcançou as mensagens do link, vale repetir com período; se nem assim, "envios n/d" é definitivo.',
+        : !scan
+          ? 'O filtro por link não funcionou. Rode com ?scan=1&workflow_id=<id> para tentar o plano B (achar em qual workflow o link aparece).'
+          : buscas.length > 0
+            ? 'ACHADO PELO PLANO B — o link manual aparece em mensagens de um workflow conhecido. Dá pra contar por ali.'
+            : 'Não achado nos workflows varridos. Varra os demais antes de concluir — a lista está em workflows_da_conta.',
     });
   }
 
