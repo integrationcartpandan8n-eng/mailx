@@ -681,17 +681,20 @@ export class SlickTextClient {
     workflowId: number,
     linkIds: number[]
   ): Promise<Array<{ link_id: number; node: number | null; created: string }>> {
-    const pegar = async (offset: number): Promise<any[]> => {
+    const pegar = async (offset: number, limit = 100): Promise<any[]> => {
       const res = await this.http.get('/messages', {
-        params: { source: 'Workflow', source_id: workflowId, offset, limit: 100 },
+        params: { source: 'Workflow', source_id: workflowId, offset, limit },
       });
       return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     };
 
     const inicio = await pegar(0);
     if (inicio.length === 0) return [];
+    // Galope com limit=1: só interessa SE existe registro naquele offset, não o conteúdo. Com
+    // limit=100 cada passo trazia 100 registros completos (corpo da mensagem incluso) só pra
+    // descobrir onde a lista termina — foi isso que estourou o timeout do nginx em produção.
     let hi = 100;
-    while (hi < 200_000 && (await pegar(hi)).length > 0) hi *= 4;
+    while (hi < 200_000 && (await pegar(hi, 1)).length > 0) hi *= 4;
     const fim = hi > 100 ? await pegar(Math.max(0, Math.floor(hi / 4))) : [];
 
     const alvo = new Set(linkIds.map(Number));
@@ -716,18 +719,18 @@ export class SlickTextClient {
     workflowId: number,
     trechos: string[]
   ): Promise<Array<{ trecho: string; node: number | null; amostra_do_corpo: string }>> {
-    const pegar = async (offset: number): Promise<any[]> => {
+    const pegar = async (offset: number, limit = 100): Promise<any[]> => {
       const res = await this.http.get('/messages', {
-        params: { source: 'Workflow', source_id: workflowId, offset, limit: 100 },
+        params: { source: 'Workflow', source_id: workflowId, offset, limit },
       });
       return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     };
 
     const inicio = await pegar(0);
     if (inicio.length === 0) return [];
-    // Galope curto pra achar o fim da lista sem paginar tudo.
+    // Galope com limit=1 — ver nota em acharLinksEmMensagens.
     let hi = 100;
-    while (hi < 200_000 && (await pegar(hi)).length > 0) hi *= 4;
+    while (hi < 200_000 && (await pegar(hi, 1)).length > 0) hi *= 4;
     const fim = hi > 100 ? await pegar(Math.max(0, Math.floor(hi / 4))) : [];
 
     const achados: Array<{ trecho: string; node: number | null; amostra_do_corpo: string }> = [];
