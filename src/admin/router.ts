@@ -44,16 +44,26 @@ const SQL_IS_MAILX = `(
   OR COALESCE(tracking_code, '') ILIKE '%mailx%'
 )`;
 
-/** Canal SMS: medium contém 'sms'; fallback legado se medium nulo. */
+/**
+ * Canal SMS: medium contém 'sms', OU a origem é mailx-sms.
+ *
+ * A checagem por utm_source já existia, mas só valia com `utm_medium IS NULL` — e essa condição
+ * classificava venda de SMS como EMAIL. Encontrado ao validar o SMS: os links do Horse Peak (N8N)
+ * saem com `utm_source=mailx-sms` e `utm_medium=WFI001` / `WFI002-Upsell`, fora do padrão da spec
+ * (que manda `auto-sms`). Como 'WFI001' não contém 'sms' e não é nulo, a venda caía em
+ * SQL_IS_SMS = falso; e como a origem tem 'mailx', SQL_IS_MAILX = verdadeiro. Resultado:
+ * SQL_MAILX_EMAIL = MailX E NÃO SMS ficava verdadeiro, e receita de SMS entrava no faturamento de
+ * EMAIL — o pior tipo de erro, porque os dois canais ficam errados de uma vez e a soma continua
+ * fechando.
+ *
+ * Origem `mailx-sms` é prova suficiente de canal, com ou sem medium: nenhum link de email carrega
+ * essa origem. O medium fora do padrão continua sendo problema (a tabela por mensagem exige
+ * `auto-sms` exato), mas isso aparece na nota de reconciliação do card, não como canal trocado.
+ */
 const SQL_IS_SMS = `(
   COALESCE(utm_medium, '') ILIKE '%sms%'
-  OR (
-    utm_medium IS NULL
-    AND (
-      REPLACE(COALESCE(utm_source, ''),   '-', '') ILIKE '%mailxsms%'
-      OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
-    )
-  )
+  OR REPLACE(COALESCE(utm_source, ''),   '-', '') ILIKE '%mailxsms%'
+  OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
   -- ClickBank/Buygoods: o canal vem no próprio código de rastreio, que começa com
   -- "MailxSMS_AutoSMS_" no SMS e "Mailx_AutoEmail_" no email. Tokens específicos em vez de
   -- procurar 'sms' solto, pra nome de produto com essas letras não classificar errado.
@@ -2807,6 +2817,79 @@ adminRouter.get('/clientes/:id/diagnostico/validacao-sms', asyncHandler(async (r
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/utm-fora-do-padrao - Vendas de SMS cujo utm_medium não é
+// 'auto-sms', e o que cada uma custa em visibilidade.
+//
+// A spec (UTMS_DASH) manda `utm_source=mailx-sms` + `utm_medium=auto-sms`. Link que sai fora disso
+// não deixa de vender — deixa de aparecer. Encontrado ao validar o SMS: os links do Horse Peak N8N
+// usam `utm_medium=WFI001` e `WFI002-Upsell`. Antes da correção do SQL_IS_SMS essas vendas eram
+// contadas como EMAIL; agora contam como SMS no card, mas continuam fora da tabela por mensagem,
+// que exige `auto-sms` exato.
+//
+// Este endpoint lista cada combinação fora do padrão com vendas e receita, pra decidir entre
+// corrigir os links na SlickText (preferível — resolve na origem e vale pra qualquer sistema) ou
+// afrouxar o filtro da tabela (aceita o desvio pra sempre).
+adminRouter.get('/clientes/:id/diagnostico/utm-fora-do-padrao', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const params: (string | number)[] = [clientId];
+  const periodoSql = periodSql(period, params);
+
+  const fora = await query<{
+    utm_source: string | null; utm_medium: string | null; utm_campaign: string | null;
+    vendas: string; receita: string; primeira: string; ultima: string;
+  }>(`
+    SELECT utm_source, utm_medium, utm_campaign,
+           COUNT(*) AS vendas, ${SQL_REVENUE} AS receita,
+           MIN(created_at)::date::text AS primeira, MAX(created_at)::date::text AS ultima
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND REPLACE(COALESCE(utm_source, ''), '-', '') ILIKE '%mailxsms%'
+      AND LOWER(TRIM(COALESCE(utm_medium, ''))) <> 'auto-sms'
+      ${periodoSql ? `AND ${periodoSql}` : ''}
+    GROUP BY utm_source, utm_medium, utm_campaign
+    ORDER BY ${SQL_REVENUE} DESC
+  `, params);
+
+  const dentroParams: (string | number)[] = [clientId];
+  const dentroPeriodo = periodSql(period, dentroParams);
+  const dentro = await queryOne<{ vendas: string; receita: string }>(`
+    SELECT COUNT(*) AS vendas, ${SQL_REVENUE} AS receita
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND status IN ('processed','processing') AND client_id = $1
+      AND LOWER(TRIM(COALESCE(utm_source, ''))) = 'mailx-sms'
+      AND LOWER(TRIM(COALESCE(utm_medium, ''))) = 'auto-sms'
+      ${dentroPeriodo ? `AND ${dentroPeriodo}` : ''}
+  `, dentroParams);
+
+  const totalForaVendas = fora.reduce((s, f) => s + parseInt(f.vendas), 0);
+  const totalForaReceita = fora.reduce((s, f) => s + parseFloat(f.receita), 0);
+
+  res.json({
+    periodo: { de: period.from ?? null, ate: period.to ?? null, ativo: period.isToday || !!(period.from && period.to) },
+    no_padrao: { vendas: parseInt(dentro?.vendas || '0'), receita: parseFloat(dentro?.receita || '0') },
+    fora_do_padrao: {
+      vendas: totalForaVendas,
+      receita: totalForaReceita,
+      // O que essas vendas perdem: entram no card de SMS, mas não têm linha na tabela por mensagem,
+      // então não recebem envios, cliques nem razão envios/venda.
+      consequencia: 'Contam no faturamento SMS, mas ficam fora da tabela por mensagem (que exige utm_medium = auto-sms exato) — sem envios, cliques nem envios/venda.',
+      combinacoes: fora.map(f => ({
+        utm_source: f.utm_source,
+        utm_medium: f.utm_medium,
+        utm_campaign: f.utm_campaign,
+        vendas: parseInt(f.vendas),
+        receita: parseFloat(f.receita),
+        primeira_venda: f.primeira,
+        ultima_venda: f.ultima,
+      })),
+    },
+    como_resolver: totalForaVendas > 0
+      ? 'Preferível corrigir na origem: reeditar esses links na SlickText para utm_medium=auto-sms. Resolve para qualquer sistema e não deixa exceção no código. Alternativa: afrouxar o filtro da tabela, que aceita o desvio permanentemente.'
+      : 'Nada fora do padrão neste período.',
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/probe-link-manual - Dá pra recuperar os envios das mensagens
 // que usam link criado à mão?
 //
@@ -2832,15 +2915,13 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
       st.getWorkflows().catch(() => null),
     ]);
 
-    const manuais = (todosLinks ?? [])
-      .filter((l: any) => String(l?.source ?? '').toLowerCase() === 'manual')
-      .map((l: any) => ({
-        link_id: l?.link_id ?? l?.id ?? null,
-        nome: l?.name ?? null,
-        url_curta: l?.short_url ?? l?.shortUrl ?? l?.slug ?? null,
-        url_destino: l?.url ?? null,
-        cliques_vitalicio: l?.clicks ?? null,
-      }));
+    const manuaisCrus = (todosLinks ?? []).filter((l: any) => String(l?.source ?? '').toLowerCase() === 'manual');
+    const manuais = manuaisCrus.map((l: any) => ({
+      link_id: l?.link_id ?? l?.id ?? null,
+      nome: l?.name ?? null,
+      url_destino: l?.url ?? null,
+      cliques_vitalicio: l?.clicks ?? null,
+    }));
 
     // Formato de um registro de /messages: o corpo da mensagem está exposto? É a pergunta que
     // decide se o caminho existe. Sem nome de campo assumido — devolve as chaves como vieram.
@@ -2850,31 +2931,68 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
       amostraMensagem = await st.rawMessagesSample(primeiroWf).catch((e: any) => ({ erro: e.message }));
     }
 
-    // Procura o slug de cada link manual no corpo das mensagens de cada workflow.
-    const buscas = [];
-    const slugs = manuais
-      .map(m => String(m.url_curta ?? '').replace(/^https?:\/\//, '').trim())
-      .filter(s => s.length > 3);
+    // Cada mensagem traz `_link_ids` — os links contidos nela. Se /messages aceitar filtro por
+    // link, a contagem de envios do link manual sai direto, sem depender de node. Testa os nomes
+    // de parâmetro plausíveis e VERIFICA se o retorno realmente ficou filtrado: um parâmetro
+    // ignorado devolve 200 com as mensagens de sempre, e aceitar isso como sucesso produziria uma
+    // contagem errada com cara de certa (foi exatamente o que aconteceu com filters[tagid] no AC).
+    const alvo = manuais.find(m => m.link_id != null);
+    const filtros: Record<string, any> = {};
+    if (alvo) {
+      const controle = await st.rawMessages({ limit: 5 }).catch(() => []);
+      const idsControle = controle.map((m: any) => m?._id).join(',');
 
-    if (slugs.length > 0 && workflows) {
-      for (const wf of workflows) {
-        const achados = await st.procurarTextoEmMensagens(wf.workflow_id, slugs).catch(() => null);
-        if (achados && achados.length > 0) {
-          buscas.push({ workflow_id: wf.workflow_id, nome: wf.name, achados });
+      const variantes: Record<string, any> = {
+        '_link_id': { _link_id: alvo.link_id, limit: 5 },
+        'link_id': { link_id: alvo.link_id, limit: 5 },
+        '_link_ids': { _link_ids: alvo.link_id, limit: 5 },
+        '_link_ids[]': { '_link_ids[]': alvo.link_id, limit: 5 },
+      };
+      for (const [nome, params] of Object.entries(variantes)) {
+        try {
+          const itens = await st.rawMessages(params);
+          const contemOAlvo = itens.length > 0 && itens.every((m: any) =>
+            Array.isArray(m?._link_ids) && m._link_ids.map(Number).includes(Number(alvo.link_id))
+          );
+          filtros[nome] = {
+            devolveu: itens.length,
+            todos_contem_o_link: contemOAlvo,
+            igual_ao_controle_sem_filtro: itens.map((m: any) => m?._id).join(',') === idsControle,
+            veredito: contemOAlvo ? 'FILTRO FUNCIONA' : 'ignorado ou não filtra por link',
+            links_do_primeiro: itens[0]?._link_ids ?? null,
+          };
+        } catch (err: any) {
+          filtros[nome] = { erro: err.message };
         }
       }
     }
 
+    // Plano B, se nenhum filtro funcionar: procurar o link_id dentro de `_link_ids` das mensagens
+    // de cada workflow. Acha o workflow do link manual, e daí a contagem por período sai pelo
+    // caminho do workflow (que é filtrado por data de verdade).
+    const idsManuais = manuais.map(m => Number(m.link_id)).filter(n => Number.isFinite(n));
+    const buscas = [];
+    if (workflows && idsManuais.length > 0) {
+      for (const wf of workflows) {
+        const achados = await st.acharLinksEmMensagens(wf.workflow_id, idsManuais).catch(() => null);
+        if (achados && achados.length > 0) buscas.push({ workflow_id: wf.workflow_id, nome: wf.name, achados });
+      }
+    }
+
+    const filtroOk = Object.values(filtros).some((f: any) => f?.todos_contem_o_link);
     saida.push({
       conta: acc.label,
       brand_id: acc.st_brand_id.replace(/\D/g, ''),
       links_manuais: manuais,
+      registro_cru_de_um_link: manuaisCrus[0] ?? null,
       campos_de_um_registro_de_messages: amostraMensagem && !amostraMensagem.erro ? Object.keys(amostraMensagem) : amostraMensagem,
-      amostra_crua: amostraMensagem,
+      filtro_de_messages_por_link: filtros,
       onde_o_link_manual_aparece: buscas,
-      veredito: buscas.length > 0
-        ? 'ACHADO — existe node cujo corpo contém o link manual. Dá pra vincular a mensagem a esse node e recuperar os envios por período.'
-        : 'Não achado nesta varredura. Se os campos acima não trouxerem corpo/texto da mensagem, o caminho não existe e "envios n/d" é definitivo.',
+      veredito: filtroOk
+        ? 'ACHADO — /messages filtra por link. Envios do link manual saem direto, por período, sem depender de node.'
+        : buscas.length > 0
+          ? 'ACHADO PELO PLANO B — o link manual aparece em mensagens de um workflow conhecido. Dá pra contar por ali.'
+          : 'Nenhum dos dois caminhos funcionou nesta varredura. Se a amostragem não alcançou as mensagens do link, vale repetir com período; se nem assim, "envios n/d" é definitivo.',
     });
   }
 
