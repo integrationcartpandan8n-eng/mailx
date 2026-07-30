@@ -631,6 +631,19 @@ export class SlickTextClient {
   }
 
   /**
+   * Chamada crua de /analytics/messages com os params que o chamador quiser — existe pra sondar a
+   * SEMÂNTICA do endpoint. Motivo: o painel mostrou 13.081 envios de automação na marca 27972 em
+   * 01–29/07 e este endpoint (com attempted=1) devolveu 38.191 pra mesma marca e período — 2,9x
+   * mais, quase exatamente o número do gráfico de CRÉDITOS (39.215). Ou seja, há forte suspeita de
+   * que o total venha em trechos/créditos e não em mensagens. Enquanto isso não estiver decidido,
+   * nenhum número derivado dele pode ser chamado de "envio".
+   */
+  async rawMessageAnalytics(params: Record<string, any>): Promise<any> {
+    const res = await this.http.get('/analytics/messages', { params });
+    return res.data;
+  }
+
+  /**
    * Analytics de UMA mensagem específica (nó) dentro de um workflow, filtrado por
    * período — CONFIRMADO contra a API real (mesma origem do getWorkflowAnalytics).
    * `totals.messages` = envios dessa mensagem no período; `totals.clicks` = cliques;
