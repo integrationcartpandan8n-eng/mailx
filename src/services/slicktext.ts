@@ -634,6 +634,17 @@ export class SlickTextClient {
   }
 
   /**
+   * Chamada crua de /messages com params livres — pra sondar quais FILTROS o endpoint aceita.
+   * Achado que motivou: cada registro de /messages traz `_link_ids` (os links contidos naquela
+   * mensagem). Se o endpoint aceitar filtro por link, dá pra contar envios das mensagens que usam
+   * link MANUAL, que é o único caso sem contagem hoje — e sem precisar do node.
+   */
+  async rawMessages(params: Record<string, any>): Promise<any[]> {
+    const res = await this.http.get('/messages', { params });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
+  /**
    * Um registro cru de /messages de um workflow — pra descobrir QUAIS CAMPOS existem, em especial
    * se o corpo/texto da mensagem vem na resposta. Disso depende recuperar os envios das mensagens
    * que usam link manual (ver /diagnostico/probe-link-manual).
@@ -656,6 +667,51 @@ export class SlickTextClient {
    * corpo de uma mensagem de automação não muda ao longo do tempo, então achar uma ocorrência já
    * resolve, e varrer dezenas de milhares de registros para confirmar o óbvio custaria minutos.
    */
+  /**
+   * Procura link_ids dentro do campo `_link_ids` das mensagens de um workflow. Mais confiável que
+   * casar texto do corpo: `_link_ids` é o vínculo que a própria SlickText registra entre mensagem e
+   * link, sem depender de o encurtador aparecer escrito de determinada forma (o corpo traz
+   * `slk1.io/41a3/247840517`, com sufixo por contato, então casar string exigiria adivinhar o
+   * prefixo).
+   *
+   * Amostra as duas pontas da lista em vez de paginar tudo: o conjunto de links de uma mensagem de
+   * automação não muda ao longo do tempo, então uma ocorrência já responde qual workflow é.
+   */
+  async acharLinksEmMensagens(
+    workflowId: number,
+    linkIds: number[]
+  ): Promise<Array<{ link_id: number; node: number | null; created: string }>> {
+    const pegar = async (offset: number): Promise<any[]> => {
+      const res = await this.http.get('/messages', {
+        params: { source: 'Workflow', source_id: workflowId, offset, limit: 100 },
+      });
+      return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    };
+
+    const inicio = await pegar(0);
+    if (inicio.length === 0) return [];
+    let hi = 100;
+    while (hi < 200_000 && (await pegar(hi)).length > 0) hi *= 4;
+    const fim = hi > 100 ? await pegar(Math.max(0, Math.floor(hi / 4))) : [];
+
+    const alvo = new Set(linkIds.map(Number));
+    const achados: Array<{ link_id: number; node: number | null; created: string }> = [];
+    const vistos = new Set<number>();
+    for (const item of [...inicio, ...fim]) {
+      const ids: number[] = Array.isArray(item?._link_ids) ? item._link_ids.map(Number) : [];
+      for (const id of ids) {
+        if (!alvo.has(id) || vistos.has(id)) continue;
+        vistos.add(id);
+        achados.push({
+          link_id: id,
+          node: item?._sub_source_id != null ? Number(item._sub_source_id) : null,
+          created: String(item?.created ?? ''),
+        });
+      }
+    }
+    return achados;
+  }
+
   async procurarTextoEmMensagens(
     workflowId: number,
     trechos: string[]
