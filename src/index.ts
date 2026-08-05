@@ -50,13 +50,25 @@ async function main() {
   app.use('/admin', adminRouter);
 
   // Health check
+  //
+  // Responde 503 quando o banco está fora. Antes devolvia status "ok" com
+  // database "disconnected" na mesma resposta — ou seja, 200 e verde para qualquer monitor externo
+  // enquanto a dash não conseguia carregar um número. Um health check que só confirma que o processo
+  // está de pé não serve para nada: o processo estar de pé é justamente o caso em que ninguém
+  // percebe que caiu.
   app.get('/health', (_req, res) => {
-    res.json({
-      status: 'ok',
+    const dbOk = isDatabaseReady();
+    res.status(dbOk ? 200 : 503).json({
+      status: dbOk ? 'ok' : 'degraded',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       env: env.NODE_ENV,
-      database: isDatabaseReady() ? 'connected' : 'disconnected',
+      database: dbOk ? 'connected' : 'disconnected',
+      // Sem banco o servidor responde, mas não serve dado nenhum — nem webhook ele consegue
+      // gravar. A mensagem diz o que fazer em vez de deixar quem abriu adivinhando.
+      ...(dbOk ? {} : {
+        detalhe: 'O servidor está de pé mas sem banco. Webhooks recebidos agora podem ser perdidos. Verifique o container do Postgres e o espaço em disco da VPS.',
+      }),
     });
   });
 

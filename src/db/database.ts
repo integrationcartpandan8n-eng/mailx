@@ -293,7 +293,45 @@ function ensureDb(): Pool {
   return getPool();
 }
 
+/**
+ * Tenta reconectar quando dbReady está false.
+ *
+ * Por que existe: o pool marcava dbReady = false no primeiro erro e NADA voltava a marcar true.
+ * Qualquer soluço do Postgres — restart do container, conexão idle cortada, reboot da VPS — deixava
+ * a aplicação convencida para sempre de que não havia banco, mesmo com o Postgres já de pé. A dash
+ * ficava com o aviso vermelho até alguém dar pm2 restart, e foi o que derrubou produção em 05/08
+ * sem ninguém ter mexido em nada.
+ *
+ * Chama initDatabase de novo em vez de só pingar: além de reconectar, ele garante o schema. Se o
+ * container tiver sido recriado com volume novo, pingar responderia "conectado" com o banco vazio,
+ * e cada consulta falharia por tabela inexistente — pior que continuar desconectado, porque teria
+ * cara de conectado. Todo CREATE é IF NOT EXISTS, então rodar de novo é inofensivo.
+ *
+ * Espaçado em 5s e sem chamadas concorrentes: uma tela do dashboard dispara dezenas de consultas de
+ * uma vez, e sem essa trava cada uma abriria sua própria tentativa de reconexão em cima de um banco
+ * que já está em dificuldade.
+ */
+let reconectando = false;
+let ultimaTentativaDeReconexao = 0;
+
+async function tentarReconectar(): Promise<boolean> {
+  if (dbReady) return true;
+  const agora = Date.now();
+  if (reconectando || agora - ultimaTentativaDeReconexao < 5000) return dbReady;
+  reconectando = true;
+  ultimaTentativaDeReconexao = agora;
+  try {
+    logger.warn('DB', 'Banco marcado como indisponível — tentando reconectar');
+    await initDatabase();
+    if (dbReady) logger.info('DB', '✅ Conexão com o banco restabelecida sozinha');
+  } finally {
+    reconectando = false;
+  }
+  return dbReady;
+}
+
 export async function query<T = any>(text: string, params?: any[]): Promise<T[]> {
+  if (!dbReady) await tentarReconectar();
   const p = ensureDb();
   const result = await p.query(text, params);
   return result.rows as T[];
