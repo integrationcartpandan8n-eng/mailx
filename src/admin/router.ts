@@ -1834,8 +1834,24 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       try {
         const clients = contas.map(acc => ({ acc, st: new SlickTextClient(acc.st_api_token, acc.st_brand_id) }));
         // Auto-vínculo roda na primeira conta (é onde vivem as listas de produto); as demais só
-        // fornecem contagem. `unmatched` continua vindo dela.
-        const { unmatched } = await autoLinkSlickTextLists(clients[0]!.st, parseInt(clientId as string));
+        // Auto-vínculo de produto -> lista roda em TODAS as contas, uma depois da outra.
+        //
+        // Antes rodava só na primeira, com a suposição de que "é onde vivem as listas de produto".
+        // A suposição quebra no momento em que alguém cadastra uma conta nova e coloca listas nela:
+        // o produto ficava eternamente sem lista, os leads dele não entravam na conta, e o único
+        // sintoma era um aviso de "produto sem lista vinculada" que não tinha como ser resolvido
+        // clicando em nada — porque o Auto-vincular da tela cuida de mensagem -> workflow, e não
+        // de produto -> lista.
+        //
+        // Sequencial de propósito: cada chamada lista as listas de uma marca e grava os vínculos que
+        // achou; em paralelo, duas contas poderiam gravar em cima do mesmo kit. Um produto é
+        // considerado sem lista só quando NENHUMA conta tinha a lista dele — por isso o unmatched
+        // final é a interseção, não o da última conta.
+        let unmatched: Array<{ kitId: number; kitName: string }> = [];
+        for (let i = 0; i < clients.length; i++) {
+          const r = await autoLinkSlickTextLists(clients[i]!.st, parseInt(clientId as string));
+          unmatched = i === 0 ? r.unmatched : unmatched.filter(u => r.unmatched.some(x => x.kitId === u.kitId));
+        }
         const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
           `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
