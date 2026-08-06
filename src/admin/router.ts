@@ -1944,6 +1944,59 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const smsSegRecoveryFora = parseInt(smsSeg?.rec_total || '0') - smsSegRecoveryCount;
   const smsSegSalesFora = parseInt(smsSeg?.compra_total || '0') - smsSegSalesCount;
 
+  // QUAIS vendas ficaram fora, e por quê. A nota de reconciliação dizia só a quantidade ("2 vendas
+  // do período não aparecem aqui") e atribuía a causa a "produto sem lista vinculada" — o que é um
+  // chute: pode ser produto que nunca foi cadastrado, produto desativado, ou cadastrado e sem lista.
+  // São três causas com três ações diferentes, e uma nota que diz a errada é pior que uma que diz só
+  // o número, porque manda a pessoa arrumar a coisa que não está quebrada. Nomear o produto e o
+  // motivo transforma o aviso em algo acionável.
+  const foraParams: (string | number)[] = [clientId];
+  const foraPeriod = periodSql(period, foraParams);
+  const foraDetalhe = await query<{
+    produto: string | null; rec_fora: string; compra_fora: string; motivo: string;
+  }>(`
+    WITH vendas AS (
+      SELECT product_name, (${SQL_IS_RECOVERY}) AS is_rec
+      FROM webhook_logs
+      WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+        ${foraPeriod ? `AND ${foraPeriod}` : ''}
+    )
+    SELECT
+      v.product_name AS produto,
+      COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
+        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
+          AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name
+      )) AS rec_fora,
+      COUNT(*) FILTER (WHERE NOT EXISTS (
+        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
+          AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name
+      )) AS compra_fora,
+      CASE
+        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name)
+          THEN 'produto não cadastrado no dashboard'
+        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name AND k.enabled = true)
+          THEN 'produto cadastrado mas desativado'
+        ELSE 'produto ativado, mas sem lista da SlickText vinculada'
+      END AS motivo
+    FROM vendas v
+    GROUP BY v.product_name
+    HAVING COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
+             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
+               AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name)) > 0
+        OR COUNT(*) FILTER (WHERE NOT EXISTS (
+             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
+               AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name)) > 0
+    ORDER BY 3 DESC, 2 DESC
+    LIMIT 12
+  `, foraParams).catch(() => []);
+
+  const smsSegForaDetalhe = foraDetalhe.map(f => ({
+    produto: f.produto || '(sem nome de produto no webhook)',
+    recuperacoes_fora: parseInt(f.rec_fora),
+    vendas_fora: parseInt(f.compra_fora),
+    motivo: f.motivo,
+  }));
+
   // Email: leads via TAG do ActiveCampaign, em TODAS as contas do cliente.
   // Realidade confirmada em produção: as tags são nomeadas por FAMÍLIA de produto
   // ("[Glyco Pulse] Compra Aprovada") enquanto os produtos chegam do gateway por SKU
@@ -2250,6 +2303,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         leads_retratos: leadsRetratos,
         leads_warning: leadsWarning,
       },
+      // Quais produtos ficaram fora e por quê — a nota da tela lista isso em vez de só contar.
+      fora_escopo_detalhe: smsSegForaDetalhe,
     },
     conversao_por_segmento_email: {
       carrinho_abandonado: {

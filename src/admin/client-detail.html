@@ -3270,11 +3270,28 @@
                 const partes = [];
                 if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s)`);
                 if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões)`);
+                // Nomeia os produtos e o MOTIVO de cada um. Antes a nota dizia só a quantidade e
+                // atribuía a causa a "produto sem lista/tag vinculada" — que é uma das três causas
+                // possíveis, não a única. Dizer a causa errada manda a pessoa arrumar o que não está
+                // quebrado, e foi o que gerou dúvida quando alguém leu "2 vendas não aparecem aqui" e
+                // perguntou de onde vinham.
+                const detalhe = cs.fora_escopo_detalhe || [];
+                const listaHtml = detalhe.length > 0
+                    ? `<div style="margin-top:0.45rem; display:flex; flex-direction:column; gap:0.2rem">` + detalhe.map(f => {
+                        const qtd = [];
+                        if (f.vendas_fora > 0) qtd.push(`${f.vendas_fora} venda${f.vendas_fora > 1 ? 's' : ''}`);
+                        if (f.recuperacoes_fora > 0) qtd.push(`${f.recuperacoes_fora} recuperação${f.recuperacoes_fora > 1 ? 'ões' : ''}`);
+                        return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>
+                            — ${qtd.join(' · ')} <span style="opacity:0.75">(${escapeHtml(f.motivo)})</span></div>`;
+                      }).join('') + `</div>`
+                    : '';
+
                 tbody.insertAdjacentHTML('beforeend', `
                     <tr>
                         <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
                             <i class="fas fa-circle-info" style="color:var(--warning); margin-right:0.35rem"></i>
-                            ${partes.join(' e ')} do período não aparecem aqui — são de produtos sem lista/tag vinculada, que também ficam fora da contagem de leads. Por isso os KPIs no topo da aba mostram números maiores.
+                            ${partes.join(' e ')} do período não aparecem nesta tabela, e também ficam fora da contagem de leads — por isso os KPIs no topo da aba mostram números maiores.
+                            ${listaHtml}
                         </td>
                     </tr>
                 `);
