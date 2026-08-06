@@ -4571,9 +4571,17 @@
                     const barBase = leader > 0 ? (Math.abs(row.receita_liquida) / leader) * 100 : 0;
                     const barPct = Math.max(0, Math.min(100, barBase));
                     const msg = humanizeMsgCode(row.mensagem);
+                    // Tipo da automação por ESCRITO, não só pelo ícone. A visão Por Mensagem sempre
+                    // trouxe "Carrinho Abandonado · Produto" em texto; aqui havia apenas um ícone de
+                    // carrinho ou de seta, e o resultado prático foi alguém olhar a tela procurando
+                    // essa separação e concluir que ela não existia. Ícone sozinho não é rótulo:
+                    // funciona para quem já sabe o que ele significa.
+                    const tipoTxt = /upsell|compra aprovada/i.test(row.tipo_automacao || '')
+                        ? 'Compra Aprovada' : 'Carrinho Abandonado';
                     return `
                         <div class="g-row">
-                            <span class="g-msg-id">${typeIconHtml(row.tipo_automacao)} <span class="msg-human">${msg.human}</span></span>
+                            <span class="g-msg-id">${typeIconHtml(row.tipo_automacao)} <span class="msg-human">${msg.human}</span>
+                                <small style="color:var(--text-dim); font-weight:600; margin-left:0.35rem">${tipoTxt}</small></span>
                             <div class="g-bar-track"><div class="g-bar${isNeg ? ' neg' : ''}" style="width:${barPct.toFixed(1)}%"></div></div>
                             <span class="g-sales">${row.vendas.toLocaleString('pt-BR')} v</span>
                             <span class="g-val${isNeg ? ' neg' : ''}">${fmtSmsMoney(sym, row.receita_liquida)}</span>
