@@ -280,6 +280,43 @@
         /* Seção "Desempenho por Mensagem de Automação" */
         .section-block { margin-bottom: 1.25rem; }
 
+        /* Filtro por produto — chips acima do resumo. Ficam na mesma família visual dos
+           seletores de período (mesma altura, mesmo raio), com o valor do produto embaixo do nome
+           pra escolha ser por relevância e não por ordem alfabética. */
+        #sms-filtro-produto:not(:empty) { padding: 0.9rem 1.25rem 0; }
+        .prod-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+        .prod-chip {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.1rem;
+            border: 1px solid rgba(255,255,255,0.09);
+            background: transparent;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 0.74rem;
+            font-weight: 600;
+            line-height: 1.25;
+            padding: 0.36rem 0.7rem;
+            border-radius: 7px;
+            cursor: pointer;
+            transition: border-color 0.12s, color 0.12s, background 0.12s;
+        }
+        .prod-chip small {
+            font-size: 0.66rem;
+            font-weight: 500;
+            opacity: 0.65;
+            font-variant-numeric: tabular-nums;
+        }
+        .prod-chip:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+        .prod-chip.active {
+            background: var(--accent-subtle);
+            border-color: var(--accent);
+            color: var(--accent-light);
+        }
+        .prod-chip.active small { opacity: 0.85; }
+        .prod-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
         /* Créditos por Automação */
         .creditos-auto-wrap { padding: 1rem 1.25rem 1.25rem; border-top: 1px solid var(--border); }
         .creditos-auto-title { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
@@ -1613,6 +1650,7 @@
                 <div id="sms-granular-empty" style="display:none;">Nenhuma venda SMS com rastreio de mensagem neste período.</div>
 
                 <div id="sms-granular-content" style="display:none;">
+                    <div id="sms-filtro-produto"></div>
                     <div class="summary-strip" id="sms-granular-summary"></div>
                     <div id="sms-granular-body"></div>
                     <div id="envios-automacao-block"></div>
@@ -4306,7 +4344,7 @@
             if (!data || !data.rows || data.rows.length === 0) { el.innerHTML = ''; return; }
 
             const groups = { abandono: [], upsell: [] };
-            data.rows.forEach(r => (isUpsellTipo(r.tipo_automacao) ? groups.upsell : groups.abandono).push(r));
+            rowsFiltradas(data.rows).forEach(r => (isUpsellTipo(r.tipo_automacao) ? groups.upsell : groups.abandono).push(r));
 
             const cardHtml = (key, label, rows) => {
                 const cached = window.__creditosAutomacaoCache?.[key];
@@ -4373,7 +4411,7 @@
             window.__creditosAutomacaoCache[key] = 'loading';
             renderCreditosAutomacao();
 
-            const rows = data.rows.filter(r => (isUpsellTipo(r.tipo_automacao) ? 'upsell' : 'abandono') === key);
+            const rows = rowsFiltradas(data.rows).filter(r => (isUpsellTipo(r.tipo_automacao) ? 'upsell' : 'abandono') === key);
             // Sequencial de propósito — cada consulta faz dezenas de sondas na SlickText;
             // em paralelo esgotaria as conexões do navegador e travaria o resto da página.
             const results = [];
@@ -4448,24 +4486,96 @@
             return `<div class="type-icon ${cls}"><i class="fas ${icon}"></i></div>`;
         }
 
+        // ── Filtro por produto ──
+        // Quem analisa quer olhar um produto por vez ("só o NeuroMind"). O filtro é do lado do
+        // navegador: as linhas já vêm todas na resposta, então filtrar é instantâneo e não gasta
+        // consulta nenhuma.
+        //
+        // O resumo do topo TEM que seguir o filtro. Deixar "543 vendas · $87.102" fixo sobre uma
+        // tabela mostrando só o Thermo transformaria o cabeçalho numa afirmação falsa a cada clique —
+        // e o total geral continua visível, no chip "Todos os produtos", que mostra a receita
+        // completa. Assim nada se perde e nada se contradiz.
+        function rowsFiltradas(rows) {
+            const f = window.__smsFiltroProduto;
+            return f ? rows.filter(r => (r.produto || '—') === f) : rows;
+        }
+
+        function renderFiltroProduto(data, sym) {
+            const el = document.getElementById('sms-filtro-produto');
+            if (!el) return;
+
+            const porProduto = new Map();
+            for (const r of data.rows) {
+                const k = r.produto || '—';
+                const cur = porProduto.get(k) || { receita: 0, msgs: 0 };
+                cur.receita += r.receita_liquida;
+                cur.msgs++;
+                porProduto.set(k, cur);
+            }
+            // Um produto só: o filtro não escolheria nada e viraria enfeite.
+            if (porProduto.size < 2) { el.innerHTML = ''; return; }
+
+            const totalGeral = data.rows.reduce((s, r) => s + r.receita_liquida, 0);
+            const ativo = window.__smsFiltroProduto;
+            const chip = (valor, rotulo, detalhe, selecionado) => `
+                <button type="button" class="prod-chip${selecionado ? ' active' : ''}" data-produto="${valor === null ? '' : escapeHtml(valor)}">
+                    ${escapeHtml(rotulo)}<small>${detalhe}</small>
+                </button>`;
+
+            // Ordenado por receita: o produto que mais importa fica primeiro, e a ordem não muda a
+            // cada clique (a ordenação usa sempre o total geral, não o filtrado).
+            const chips = [...porProduto.entries()]
+                .sort((a, b) => b[1].receita - a[1].receita)
+                .map(([nome, v]) => chip(nome, nome, fmtSmsMoney(sym, v.receita), ativo === nome))
+                .join('');
+
+            el.innerHTML = `<div class="prod-chips">
+                ${chip(null, 'Todos os produtos', fmtSmsMoney(sym, totalGeral), !ativo)}
+                ${chips}
+            </div>`;
+        }
+
+        document.getElementById('sms-filtro-produto')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-produto]');
+            if (!btn) return;
+            const valor = btn.dataset.produto || null;
+            // Clicar no chip já selecionado limpa o filtro — evita o beco sem saída de precisar
+            // procurar "Todos" para voltar.
+            window.__smsFiltroProduto = (window.__smsFiltroProduto === valor) ? null : valor;
+            // Créditos são calculados a partir das linhas: com outro conjunto de linhas, o valor
+            // anterior não vale mais.
+            window.__creditosAutomacaoCache = {};
+            renderSmsGranular();
+        });
+
         function renderSmsGranularSummary(data, sym) {
-            const totalRefunds = data.rows.reduce((sum, r) => sum + (r.valor_reembolso || 0) + (r.valor_chargeback || 0), 0);
+            const rows = rowsFiltradas(data.rows);
+            const totalRefunds = rows.reduce((sum, r) => sum + (r.valor_reembolso || 0) + (r.valor_chargeback || 0), 0);
+            const filtrando = !!window.__smsFiltroProduto;
+            // Com filtro, vendas e receita saem das linhas visíveis. Sem filtro, seguem vindo dos
+            // totais da resposta — que incluem arredondamentos do servidor e são a fonte canônica.
+            const vendasVis = filtrando ? rows.reduce((s, r) => s + r.vendas, 0) : data.total_vendas_sms;
+            const receitaVis = filtrando ? rows.reduce((s, r) => s + r.receita_liquida, 0) : data.total_receita_liquida_sms;
             // Clareza (achado da auditoria: card 428 vs tabela 427): o card "Vendas SMS" conta
             // TODAS as vendas SMS; esta tabela só as rastreáveis até a mensagem. A diferença
             // vira nota explícita, não discrepância silenciosa.
-            const semRastreio = data.vendas_sem_rastreio || 0;
+            // A nota de vendas sem rastreio é do total do canal — não faz sentido sob um filtro de
+            // produto, porque não sabemos a qual produto elas pertencem (é justamente o que falta
+             // nelas). Com filtro ativo, sai da tela em vez de aparecer sugerindo que se refere ao
+            // produto selecionado.
+            const semRastreio = filtrando ? 0 : (data.vendas_sem_rastreio || 0);
             const semRastreioHtml = semRastreio > 0
                 ? `<div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.3rem">+ ${semRastreio.toLocaleString('pt-BR')} venda${semRastreio === 1 ? '' : 's'} SMS fora desta tabela <span class="kpi-tip" tabindex="0" data-tip="Contada${semRastreio === 1 ? '' : 's'} no card &quot;Vendas SMS&quot; acima, mas sem linha aqui. Causas possíveis: campanha com &quot;teste&quot; no nome (excluída de propósito), disparo em massa em vez de automação, ou venda marcada por tid/subid sem utm. Para ver o motivo de cada uma, abra /diagnostico/sms.">ⓘ</span></div>`
                 : '';
             document.getElementById('sms-granular-summary').innerHTML = `
                 <div class="cell">
-                    <div class="v">${data.total_vendas_sms.toLocaleString('pt-BR')}</div>
-                    <div class="k">Vendas no período</div>
+                    <div class="v">${vendasVis.toLocaleString('pt-BR')}</div>
+                    <div class="k">Vendas no período${filtrando ? ' · filtrado' : ''}</div>
                     ${semRastreioHtml}
                 </div>
                 <div class="cell">
-                    <div class="v green">${fmtSmsMoney(sym, data.total_receita_liquida_sms)}</div>
-                    <div class="k">Receita líquida SMS</div>
+                    <div class="v green">${fmtSmsMoney(sym, receitaVis)}</div>
+                    <div class="k">Receita líquida SMS${filtrando ? ` · ${escapeHtml(window.__smsFiltroProduto)}` : ''}</div>
                 </div>
                 <div class="cell">
                     <div class="v red">${fmtSmsMoney(sym, -totalRefunds)}</div>
@@ -4484,6 +4594,7 @@
         }
 
         function renderSmsGranularMensagem(data, sym) {
+            data = { ...data, rows: rowsFiltradas(data.rows) };
             const total = data.total_receita_liquida_sms || 0;
             const positiveRows = data.rows.filter(r => r.receita_liquida >= 0);
             const lossRows = data.rows.filter(r => r.receita_liquida < 0);
@@ -4547,6 +4658,7 @@
         }
 
         function renderSmsGranularProduto(data, sym) {
+            data = { ...data, rows: rowsFiltradas(data.rows) };
             const total = data.total_receita_liquida_sms || 0;
             const leader = smsGlobalLeader(data.rows);
             const byProduct = new Map();
@@ -4614,6 +4726,7 @@
                     : 'Receita líquida atribuída via UTM · SMS';
             }
 
+            renderFiltroProduto(data, sym);
             renderSmsGranularSummary(data, sym);
             document.getElementById('sms-granular-body').innerHTML = view === 'produto'
                 ? renderSmsGranularProduto(data, sym)
@@ -4663,6 +4776,14 @@
                 }
 
                 window.__smsGranularData = data;
+                // Filtro de produto: mantém a escolha se o produto continua existindo no novo
+                // período, e solta se não. Manter um filtro para um produto que não vendeu no
+                // período deixaria a tabela vazia sem dizer por quê — e quem trocou o período
+                // procuraria o erro nos dados, não no filtro que ficou preso.
+                if (window.__smsFiltroProduto) {
+                    const existe = (data.rows || []).some(r => (r.produto || '—') === window.__smsFiltroProduto);
+                    if (!existe) window.__smsFiltroProduto = null;
+                }
                 // utm -> tem vínculo? (has_link do backend) — decide "Vincular" vs "Ver envios"
                 // sem estado intermediário (achado da auditoria).
                 window.__smsLinkedMap = {};
