@@ -338,13 +338,13 @@ async function leadsPorPeriodoViaSnapshots(
   // Uma consulta só: para cada lista, o retrato mais próximo de cada ponta dentro da tolerância.
   const rows = await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
     `WITH base AS (
-       SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date, contact_count
+       SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
        FROM list_contact_snapshots
        WHERE client_id = $1 AND list_id = ANY($2)
          AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
        ORDER BY list_id, snapshot_date DESC
      ), fim AS (
-       SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date, contact_count
+       SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date::text AS snapshot_date, contact_count
        FROM list_contact_snapshots
        WHERE client_id = $1 AND list_id = ANY($2)
          AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
@@ -378,6 +378,9 @@ async function leadsPorPeriodoViaSnapshots(
   const compra = somar(compraIds);
   if (abandono === null || compra === null) return null;
 
+  // As datas vêm como texto do SQL (snapshot_date::text) de propósito: o driver do Postgres devolve
+  // DATE como objeto Date do JS, e String(date).slice(0,10) produzia "Thu Jul 30" — foi o que
+  // apareceu na tela em produção, no idioma errado e sem ano.
   const datas = [...porLista.values()];
   const baseDate = datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from;
   const endDate = datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? to;
@@ -2340,24 +2343,37 @@ adminRouter.get('/clientes/:id/envios-por-automacao', asyncHandler(async (req: R
     automacoes.push(...resultados);
   }
 
+  const naoResponderam = automacoes.filter(a => a.envios === null);
   const comEnvio = automacoes.filter(a => (a.envios ?? 0) > 0);
   const total = comEnvio.reduce((s, a) => s + (a.envios ?? 0), 0);
-  const algumaFalhou = automacoes.some(a => a.envios === null);
+  const incompleto = naoResponderam.length > 0;
 
   res.json({
     periodo: { de: start.slice(0, 10), ate: end.slice(0, 10), ativo: period.isToday || !!(period.from && period.to) },
-    total_de_envios: algumaFalhou ? null : total,
-    total_incompleto: algumaFalhou,
-    // Automação sem envio no período não vira linha (fluxo pausado ou produto fora de veiculação
-    // encheria a tabela de zeros), mas o total de quantas ficaram de fora fica dito.
-    automacoes_sem_envio_no_periodo: automacoes.length - comEnvio.length,
-    automacoes: comEnvio
-      .sort((a, b) => (b.envios ?? 0) - (a.envios ?? 0))
-      .map(a => ({
-        ...a,
-        // Participação de cada automação no envio total — é o que responde "qual fluxo trabalha mais".
-        share: total > 0 ? parseFloat((((a.envios ?? 0) / total) * 100).toFixed(1)) : 0,
-      })),
+    total_de_envios: incompleto ? null : total,
+    total_incompleto: incompleto,
+    // Soma do que respondeu. Existe separado do total justamente porque não é o total: serve para a
+    // tela poder dizer "1.253 entre as que responderam" em vez de esconder tudo.
+    soma_das_que_responderam: total,
+    automacoes_que_nao_responderam: naoResponderam.length,
+    // Automação sem envio no período não vira linha (fluxo pausado encheria a tabela de zeros), mas
+    // o total de quantas ficaram de fora fica dito.
+    automacoes_sem_envio_no_periodo: automacoes.length - comEnvio.length - naoResponderam.length,
+    // As que não responderam entram na lista com envios null. Antes eram descartadas em silêncio: a
+    // tabela mostrava dez linhas somando 100% de participação enquanto o cabeçalho dizia "total
+    // indisponível" — ou seja, negava o total e ao mesmo tempo repartia porcentagem dele. Quem lê
+    // precisa ver QUAIS automações estão faltando, não só que falta alguma.
+    automacoes: [
+      ...comEnvio.sort((a, b) => (b.envios ?? 0) - (a.envios ?? 0)),
+      ...naoResponderam,
+    ].map(a => ({
+      ...a,
+      // Participação só quando o total é conhecido. Com uma automação faltando, o denominador está
+      // errado e toda porcentagem sai maior do que é.
+      share: !incompleto && total > 0 && a.envios != null
+        ? parseFloat(((a.envios / total) * 100).toFixed(1))
+        : null,
+    })),
   });
 }));
 

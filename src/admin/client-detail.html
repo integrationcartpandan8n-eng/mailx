@@ -3177,6 +3177,14 @@
         // leads são DO PERÍODO e a taxa passa a ser exata; sem eles continuam vitalícios e a taxa é
         // aproximada por construção. As duas frases dizem coisas diferentes sobre a confiabilidade
         // do número, então a errada não pode ficar no ar.
+        // "2026-07-30" → "30/07/2026". As datas dos retratos chegam em ISO e apareceram na tela
+        // como "Thu Jul 30" — em inglês e sem ano — porque o valor era um Date do JS cortado com
+        // slice. Agora vem texto do banco, e a formatação para leitura acontece aqui.
+        function fmtData(ymd) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''));
+            return m ? `${m[3]}/${m[2]}/${m[1]}` : String(ymd || '');
+        }
+
         function renderLegendaLeadsSms(cs) {
             const el = document.getElementById('convSegmentoSmsLegenda');
             if (!el || !cs) return;
@@ -3184,7 +3192,7 @@
             const periodo = seg.leads_periodo;
 
             if (seg.leads_source === 'snapshot_delta') {
-                const quando = periodo ? ` (${periodo.de} → ${periodo.ate})` : '';
+                const quando = periodo ? ` (${fmtData(periodo.de)} → ${fmtData(periodo.ate)})` : '';
                 el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. Ambos os lados contam só os produtos com lista vinculada, pra comparar o mesmo conjunto.">ⓘ</span> · Vendas: do período · taxa exata`;
                 return;
             }
@@ -3197,7 +3205,7 @@
             // dados, vale menos que não dizer nada.
             const r = seg.leads_retratos;
             const retratosTxt = r
-                ? ` · retrato diário das listas desde ${r.primeiro_retrato} (${r.dias_com_retrato} dia${r.dias_com_retrato === 1 ? '' : 's'})`
+                ? ` · retrato diário das listas desde ${fmtData(r.primeiro_retrato)} (${r.dias_com_retrato} dia${r.dias_com_retrato === 1 ? '' : 's'})`
                 : '';
             el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
         }
@@ -3216,7 +3224,7 @@
                 const n = seg.leads.toLocaleString('pt-BR');
                 const p = seg.leads_periodo;
                 const escopo = seg.leads_source === 'snapshot_delta'
-                    ? `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${p.de} → ${p.ate})` : ''}</small>`
+                    ? `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${fmtData(p.de)} → ${fmtData(p.ate)})` : ''}</small>`
                     : seg.leads_source === 'slicktext_list'
                         ? `<small style="display:block; color:var(--warning); font-size:0.68rem">total da lista (vitalício)</small>`
                         : '';
@@ -3232,9 +3240,18 @@
                 ? `<span style="color:var(--text-dim)">—</span>`
                 : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
             const compLeadsCell = leadsCell(cs.compradores);
+            const compTaxaStr = calcTaxa(cs.compradores.vendas, cs.compradores.leads);
+            const compTaxaNum = compTaxaStr === '—' ? 0 : parseFloat(compTaxaStr);
+            const compTaxaCell = compTaxaStr === '—'
+                ? `<span style="color:var(--text-dim)">—</span>`
+                : `<span class="tag ${compTaxaNum > 3 ? 'green' : ''}" style="${compTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${compTaxaStr}</span>`;
             tbody.innerHTML = [
                 { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: `<span class="tag ${cs.compradores.taxa > 3 ? 'green' : ''}" style="${cs.compradores.taxa > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${cs.compradores.taxa}%</span>` },
+                // Mesma função de taxa dos dois lados. Antes o abandono usava calcTaxa e os
+                // compradores o campo pronto da API, com arredondamentos diferentes — a tabela
+                // mostrava 4.4% numa linha e 40.23% na outra, e duas precisões na mesma coluna fazem
+                // parecer que os números vêm de lugares diferentes (vinham).
+                { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: compTaxaCell },
             ].map(r => `
                 <tr>
                     <td style="font-weight:600">${r.seg}</td>
@@ -4176,7 +4193,7 @@
             // Total null = alguma automação não respondeu. Somar o resto e apresentar como total
             // daria um número menor que a realidade com cara de completo.
             const totalTxt = d.total_de_envios == null
-                ? `<span style="color:var(--warning)">total indisponível</span> <span class="kpi-tip" tabindex="0" data-tip="Ao menos uma automação não respondeu, então o total não é somado — as linhas que responderam continuam válidas.">ⓘ</span>`
+                ? `<span style="color:var(--warning)">${(d.soma_das_que_responderam || 0).toLocaleString('pt-BR')} envios entre as que responderam</span> <span class="kpi-tip" tabindex="0" data-tip="${d.automacoes_que_nao_responderam} automação(ões) não respondeu(ram) — estão listadas no fim como indisponível. Como falta gente na conta, este número não é o total e a coluna de participação fica em branco: com denominador incompleto, toda porcentagem sairia maior do que é.">ⓘ</span>`
                 : `${d.total_de_envios.toLocaleString('pt-BR')} envios no período`;
             const foraTxt = d.automacoes_sem_envio_no_periodo > 0
                 ? ` · ${d.automacoes_sem_envio_no_periodo} automação(ões) sem envio no período, fora da lista`
@@ -4194,7 +4211,7 @@
                     <td style="font-weight:600">${escapeHtml(a.automacao)}${semVinculo}</td>
                     <td style="color:var(--text-dim)">${escapeHtml(a.conta)}</td>
                     <td style="text-align:right; font-variant-numeric:tabular-nums">${envios}</td>
-                    <td style="text-align:right; color:var(--text-dim)">${a.share}%</td>
+                    <td style="text-align:right; color:var(--text-dim)">${a.share == null ? '—' : a.share + '%'}</td>
                 </tr>`;
             }).join('');
 
