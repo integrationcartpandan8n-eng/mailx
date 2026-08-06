@@ -3231,6 +3231,14 @@
 
             if (seg.leads_source === 'snapshot_delta') {
                 const quando = periodo ? ` (${fmtData(periodo.de)} → ${fmtData(periodo.ate)})` : '';
+                // Janela dos leads diferente da janela das vendas: a taxa deixa de ser exata, e a
+                // legenda tem que dizer isso. Visto em producao com filtro de 05 a 06/08 devolvendo
+                // leads de 03 a 06/08 — tres dias de leads contra dois de vendas, com a tela
+                // estampando "taxa exata" logo ao lado.
+                if (periodo && periodo.janela_bate === false) {
+                    el.innerHTML = `Leads: entraram entre ${fmtData(periodo.de)} e ${fmtData(periodo.ate)} <span class="kpi-tip" tabindex="0" data-tip="Faltou o retrato de um dos dias exatos do filtro, então foi usado o retrato mais próximo dentro de 3 dias. Isso deixa a janela dos leads MAIOR que a das vendas, e a taxa fica subestimada: mais leads no denominador para as mesmas vendas. Escolha um período cujas pontas tenham retrato para a taxa ficar exata.">ⓘ</span> · <span style="color:var(--warning)">janela maior que o filtro · taxa subestimada</span>`;
+                    return;
+                }
                 el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. Ambos os lados contam só os produtos com lista vinculada, pra comparar o mesmo conjunto.">ⓘ</span> · Vendas: do período · taxa exata`;
                 return;
             }
@@ -3262,7 +3270,9 @@
                 const n = seg.leads.toLocaleString('pt-BR');
                 const p = seg.leads_periodo;
                 const escopo = seg.leads_source === 'snapshot_delta'
-                    ? `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${fmtData(p.de)} → ${fmtData(p.ate)})` : ''}</small>`
+                    ? (p && p.janela_bate === false
+                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">entraram entre ${fmtData(p.de)} e ${fmtData(p.ate)} — janela maior que o filtro</small>`
+                        : `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${fmtData(p.de)} → ${fmtData(p.ate)})` : ''}</small>`)
                     : seg.leads_source === 'slicktext_list'
                         ? `<small style="display:block; color:var(--warning); font-size:0.68rem">total da lista (vitalício)</small>`
                         : '';
