@@ -1576,7 +1576,11 @@
             <div class="card" style="margin-bottom:1.25rem">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento (SMS)</div>
-                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista (a API da SlickText não filtra contatos por lista e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com lista vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com lista</span>
+                    <!-- Preenchido por renderLegendaLeadsSms: os leads podem ser do período (via
+                         retrato diário das listas) ou o total vitalício, e o cabeçalho tem que dizer
+                         qual dos dois é. Texto fixo aqui fazia o cabeçalho afirmar "vitalício" logo
+                         acima de linhas dizendo "entraram no período". -->
+                    <span id="convSegmentoSmsLegenda" style="font-size:0.65rem; color:var(--text-muted); font-weight:600"></span>
                 </div>
                 <div class="card-body" style="padding:0">
                     <table class="kit-table">
@@ -3167,6 +3171,29 @@
         // Renderiza a tabela "Conversão por Segmento" (Carrinho Abandonado / Compradores) —
         // reaproveitada pra versão consolidada (Visão Geral) e pelas isoladas por canal
         // (Email/SMS), todas vindas do mesmo payload de /clientes/:id/stats.
+        // Legenda do cabeçalho da Conversão por Segmento (SMS): diz de qual janela vêm os leads.
+        // Precisa ser dinâmica porque a resposta mudou de natureza — com dois retratos das listas os
+        // leads são DO PERÍODO e a taxa passa a ser exata; sem eles continuam vitalícios e a taxa é
+        // aproximada por construção. As duas frases dizem coisas diferentes sobre a confiabilidade
+        // do número, então a errada não pode ficar no ar.
+        function renderLegendaLeadsSms(cs) {
+            const el = document.getElementById('convSegmentoSmsLegenda');
+            if (!el || !cs) return;
+            const seg = cs.carrinho_abandonado || {};
+            const periodo = seg.leads_periodo;
+
+            if (seg.leads_source === 'snapshot_delta') {
+                const quando = periodo ? ` (${periodo.de} → ${periodo.ate})` : '';
+                el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. Ambos os lados contam só os produtos com lista vinculada, pra comparar o mesmo conjunto.">ⓘ</span> · Vendas: do período · taxa exata`;
+                return;
+            }
+            if (seg.leads_source === 'unavailable') {
+                el.innerHTML = `<span style="color:var(--warning)">Leads indisponíveis</span> <span class="kpi-tip" tabindex="0" data-tip="A SlickText não respondeu a contagem das listas. A taxa não é calculada — melhor sem número do que com um número que não sabemos de onde veio.">ⓘ</span>`;
+                return;
+            }
+            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário das listas: quando houver retrato cobrindo as duas pontas do período escolhido, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada`;
+        }
+
         function renderConversaoSegmentoTable(tbodyId, cs) {
             const tbody = document.getElementById(tbodyId);
             if (!tbody || !cs) return;
@@ -3521,6 +3548,7 @@
                 renderConversaoSegmentoTable('convSegmentoBody', data.conversao_por_segmento);
                 renderConversaoSegmentoTable('convSegmentoEmailBody', data.conversao_por_segmento_email);
                 renderConversaoSegmentoTable('convSegmentoSmsBody', data.conversao_por_segmento_sms);
+                renderLegendaLeadsSms(data.conversao_por_segmento_sms);
 
                 // Render recent webhooks
                 const tbody = document.getElementById('recentWebhooks');
