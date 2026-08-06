@@ -2273,6 +2273,78 @@ function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao:
 }
 
 // GET /admin/clientes/:id/sms-granular - SMS performance per automation message
+// GET /admin/clientes/:id/envios-por-automacao - Total de mensagens enviadas por AUTOMAÇÃO no
+// período.
+//
+// Faltava na tela. A aba SMS mostrava envios por MENSAGEM (cada linha da tabela) e créditos
+// agrupados em dois baldes (Carrinho Abandonado e Upsell), mas não o total de cada automação — que é
+// a pergunta natural de quem quer saber qual fluxo está trabalhando mais. O dado sempre existiu:
+// o total por workflow no período é filtrado por data de verdade pela API, ao contrário do total por
+// mensagem.
+//
+// Traz TODAS as automações da conta, inclusive as sem mensagem vinculada, e marca quais são. Mostrar
+// só as vinculadas daria a impressão de que a conta tem menos automação do que tem — e é justamente
+// nas não vinculadas que mora o envio que ninguém está medindo.
+adminRouter.get('/clientes/:id/envios-por-automacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const { start, end } = await resolveSlickTextDateRange(req);
+  const period = resolvePeriodFilter(req);
+
+  const vinculos = await query<{ slicktext_campaign_id: number | null; st_account_id: number | null }>(
+    `SELECT DISTINCT slicktext_campaign_id, st_account_id FROM sms_campaign_map
+     WHERE client_id = $1 AND source_type = 'Workflow' AND slicktext_campaign_id IS NOT NULL`,
+    [clientId]
+  );
+
+  const contas = await getSlickTextAccounts(clientId);
+  const automacoes: Array<{
+    automacao: string; conta: string; workflow_id: number;
+    envios: number | null; tem_mensagem_vinculada: boolean;
+  }> = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const workflows = await st.getWorkflows().catch(() => null);
+    if (!workflows) continue;
+    const vinculadosDaConta = new Set(
+      vinculos.filter(v => v.st_account_id === acc.accountId).map(v => v.slicktext_campaign_id)
+    );
+
+    const resultados = await Promise.all(workflows.map(async wf => ({
+      automacao: wf.name,
+      conta: acc.label,
+      workflow_id: wf.workflow_id,
+      // null quando a chamada falha — a linha diz "indisponível" em vez de 0, que leria como
+      // "essa automação não enviou nada".
+      envios: await st.getMessageAnalyticsForSource('Workflow', wf.workflow_id, start, end)
+        .then(d => d?.totals?.total ?? null)
+        .catch(() => null),
+      tem_mensagem_vinculada: vinculadosDaConta.has(wf.workflow_id),
+    })));
+    automacoes.push(...resultados);
+  }
+
+  const comEnvio = automacoes.filter(a => (a.envios ?? 0) > 0);
+  const total = comEnvio.reduce((s, a) => s + (a.envios ?? 0), 0);
+  const algumaFalhou = automacoes.some(a => a.envios === null);
+
+  res.json({
+    periodo: { de: start.slice(0, 10), ate: end.slice(0, 10), ativo: period.isToday || !!(period.from && period.to) },
+    total_de_envios: algumaFalhou ? null : total,
+    total_incompleto: algumaFalhou,
+    // Automação sem envio no período não vira linha (fluxo pausado ou produto fora de veiculação
+    // encheria a tabela de zeros), mas o total de quantas ficaram de fora fica dito.
+    automacoes_sem_envio_no_periodo: automacoes.length - comEnvio.length,
+    automacoes: comEnvio
+      .sort((a, b) => (b.envios ?? 0) - (a.envios ?? 0))
+      .map(a => ({
+        ...a,
+        // Participação de cada automação no envio total — é o que responde "qual fluxo trabalha mais".
+        share: total > 0 ? parseFloat((((a.envios ?? 0) / total) * 100).toFixed(1)) : 0,
+      })),
+  });
+}));
+
 adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string);
   const currency = await resolveClientCurrency(clientId);
