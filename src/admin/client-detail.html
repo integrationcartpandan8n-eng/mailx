@@ -3192,7 +3192,14 @@
                 el.innerHTML = `<span style="color:var(--warning)">Leads indisponíveis</span> <span class="kpi-tip" tabindex="0" data-tip="A SlickText não respondeu a contagem das listas. A taxa não é calculada — melhor sem número do que com um número que não sabemos de onde veio.">ⓘ</span>`;
                 return;
             }
-            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário das listas: quando houver retrato cobrindo as duas pontas do período escolhido, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada`;
+            // Mostra desde quando existem retratos. Sem isso, a explicação de que "um dia isso vira
+            // exato" não tem nenhuma evidência na tela — e uma promessa sem prova, numa tela de
+            // dados, vale menos que não dizer nada.
+            const r = seg.leads_retratos;
+            const retratosTxt = r
+                ? ` · retrato diário das listas desde ${r.primeiro_retrato} (${r.dias_com_retrato} dia${r.dias_com_retrato === 1 ? '' : 's'})`
+                : '';
+            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
         }
 
         function renderConversaoSegmentoTable(tbodyId, cs) {

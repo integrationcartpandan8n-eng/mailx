@@ -1819,6 +1819,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   let leadsSource: 'slicktext_list' | 'snapshot_delta' | 'unavailable' = 'unavailable';
   let leadsWarning: string | null = null;
   let leadsPeriodoInfo: { de: string; ate: string } | null = null;
+  let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1856,6 +1857,19 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
         await gravarSnapshotDeListas(clientId as string, [...abandonoPorLista, ...compraPorLista]);
+
+        // Desde quando existem retratos, para a tela poder MOSTRAR isso. Enquanto os leads ainda
+        // são vitalícios (falta o segundo retrato cobrindo o período), nada na tela indicava que o
+        // mecanismo estava rodando — era pedir para confiar. Com a data do primeiro retrato à
+        // vista, quem olha vê que a série começou e a partir de quando ela cobre.
+        const retratos = await queryOne<{ primeiro: string | null; dias: string }>(
+          `SELECT MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias
+           FROM list_contact_snapshots WHERE client_id = $1`,
+          [clientId]
+        ).catch(() => null);
+        leadsRetratos = retratos?.primeiro
+          ? { primeiro_retrato: retratos.primeiro.slice(0, 10), dias_com_retrato: parseInt(retratos.dias) }
+          : null;
 
         const abandonoVitalicio = abandonoPorLista.reduce((a, b) => a + b.count, 0);
         const compraVitalicio = compraPorLista.reduce((a, b) => a + b.count, 0);
@@ -2220,6 +2234,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         taxa: abandonoLeads > 0 ? parseFloat(((smsSegRecoveryCount / abandonoLeads) * 100).toFixed(2)) : 0,
         leads_source: leadsSource,
         leads_periodo: leadsPeriodoInfo,
+        leads_retratos: leadsRetratos,
         leads_warning: leadsWarning,
       },
       compradores: {
@@ -2229,6 +2244,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         taxa: compradorLeads > 0 ? parseFloat(((smsSegSalesCount / compradorLeads) * 100).toFixed(2)) : 0,
         leads_source: leadsSource,
         leads_periodo: leadsPeriodoInfo,
+        leads_retratos: leadsRetratos,
         leads_warning: leadsWarning,
       },
     },
