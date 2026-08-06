@@ -4199,21 +4199,55 @@
                 ? ` · ${d.automacoes_sem_envio_no_periodo} automação(ões) sem envio no período, fora da lista`
                 : '';
 
-            const linhas = lista.map(a => {
+            // Separa as automações da MailX dos outros fluxos da conta (rastreio, teste). O critério
+            // é TER MENSAGEM VINCULADA, não o nome do fluxo: casar "DHL", "FEDEX", "USPS" por nome
+            // funcionaria hoje e falharia na primeira transportadora nova, que voltaria a poluir a
+            // lista sem ninguém entender por quê. Pelo vínculo o critério se mantém sozinho — e tem
+            // um efeito melhor: se um fluxo de VENDA aparecer no grupo de baixo, isso não é ruído, é
+            // vínculo faltando, que é justamente o que precisa ser visto.
+            //
+            // Os fluxos operacionais não são escondidos. Eles consomem crédito da MESMA conta, então
+            // um laço mal configurado disparando 20 mil mensagens de rastreio come o crédito das
+            // automações de venda — e isso tem que aparecer aqui, não ser descoberto pelo saldo. Além
+            // disso, sem eles o total desta tabela deixaria de fechar com o total da conta no painel
+            // da SlickText, que é a única contra-prova externa que existe.
+            const daMailx = lista.filter(a => a.tem_mensagem_vinculada);
+            const outros = lista.filter(a => !a.tem_mensagem_vinculada);
+            const somar = (arr) => arr.reduce((s, a) => s + (a.envios ?? 0), 0);
+
+            const linha = (a) => {
                 const envios = a.envios == null
                     ? `<span style="color:var(--warning)">indisponível</span>`
                     : a.envios.toLocaleString('pt-BR');
-                // Automação sem mensagem nossa vinculada envia e não aparece na tabela por mensagem.
-                // Estampar isso é o ponto: é onde existe envio que ninguém está medindo.
-                const semVinculo = a.tem_mensagem_vinculada ? '' :
-                    ` <span class="kpi-tip" tabindex="0" data-tip="Esta automação envia mas não tem mensagem vinculada no dashboard, então não aparece na tabela por mensagem acima e não tem venda atribuída.">sem vínculo ⓘ</span>`;
                 return `<tr>
-                    <td style="font-weight:600">${escapeHtml(a.automacao)}${semVinculo}</td>
+                    <td style="font-weight:600">${escapeHtml(a.automacao)}</td>
                     <td style="color:var(--text-dim)">${escapeHtml(a.conta)}</td>
                     <td style="text-align:right; font-variant-numeric:tabular-nums">${envios}</td>
                     <td style="text-align:right; color:var(--text-dim)">${a.share == null ? '—' : a.share + '%'}</td>
                 </tr>`;
-            }).join('');
+            };
+
+            const cabecalhoGrupo = (titulo, subtotal, dica) => `<tr>
+                <td colspan="2" style="background:var(--surface-2); font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim)">
+                    ${titulo} <span class="kpi-tip" tabindex="0" data-tip="${dica}">ⓘ</span>
+                </td>
+                <td colspan="2" style="background:var(--surface-2); text-align:right; font-size:0.72rem; color:var(--text-dim); font-variant-numeric:tabular-nums">
+                    ${subtotal.toLocaleString('pt-BR')} envios
+                </td>
+            </tr>`;
+
+            const corpo = [
+                daMailx.length > 0
+                    ? cabecalhoGrupo('Automações MailX', somar(daMailx),
+                        'Fluxos com mensagem vinculada no dashboard — são estes que aparecem na tabela por mensagem acima e que têm venda atribuída.')
+                      + daMailx.map(linha).join('')
+                    : '',
+                outros.length > 0
+                    ? cabecalhoGrupo('Outros fluxos da conta', somar(outros),
+                        'Fluxos sem mensagem vinculada: avisos de rastreio, testes, coisas do cliente. Não têm venda atribuída e não entram na tabela por mensagem — mas consomem crédito da mesma conta, e ficam listados para o total fechar com o painel da SlickText. Se um fluxo de VENDA aparecer aqui, é vínculo faltando.')
+                      + outros.map(linha).join('')
+                    : '',
+            ].join('');
 
             el.innerHTML = `
                 <div class="creditos-auto-wrap">
@@ -4224,7 +4258,7 @@
                             <th>Automação</th><th>Conta</th>
                             <th style="text-align:right">Envios</th><th style="text-align:right">Participação</th>
                         </tr></thead>
-                        <tbody>${linhas}</tbody>
+                        <tbody>${corpo}</tbody>
                     </table>
                 </div>
             `;
