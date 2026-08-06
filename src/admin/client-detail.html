@@ -1615,6 +1615,7 @@
                 <div id="sms-granular-content" style="display:none;">
                     <div class="summary-strip" id="sms-granular-summary"></div>
                     <div id="sms-granular-body"></div>
+                    <div id="envios-automacao-block"></div>
                     <div id="creditos-automacao-block"></div>
                 </div>
             </div>
@@ -4132,6 +4133,79 @@
             }
         });
 
+        // ── Envios por Automação ──
+        // O total de mensagens que cada fluxo disparou no período. A tabela acima mostra envio por
+        // MENSAGEM; aqui é a soma por automação, que é a pergunta de quem quer saber qual fluxo está
+        // trabalhando mais. Carrega em requisição própria pra não atrasar a tabela: consulta a
+        // SlickText uma vez por automação de cada conta.
+        async function carregarEnviosPorAutomacao() {
+            const el = document.getElementById('envios-automacao-block');
+            if (!el) return;
+            el.innerHTML = `<div class="creditos-auto-wrap"><div class="creditos-auto-title">Envios por Automação</div>
+                <div class="creditos-auto-sub">consultando a SlickText…</div></div>`;
+            try {
+                const params = smsCampaignSendsPeriodParams();
+                const res = await fetch(`${API}/clientes/${clientId}/envios-por-automacao?${params}`);
+                const d = await res.json();
+                renderEnviosPorAutomacao(d);
+            } catch (e) {
+                el.innerHTML = `<div class="creditos-auto-wrap"><div class="creditos-auto-title">Envios por Automação</div>
+                    <div class="creditos-auto-sub" style="color:var(--warning)">Não foi possível consultar a SlickText.
+                    <button type="button" class="calc-btn" id="retry-envios-automacao">tentar de novo</button></div></div>`;
+                document.getElementById('retry-envios-automacao')?.addEventListener('click', carregarEnviosPorAutomacao);
+            }
+        }
+
+        function renderEnviosPorAutomacao(d) {
+            const el = document.getElementById('envios-automacao-block');
+            if (!el) return;
+            const lista = d?.automacoes || [];
+            if (lista.length === 0) {
+                el.innerHTML = `<div class="creditos-auto-wrap"><div class="creditos-auto-title">Envios por Automação</div>
+                    <div class="creditos-auto-sub">Nenhuma automação enviou mensagem no período.</div></div>`;
+                return;
+            }
+
+            // Total null = alguma automação não respondeu. Somar o resto e apresentar como total
+            // daria um número menor que a realidade com cara de completo.
+            const totalTxt = d.total_de_envios == null
+                ? `<span style="color:var(--warning)">total indisponível</span> <span class="kpi-tip" tabindex="0" data-tip="Ao menos uma automação não respondeu, então o total não é somado — as linhas que responderam continuam válidas.">ⓘ</span>`
+                : `${d.total_de_envios.toLocaleString('pt-BR')} envios no período`;
+            const foraTxt = d.automacoes_sem_envio_no_periodo > 0
+                ? ` · ${d.automacoes_sem_envio_no_periodo} automação(ões) sem envio no período, fora da lista`
+                : '';
+
+            const linhas = lista.map(a => {
+                const envios = a.envios == null
+                    ? `<span style="color:var(--warning)">indisponível</span>`
+                    : a.envios.toLocaleString('pt-BR');
+                // Automação sem mensagem nossa vinculada envia e não aparece na tabela por mensagem.
+                // Estampar isso é o ponto: é onde existe envio que ninguém está medindo.
+                const semVinculo = a.tem_mensagem_vinculada ? '' :
+                    ` <span class="kpi-tip" tabindex="0" data-tip="Esta automação envia mas não tem mensagem vinculada no dashboard, então não aparece na tabela por mensagem acima e não tem venda atribuída.">sem vínculo ⓘ</span>`;
+                return `<tr>
+                    <td style="font-weight:600">${escapeHtml(a.automacao)}${semVinculo}</td>
+                    <td style="color:var(--text-dim)">${escapeHtml(a.conta)}</td>
+                    <td style="text-align:right; font-variant-numeric:tabular-nums">${envios}</td>
+                    <td style="text-align:right; color:var(--text-dim)">${a.share}%</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `
+                <div class="creditos-auto-wrap">
+                    <div class="creditos-auto-title">Envios por Automação</div>
+                    <div class="creditos-auto-sub">${totalTxt}${foraTxt}</div>
+                    <table class="kit-table">
+                        <thead><tr>
+                            <th>Automação</th><th>Conta</th>
+                            <th style="text-align:right">Envios</th><th style="text-align:right">Participação</th>
+                        </tr></thead>
+                        <tbody>${linhas}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
         // ── Créditos por Automação — créditos consumidos pelas mensagens de um mesmo tipo ──
         // ── de automação (Carrinho Abandonado / Upsell) ──
         //
@@ -4462,6 +4536,13 @@
                 ? renderSmsGranularProduto(data, sym)
                 : renderSmsGranularMensagem(data, sym);
             renderCreditosAutomacao();
+            // Sem await: a tabela já está na tela e o bloco de envios por automação preenche quando
+            // a SlickText responder. Só na primeira renderização — trocar a visão produto/mensagem
+            // não muda o número por automação, e refazer a consulta a cada clique seria desperdício.
+            if (!window.__enviosAutomacaoCarregado) {
+                window.__enviosAutomacaoCarregado = true;
+                carregarEnviosPorAutomacao();
+            }
         }
 
         async function loadSmsGranular(clientId, opts = {}) {
@@ -4504,6 +4585,9 @@
                 window.__smsLinkedMap = {};
                 (data.rows || []).forEach(r => { window.__smsLinkedMap[r.utm_campaign] = r.has_link !== false; });
                 window.__creditosAutomacaoCache = {}; // período mudou — descarta cálculo anterior
+                // Envios por automação são do período: força recarregar, senão o bloco continuaria
+                // mostrando o total do período anterior sob o cabeçalho do novo.
+                window.__enviosAutomacaoCarregado = false;
 
                 // Envios/cliques também são POR PERÍODO — manter o cache antigo misturaria
                 // envios de um período com vendas de outro (razões envios/venda sem sentido).
