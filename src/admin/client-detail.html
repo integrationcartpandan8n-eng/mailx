@@ -4538,6 +4538,9 @@
                 .sort((a, b) => b[1].receita - a[1].receita)
                 .map(([nome, v]) => chip(nome, nome, fmtSmsMoney(sym, v.receita), ativo === nome))
                 .join('');
+            // Um chip por produto DE VERDADE. Antes, oferta colada no nome fazia o mesmo NeuroMind
+            // Pro virar tres chips, cada um com um pedaco da receita e nenhum com o total.
+            
 
             el.innerHTML = `<div class="prod-chips">
                 ${chip(null, 'Todos os produtos', fmtSmsMoney(sym, totalGeral), !ativo)}
@@ -4711,10 +4714,17 @@
                     `;
                 }).join('');
 
+                // Aviso de UTM fora do padrao no grupo: alguma linha dele tinha a oferta colada no
+                // nome do produto. O agrupamento ja foi corrigido; o marcador existe pra o link ser
+                // arrumado na SlickText, senao o dashboard remenda isso para sempre.
+                const colado = group.rows.filter(r => r.oferta_colada_no_produto);
+                const avisoUtm = colado.length > 0
+                    ? ` <span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="${colado.length} mensagem(ns) deste produto tem a oferta colada no nome dentro do utm_campaign (ex: ${escapeHtml(colado[0].produto_bruto || '')}). Pelo padrao a oferta vai em utm_content. O dashboard agrupou certo mesmo assim, mas o ideal e corrigir o link na SlickText.">⚠</span>`
+                    : '';
                 return `
                     <div class="group-block">
                         <div class="group-head">
-                            <span class="group-name">${group.produto}</span>
+                            <span class="group-name">${group.produto}${avisoUtm}</span>
                             <span class="group-total">${fmtSmsMoney(sym, group.subtotal)}<small>${fmtSmsPct(group.subtotal, total)} do total SMS</small></span>
                         </div>
                         <div class="group-rows">${rowsHtml}</div>

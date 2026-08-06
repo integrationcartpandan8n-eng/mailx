@@ -2363,7 +2363,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   });
 }));
 
-function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao: string; produto: string } {
+function parseUtmCampaign(campaign: string): {
+  mensagem: string; tipo_automacao: string; produto: string;
+  produto_bruto: string; oferta_colada_no_produto: boolean;
+} {
   const msgMatch = campaign.match(/MS\d{4}[A-Z]/i);
   const mensagem = msgMatch ? msgMatch[0].toUpperCase() : campaign;
 
@@ -2376,9 +2379,27 @@ function parseUtmCampaign(campaign: string): { mensagem: string; tipo_automacao:
     || beforeMsg;
 
   const afterParts = campaign.split(/-MS\d{4}[A-Z]-/i);
-  const produto = afterParts[1]?.split('-')[0] ?? '';
+  const produtoBruto = afterParts[1]?.split('-')[0] ?? '';
 
-  return { mensagem, tipo_automacao, produto };
+  // A OFERTA colada no nome do produto.
+  //
+  // Pelo padrão, oferta é utm_content ("Buy62OFF") e o produto é só o produto. Alguns links foram
+  // montados com a oferta emendada sem hífen no fim do produto — "NeuromindProBuy62OFF" — e o
+  // parser, que separa por hífen, não tinha como cortar. O efeito na tela: o mesmo NeuroMind Pro
+  // aparecia como três produtos diferentes na visão Por Produto e como três chips no filtro, cada um
+  // com um pedaço da receita, e nenhum deles somando o produto de verdade.
+  //
+  // Corta só o que tem cara de oferta no FIM do nome (Buy<numeros>OFF, com ou sem espaço). Um corte
+  // mais largo — qualquer coisa depois do nome conhecido — arriscaria juntar produtos distintos, que
+  // é um erro pior: receita de um entrando na conta do outro.
+  const OFERTA_COLADA = /Buy\s*\d+\s*\d*\s*OFF$/i;
+  const temOfertaColada = OFERTA_COLADA.test(produtoBruto);
+  const produto = temOfertaColada ? produtoBruto.replace(OFERTA_COLADA, '') : produtoBruto;
+
+  // O agrupamento sai certo, mas o link continua fora do padrão — e quem arruma isso é quem edita o
+  // link na SlickText. Por isso a tela estampa o aviso em vez de limpar em silêncio: limpeza
+  // silenciosa faz o problema nunca ser corrigido na origem.
+  return { mensagem, tipo_automacao, produto, produto_bruto: produtoBruto, oferta_colada_no_produto: temOfertaColada };
 }
 
 // GET /admin/clientes/:id/sms-granular - SMS performance per automation message
@@ -2552,6 +2573,8 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     mensagem: string;
     tipo_automacao: string;
     produto: string;
+    produto_bruto: string;
+    oferta_colada_no_produto: boolean;
     oferta: string | null;
     caminho: string | null;
   };
@@ -2574,6 +2597,10 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
         mensagem: parsed.mensagem,
         tipo_automacao: parsed.tipo_automacao,
         produto: parsed.produto,
+        // Nome cru e o aviso: a tela agrupa pelo produto limpo e estampa que o link está fora do
+        // padrão, pra alguém corrigir na SlickText em vez de o dashboard remendar para sempre.
+        produto_bruto: parsed.produto_bruto,
+        oferta_colada_no_produto: parsed.oferta_colada_no_produto,
         // Só rotula quando há UM valor: várias ofertas/caminhos na mesma mensagem viraria um
         // número que não representa nenhum deles, então fica nulo e a coluna mostra "—".
         oferta: row.ofertas?.length === 1 ? row.ofertas[0] : null,
