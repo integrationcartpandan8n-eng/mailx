@@ -1821,7 +1821,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   let compradorLeads = 0;
   let leadsSource: 'slicktext_list' | 'snapshot_delta' | 'unavailable' = 'unavailable';
   let leadsWarning: string | null = null;
-  let leadsPeriodoInfo: { de: string; ate: string } | null = null;
+  let leadsPeriodoInfo: { de: string; ate: string; janela_bate: boolean } | null = null;
   let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
 
   {
@@ -1904,7 +1904,26 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           abandonoLeads = delta.abandono;
           compradorLeads = delta.compra;
           leadsSource = 'snapshot_delta';
-          leadsPeriodoInfo = { de: delta.baseDate, ate: delta.endDate };
+          // A janela dos leads coincide com o período pedido?
+          //
+          // A busca de retratos aceita até 3 dias de folga em cada ponta, porque o retrato é gravado
+          // quando alguém abre a tela e o dia exato pode faltar. Só que quando a folga é usada, a
+          // janela dos LEADS fica maior que a das VENDAS — visto em produção: filtro de 05 a 06/08
+          // devolvendo leads de 03 a 06/08, três dias contra dois. Nesse caso a taxa tem denominador
+          // de uma janela e numerador de outra, e continuar chamando isso de "taxa exata" é pior que
+          // o vitalício rotulado, porque o vitalício ao menos anuncia que é aproximado.
+          //
+          // O esperado para a ponta inicial é a VÉSPERA do primeiro dia do período: quem entrou no
+          // dia 05 aparece na diferença entre o retrato do dia 04 e o do dia 06.
+          const vespera = new Date(`${period.from}T00:00:00Z`);
+          vespera.setUTCDate(vespera.getUTCDate() - 1);
+          const esperadoDe = vespera.toISOString().slice(0, 10);
+          leadsPeriodoInfo = {
+            de: delta.baseDate,
+            ate: delta.endDate,
+            // Quando false, a tela para de dizer "exata" e mostra a janela que realmente foi usada.
+            janela_bate: delta.baseDate === esperadoDe && delta.endDate === period.to,
+          };
         } else {
           abandonoLeads = abandonoVitalicio;
           compradorLeads = compraVitalicio;
