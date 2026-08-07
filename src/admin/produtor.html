@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailX — Produtor (custo e margem)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg: #070a12; --surface: #0d1322; --surface-2: #121a2c; --surface-3: #182238;
+            --border: #223050; --border-light: #2e3f66;
+            --accent: #004de8; --accent-light: #4b8df8; --accent-subtle: rgba(0, 77, 232, 0.1);
+            --text: #f2f5fa; --text-soft: #cdd8ec; --text-dim: #a3b1cc; --text-muted: #6e7f9e;
+            --success: #00d68f; --success-bg: rgba(0, 214, 143, 0.1);
+            --warning: #ffb020; --warning-bg: rgba(255, 176, 32, 0.1);
+            --danger: #ff4d6a; --danger-bg: rgba(255, 77, 106, 0.1);
+            --radius: 14px; --radius-sm: 8px;
+            --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { font-size: 17px; }
+        @media (max-width: 768px) { html { font-size: 16px; } }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text);
+            min-height: 100vh; display: flex; justify-content: center; padding: 2rem 1.5rem 5rem;
+        }
+        .container { width: 100%; max-width: 1500px; }
+        .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+        .page-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .back-btn {
+            width: 2.4rem; height: 2.4rem; display: grid; place-items: center; flex-shrink: 0;
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+            color: var(--text-dim); text-decoration: none;
+        }
+        .back-btn:hover { color: var(--text); border-color: var(--border-light); }
+        .page-header h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; }
+        .page-header p { font-size: 0.8rem; color: var(--text-muted); }
+
+        /* min-width:0 é o que impede a tabela larga de esticar o card: sem ele, o conteúdo
+           min-content vence o container e a PÁGINA INTEIRA passa a rolar de lado no celular,
+           em vez de só a tabela rolar dentro do próprio quadro. */
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1.25rem; min-width: 0; }
+        .card-header {
+            padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+            display: flex; align-items: baseline; gap: 0.6rem 1rem; flex-wrap: wrap;
+        }
+        .card-title { font-size: 0.92rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+        .card-title i { color: var(--accent-light); }
+        .card-sub { font-size: 0.72rem; color: var(--text-muted); }
+        .card-body { padding: 1.25rem; }
+
+        /* Rótulo de período — sem ele o número não diz de quando é, e isso é bug. */
+        .escopo {
+            font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--accent-light); background: var(--accent-subtle);
+            padding: 0.15rem 0.45rem; border-radius: 4px; white-space: nowrap;
+        }
+
+        .barra-periodo {
+            display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 0.8rem 1.1rem; margin-bottom: 1.25rem;
+        }
+        .barra-periodo .rot { font-size: 0.76rem; color: var(--text-dim); font-weight: 600; }
+        .pills { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-left: auto; }
+        .pill {
+            font: inherit; font-size: 0.74rem; font-weight: 600; cursor: pointer;
+            background: var(--surface-2); color: var(--text-dim);
+            border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.75rem;
+        }
+        .pill:hover { border-color: var(--border-light); color: var(--text); }
+        .pill.ativo { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+        select, input {
+            font: inherit; font-size: 0.84rem; color: var(--text);
+            background: var(--surface-2); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 0.45rem 0.6rem; width: 100%;
+        }
+        input.num-input { font-family: var(--mono); }
+        select:focus-visible, input:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
+
+        .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.25rem; }
+        .kpi { background: var(--surface); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.2rem; }
+        .kpi .k { font-size: 0.62rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+        .kpi .v { font-size: 1.45rem; font-weight: 750; letter-spacing: -0.025em; }
+        .kpi .d { font-size: 0.7rem; color: var(--text-muted); }
+        .kpi.destaque { background: var(--success-bg); }
+        .kpi.destaque .v { color: var(--success); }
+        .v.custo { color: var(--warning); }
+        .v.perda { color: var(--danger); }
+        .v.ausente { color: var(--text-muted); font-size: 1.1rem; }
+
+        .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        th, td { padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        /* A coluna de nome quebra em vez de forçar uma linha só: sem isso ela sozinha empurra a
+           tabela para além do card e a coluna de Lucro — a que mais importa — fica cortada. */
+        th:first-child, td:first-child { white-space: normal; min-width: 10rem; }
+        thead th { font-size: 0.62rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; background: var(--surface-2); }
+        tbody tr:hover td { background: var(--surface-2); }
+        tfoot td { font-weight: 700; background: var(--surface-2); border-top: 1px solid var(--border-light); }
+        .nome-linha { font-weight: 650; }
+        .nome-linha small { display: block; font-weight: 500; color: var(--text-muted); font-size: 0.68rem; white-space: normal; }
+
+        .pill-margem { font-family: var(--mono); font-size: 0.7rem; padding: 0.12rem 0.4rem; border-radius: 4px; }
+        .pill-margem.boa { background: var(--success-bg); color: var(--success); }
+        .pill-margem.media { background: var(--warning-bg); color: var(--warning); }
+        .pill-margem.ruim { background: var(--danger-bg); color: var(--danger); }
+
+        .grid2 { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+        /* minmax(0, 1fr) e não 1fr: "1fr" é atalho de "minmax(auto, 1fr)", e o min-width auto
+           deixa a tabela de dentro empurrar a coluna além da tela. */
+        @media (max-width: 62rem) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+
+        form .campo { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.7rem; }
+        form label { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+        form .dupla { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+        @media (max-width: 30rem) { form .dupla { grid-template-columns: 1fr; } }
+        .ajuda { font-size: 0.66rem; color: var(--text-muted); line-height: 1.4; }
+
+        .btn {
+            font: inherit; font-size: 0.82rem; font-weight: 700; cursor: pointer;
+            background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm);
+            padding: 0.55rem 1rem;
+        }
+        .btn:hover { background: var(--accent-light); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+        .btn.mini { font-size: 0.68rem; padding: 0.25rem 0.55rem; }
+        .btn.perigo { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+
+        .previa {
+            background: var(--surface-2); border: 1px dashed var(--border-light); border-radius: var(--radius-sm);
+            padding: 0.8rem 0.9rem; display: flex; flex-direction: column; gap: 0.35rem; margin: 0.8rem 0;
+        }
+        .previa .linha { display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--text-dim); }
+        .previa .linha b { font-family: var(--mono); color: var(--text); }
+        .previa .total { border-top: 1px solid var(--border); padding-top: 0.4rem; font-weight: 700; color: var(--text); }
+
+        .aviso {
+            display: flex; gap: 0.6rem; align-items: flex-start;
+            background: var(--warning-bg); border: 1px solid var(--warning); border-radius: var(--radius-sm);
+            padding: 0.7rem 0.9rem; font-size: 0.76rem; color: var(--text-soft); line-height: 1.5; margin-bottom: 0.6rem;
+        }
+        .aviso i { color: var(--warning); margin-top: 0.15rem; }
+        .erro {
+            display: none; gap: 0.6rem; align-items: center;
+            background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius-sm);
+            padding: 0.8rem 1rem; font-size: 0.8rem; margin-bottom: 1rem;
+        }
+        .erro.on { display: flex; }
+        .erro i { color: var(--danger); }
+        .vazio { text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 1.5rem 1rem; }
+
+        .comp { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+        .comp > div { background: var(--surface-2); padding: 0.9rem 1rem; }
+        .comp .k { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-weight: 700; }
+        .comp .v { font-size: 1.2rem; font-weight: 750; font-family: var(--mono); margin-top: 0.15rem; }
+        .comp .d { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.15rem; line-height: 1.4; }
+        .delta-pos { color: var(--danger); }
+        .delta-neg { color: var(--success); }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="page-header">
+        <a href="/admin" class="back-btn" title="Voltar"><i class="fas fa-arrow-left"></i></a>
+        <div>
+            <h1 id="tituloCliente">Produtor</h1>
+            <p id="subtitulo">Custo, fatura do fulfillment e margem — dados isolados dos da MailX</p>
+        </div>
+    </div>
+
+    <div class="erro" id="erroGlobal">
+        <i class="fas fa-triangle-exclamation"></i>
+        <span id="erroTexto"></span>
+        <button class="btn mini" style="margin-left:auto" onclick="carregarTudo()">Tentar de novo</button>
+    </div>
+
+    <div class="barra-periodo">
+        <span class="rot"><i class="fas fa-box"></i> Produto</span>
+        <div style="min-width:16rem; flex:0 1 22rem"><select id="seletorProduto"></select></div>
+        <div class="pills" id="pillsPeriodo">
+            <button class="pill" data-dias="7">7 dias</button>
+            <button class="pill" data-dias="30">30 dias</button>
+            <button class="pill" data-dias="90">90 dias</button>
+            <button class="pill" data-mes="atual">Este mês</button>
+            <button class="pill" data-mes="anterior">Mês passado</button>
+            <button class="pill ativo" data-vitalicio="1">Vitalício</button>
+        </div>
+    </div>
+
+    <div id="ressalvas"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <!-- ═══ Previsto vs Real — o card do briefing ═══ -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><i class="fas fa-scale-balanced"></i> Previsto vs Real</div>
+            <span class="escopo" id="escopoPrevReal">—</span>
+            <span class="card-sub">a previsão vem da oferta; o real vem da fatura, e só vale nos dias que ela cobre</span>
+        </div>
+        <div class="card-body">
+            <div class="comp" id="compPrevReal"></div>
+            <div id="reconciliacao" style="margin-top:1.25rem"></div>
+        </div>
+    </div>
+
+    <!-- ═══ Ofertas ═══ -->
+    <div class="grid2">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-tags"></i> Ofertas</div>
+                <span class="escopo" id="escopoOfertas">—</span>
+                <span class="card-sub">cada linha é uma oferta cadastrada</span>
+            </div>
+            <div class="card-body" style="padding:0">
+                <div class="scroll">
+                    <table>
+                        <thead><tr>
+                            <th>Oferta</th><th>Preço</th><th>Potes</th><th>Custo prev.</th>
+                            <th>Margem</th><th>Vendas</th><th>Faturamento</th><th>Lucro prev.</th><th></th>
+                        </tr></thead>
+                        <tbody id="corpoOfertas"></tbody>
+                        <tfoot id="rodapeOfertas"></tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-plus"></i> Cadastrar oferta</div>
+                <span class="card-sub">o custo entra uma vez e vale para todas as vendas dela</span>
+            </div>
+            <div class="card-body">
+                <form id="formOferta">
+                    <div class="campo">
+                        <label for="fNome">Nome da oferta</label>
+                        <input id="fNome" type="text" required placeholder="Divine Purity 6 Bottles">
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="fPotes">Potes</label>
+                            <input id="fPotes" class="num-input" type="number" min="1" step="1" value="6" required>
+                        </div>
+                        <div class="campo">
+                            <label for="fPreco">Preço</label>
+                            <input id="fPreco" class="num-input" type="number" min="0.01" step="0.01" value="294" required>
+                        </div>
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="fCusto">Custo por pote</label>
+                            <input id="fCusto" class="num-input" type="number" min="0" step="0.01" value="7.40" required>
+                        </div>
+                        <div class="campo">
+                            <label for="fFrete">Frete por venda</label>
+                            <input id="fFrete" class="num-input" type="number" min="0" step="0.01" value="6.90" required>
+                        </div>
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="fTaxa">Taxa do gateway (%)</label>
+                            <input id="fTaxa" class="num-input" type="number" min="0" max="100" step="0.1" value="9.5" required>
+                        </div>
+                        <div class="campo">
+                            <label for="fComissao">Comissão de afiliado (%)</label>
+                            <input id="fComissao" class="num-input" type="number" min="0" max="100" step="0.1" value="0">
+                        </div>
+                    </div>
+                    <div class="campo">
+                        <label for="fIds">Ids no gateway (opcional)</label>
+                        <input id="fIds" type="text" placeholder="ex: 705389, 705390">
+                        <span class="ajuda">
+                            Em branco, a venda é reconhecida pelo <b>preço</b>. Com id preenchido, o
+                            casamento é exato — e é o único jeito certo quando duas ofertas têm o mesmo preço
+                            ou quando existe cupom.
+                        </span>
+                    </div>
+
+                    <div class="previa" aria-live="polite">
+                        <div class="linha"><span>Custo dos potes</span><b id="pPotes">—</b></div>
+                        <div class="linha"><span>Frete</span><b id="pFrete">—</b></div>
+                        <div class="linha"><span>Taxa do gateway</span><b id="pTaxa">—</b></div>
+                        <div class="linha"><span>Comissão de afiliado</span><b id="pComissao">—</b></div>
+                        <div class="linha total"><span>Lucro por venda</span><b id="pLucro">—</b></div>
+                        <div class="linha"><span>Margem</span><b id="pMargem">—</b></div>
+                    </div>
+                    <span class="ajuda" id="notaComissao"></span>
+
+                    <button class="btn" type="submit" style="width:100%; margin-top:0.7rem" id="btnSalvarOferta">
+                        Adicionar oferta
+                    </button>
+                    <button class="btn ghost" type="button" style="width:100%; margin-top:0.5rem; display:none" id="btnCancelarEdicao">
+                        Cancelar edição
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Faturas ═══ -->
+    <div class="grid2">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-file-invoice-dollar"></i> Faturas lançadas</div>
+                <span class="card-sub">o custo real; substitui a previsão nos dias que a competência cobre</span>
+            </div>
+            <div class="card-body" style="padding:0">
+                <div class="scroll">
+                    <table>
+                        <thead><tr>
+                            <th>Fornecedor</th><th>Categoria</th><th>Competência</th>
+                            <th>Valor</th><th>Unid.</th><th>Custo/unid.</th><th></th>
+                        </tr></thead>
+                        <tbody id="corpoFaturas"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-plus"></i> Lançar fatura</div>
+                <span class="card-sub">período, valor total e unidades</span>
+            </div>
+            <div class="card-body">
+                <form id="formFatura">
+                    <div class="campo">
+                        <label for="gFornecedor">Fornecedor</label>
+                        <input id="gFornecedor" type="text" required placeholder="Nome do fulfillment">
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="gNumero">Número da fatura</label>
+                            <input id="gNumero" type="text" placeholder="INV-0042">
+                        </div>
+                        <div class="campo">
+                            <label for="gCategoria">Categoria</label>
+                            <select id="gCategoria">
+                                <option value="produto_frete">Produto + frete</option>
+                                <option value="produto">Só produto</option>
+                                <option value="frete">Só frete</option>
+                                <option value="comissao_afiliado">Comissão de afiliado</option>
+                                <option value="taxa_gateway">Taxa do gateway</option>
+                                <option value="outros">Outros</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="gInicio">Competência — de</label>
+                            <input id="gInicio" type="date" required>
+                        </div>
+                        <div class="campo">
+                            <label for="gFim">até</label>
+                            <input id="gFim" type="date" required>
+                        </div>
+                    </div>
+                    <span class="ajuda">
+                        O período que a fatura <b>cobre</b>, não a data em que ela chegou. É por ele que ela
+                        encontra a previsão do mesmo intervalo.
+                    </span>
+                    <div class="dupla" style="margin-top:0.7rem">
+                        <div class="campo">
+                            <label for="gValor">Valor total</label>
+                            <input id="gValor" class="num-input" type="number" min="0.01" step="0.01" required>
+                        </div>
+                        <div class="campo">
+                            <label for="gUnidades">Unidades faturadas</label>
+                            <input id="gUnidades" class="num-input" type="number" min="1" step="1" placeholder="opcional">
+                        </div>
+                    </div>
+                    <span class="ajuda" id="notaUnidades">
+                        Sem as unidades não sai o custo real por pote — que é o número que serve de sugestão
+                        para a próxima previsão.
+                    </span>
+                    <div class="campo" style="margin-top:0.7rem">
+                        <label for="gObs">Observação</label>
+                        <input id="gObs" type="text" placeholder="opcional">
+                    </div>
+                    <button class="btn" type="submit" style="width:100%" id="btnSalvarFatura">Lançar fatura</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Estado
+// ─────────────────────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+const clienteId = params.get('id');
+let kitId = params.get('kit') ? parseInt(params.get('kit'), 10) : null;
+let periodo = null;           // null = vitalício
+let resumo = null;
+let ofertas = [];
+let editandoOfertaId = null;
+let simbolo = '$';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Formatação
+//
+// fmt(null) devolve "—", nunca "0". Ausência de dado e zero são coisas diferentes: mostrar zero
+// faz quem olha concluir "não aconteceu nada" quando a verdade é "não sabemos".
+// ─────────────────────────────────────────────────────────────────────────────
+const fmt = (v, casas = 2) => v == null || !isFinite(v)
+    ? '—'
+    : (v < 0 ? '−' : '') + simbolo + Math.abs(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+const fmt0 = (v) => v == null || !isFinite(v)
+    ? '—'
+    : (v < 0 ? '−' : '') + simbolo + Math.abs(Math.round(v)).toLocaleString('pt-BR');
+const pct = (v, casas = 1) => v == null || !isFinite(v) ? '—' : (v * 100).toFixed(casas).replace('.', ',') + '%';
+const inteiro = (v) => v == null ? '—' : Number(v).toLocaleString('pt-BR');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const dataBR = (s) => s ? s.slice(8, 10) + '/' + s.slice(5, 7) + '/' + s.slice(0, 4) : '—';
+
+const NOME_CATEGORIA = {
+    produto_frete: 'Produto + frete', produto: 'Só produto', frete: 'Só frete',
+    comissao_afiliado: 'Comissão de afiliado', taxa_gateway: 'Taxa do gateway', outros: 'Outros',
+};
+
+function mostrarErro(msg) {
+    document.getElementById('erroTexto').textContent = msg;
+    document.getElementById('erroGlobal').classList.add('on');
+}
+function limparErro() { document.getElementById('erroGlobal').classList.remove('on'); }
+
+async function api(url, opts = {}) {
+    const r = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', ...(opts.headers || {}) },
+    });
+    if (r.status === 401) {
+        // A sessão do admin vive em memória: todo pm2 restart derruba. Dizer isso é melhor do que
+        // um erro genérico que faz a pessoa achar que o sistema quebrou.
+        throw new Error('Sessão expirada (acontece a cada restart do servidor). Recarregue a página para entrar de novo.');
+    }
+    let corpo = null;
+    try { corpo = await r.json(); } catch (_) { /* resposta sem JSON */ }
+    if (!r.ok) throw new Error(corpo?.error || `Falha na requisição (HTTP ${r.status}).`);
+    return corpo;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Período
+// ─────────────────────────────────────────────────────────────────────────────
+function ymd(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+document.getElementById('pillsPeriodo').addEventListener('click', (e) => {
+    const b = e.target.closest('.pill');
+    if (!b) return;
+    document.querySelectorAll('#pillsPeriodo .pill').forEach(p => p.classList.toggle('ativo', p === b));
+    const hoje = new Date();
+    if (b.dataset.vitalicio) {
+        periodo = null;
+    } else if (b.dataset.dias) {
+        const de = new Date(hoje); de.setDate(de.getDate() - (parseInt(b.dataset.dias, 10) - 1));
+        periodo = { from: ymd(de), to: ymd(hoje) };
+    } else if (b.dataset.mes === 'atual') {
+        periodo = { from: ymd(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), to: ymd(hoje) };
+    } else {
+        const ini = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+        const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+        periodo = { from: ymd(ini), to: ymd(fim) };
+    }
+    carregarResumo();
+});
+
+function rotuloPeriodo() {
+    return periodo ? `${dataBR(periodo.from)} – ${dataBR(periodo.to)}` : 'Vitalício';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Carga
+// ─────────────────────────────────────────────────────────────────────────────
+async function carregarTudo() {
+    limparErro();
+    if (!clienteId) { mostrarErro('Falta o cliente na URL (?id=...).'); return; }
+    try {
+        const cliente = await api(`/admin/clientes/${clienteId}`);
+        document.getElementById('tituloCliente').textContent = `Produtor — ${cliente.company_name || 'Cliente'}`;
+
+        const produtos = await api(`/admin/produtor/clientes/${clienteId}/produtos`);
+        const sel = document.getElementById('seletorProduto');
+        if (produtos.length === 0) {
+            sel.innerHTML = '<option>Nenhum produto ainda</option>';
+            mostrarErro('Este cliente ainda não tem produto nenhum registrado. O produto aparece sozinho quando chega a primeira venda pelo webhook.');
+            return;
+        }
+        sel.innerHTML = produtos.map(p =>
+            `<option value="${p.id}">${esc(p.nome)} — ${inteiro(p.vendas)} venda(s), ${p.ofertas} oferta(s)</option>`
+        ).join('');
+        if (!kitId || !produtos.some(p => p.id === kitId)) kitId = produtos[0].id;
+        sel.value = String(kitId);
+        sel.onchange = () => {
+            kitId = parseInt(sel.value, 10);
+            history.replaceState(null, '', `?id=${clienteId}&kit=${kitId}`);
+            carregarResumo();
+        };
+        await carregarResumo();
+    } catch (e) {
+        mostrarErro(e.message);
+    }
+}
+
+async function carregarResumo() {
+    limparErro();
+    try {
+        const qs = periodo ? `?from=${periodo.from}&to=${periodo.to}` : '';
+        [resumo, ofertas] = await Promise.all([
+            api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/resumo${qs}`),
+            api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/ofertas`),
+        ]);
+        simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
+        renderRessalvas();
+        renderKpis();
+        renderPrevistoVsReal();
+        renderOfertas();
+        await renderFaturas();
+        previa();
+    } catch (e) {
+        // A falha aparece no lugar onde o número apareceria, com o motivo e o botão de tentar de novo.
+        mostrarErro(e.message);
+        document.getElementById('kpis').innerHTML = '';
+        document.getElementById('compPrevReal').innerHTML = '';
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render
+// ─────────────────────────────────────────────────────────────────────────────
+function renderRessalvas() {
+    document.getElementById('ressalvas').innerHTML = (resumo.ressalvas || []).map(r =>
+        `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(r)}</span></div>`
+    ).join('');
+}
+
+function renderKpis() {
+    const f = resumo.faturamento, res = resumo.resultado;
+    const origem = { real: 'da fatura', previsto: 'previsão — sem fatura', misto: 'fatura + previsão' }[res.custo_fulfillment_origem];
+    const ticket = f.vendas > 0 ? f.total / f.vendas : null;
+
+    document.getElementById('kpis').innerHTML = `
+        <div class="kpi">
+            <span class="k">Faturamento</span>
+            <span class="v num">${fmt0(f.total)}</span>
+            <span class="d">${inteiro(f.vendas)} venda(s) · ticket ${fmt0(ticket)}</span>
+        </div>
+        <div class="kpi">
+            <span class="k">Custo do produto</span>
+            <span class="v num custo">${fmt0(res.custo_fulfillment_usado)}</span>
+            <span class="d">${origem}</span>
+        </div>
+        <div class="kpi">
+            <span class="k">Taxa do gateway</span>
+            <span class="v num custo">${fmt0(res.taxa_gateway_usada)}</span>
+            <span class="d">sobre o faturamento coberto</span>
+        </div>
+        <div class="kpi">
+            <span class="k">Reembolso</span>
+            <span class="v num perda">${fmt0(resumo.reembolso.valor)}</span>
+            <span class="d">${inteiro(resumo.reembolso.quantidade)} pedido(s) · custo não devolvido</span>
+        </div>
+        <div class="kpi destaque">
+            <span class="k">Lucro</span>
+            <span class="v num">${fmt0(res.lucro)}</span>
+            <span class="d">${pct(res.margem_pct)} sobre a receita coberta</span>
+        </div>
+    `;
+    document.getElementById('escopoPrevReal').textContent = rotuloPeriodo();
+    document.getElementById('escopoOfertas').textContent = rotuloPeriodo();
+}
+
+function renderPrevistoVsReal() {
+    const p = resumo.previsto, r = resumo.real;
+    // A diferença compara a fatura com o previsto DOS DIAS QUE ELA COBRE (previsto_na_cobertura),
+    // nunca com o previsto do período inteiro. Uma fatura de 01 a 22 num mês de 31 dias é
+    // naturalmente menor que a previsão do mês: comparar com ela anunciaria economia justamente
+    // quando o fornecedor cobrou mais caro.
+    const base = r.previsto_na_cobertura;
+    const dif = (r.fulfillment == null || base == null) ? null : r.fulfillment - base;
+    const difPct = (dif == null || !base) ? null : dif / base;
+    const classeDif = dif == null ? '' : (dif > 0 ? 'delta-pos' : 'delta-neg');
+
+    // Nota obrigatória: dois números do mesmo indicador na mesma tela precisam de explicação.
+    const cobertura = r.dias_no_periodo == null
+        ? 'Vitalício: entram todas as faturas lançadas.'
+        : `A fatura cobre ${inteiro(r.dias_com_fatura_produto)} de ${inteiro(r.dias_no_periodo)} dia(s) do período. Nos demais vale a previsão.`;
+
+    document.getElementById('compPrevReal').innerHTML = `
+        <div>
+            <div class="k">Custo previsto (fulfillment)</div>
+            <div class="v">${fmt(p.fulfillment)}</div>
+            <div class="d">potes ${fmt(p.custo_produto)} + frete ${fmt(p.frete)} — do cadastro de oferta, ${esc(rotuloPeriodo().toLowerCase())}</div>
+        </div>
+        <div>
+            <div class="k">Custo real (fatura)</div>
+            <div class="v">${r.fulfillment == null ? '—' : fmt(r.fulfillment)}</div>
+            <div class="d">${r.fulfillment == null
+                ? 'Nenhuma fatura lançada com competência dentro deste período.'
+                : `${inteiro(r.faturas_contidas)} fatura(s). ${esc(cobertura)}`}</div>
+        </div>
+        <div>
+            <div class="k">Diferença</div>
+            <div class="v ${classeDif}">${dif == null ? '—' : (dif > 0 ? '+' : '') + fmt(dif)}</div>
+            <div class="d">${dif == null
+                ? 'Só existe com fatura lançada.'
+                : `${dif > 0 ? 'a fatura veio ACIMA do previsto' : 'a fatura veio abaixo do previsto'} · ${pct(difPct)}
+                   <br>contra ${fmt(base)} previstos <b>só dos dias que ela cobre</b> — comparar com o
+                   previsto do período inteiro faria fatura mais cara parecer economia`}</div>
+        </div>
+        <div>
+            <div class="k">Comissão de afiliado</div>
+            <div class="v">${resumo.resultado.comissao_afiliado_usada === 0 && !resumo.resultado.comissao_afiliado_medida ? '—' : fmt(resumo.resultado.comissao_afiliado_usada)}</div>
+            <div class="d">${resumo.resultado.comissao_afiliado_medida
+                ? 'da fatura de comissão'
+                : 'sem venda de afiliado no período, ou percentual não cadastrado'}</div>
+        </div>
+    `;
+
+    // Faturas parciais: listadas e nunca somadas.
+    const parciais = resumo.real.faturas_parciais || [];
+    let html = '';
+    if (parciais.length > 0) {
+        html += `<div class="aviso"><i class="fas fa-scissors"></i><span>
+            <b>Fora da soma:</b> ${parciais.map(f =>
+                `${esc(f.fornecedor)} ${esc(f.numero || '')} (${dataBR(f.competencia_inicio)}–${dataBR(f.competencia_fim)}, ${fmt(f.valor)})`
+            ).join('; ')}. A competência delas atravessa a borda do período mostrado.
+        </span></div>`;
+    }
+
+    const rec = resumo.reconciliacao || [];
+    if (rec.length > 0) {
+        html += `<div class="scroll"><table>
+            <thead><tr>
+                <th>Fatura</th><th>Competência</th><th>Previsto na janela</th><th>Veio</th>
+                <th>Diferença</th><th>Custo real/unid.</th><th>No período</th>
+            </tr></thead><tbody>
+            ${rec.map(x => {
+                const cls = x.diferenca == null ? '' : (x.diferenca > 0 ? 'delta-pos' : 'delta-neg');
+                return `<tr>
+                    <td class="nome-linha">${esc(x.fornecedor)}${x.numero ? ' · ' + esc(x.numero) : ''}
+                        <small>${NOME_CATEGORIA[x.categoria] || x.categoria}</small></td>
+                    <td>${dataBR(x.competencia_inicio)} – ${dataBR(x.competencia_fim)}</td>
+                    <td class="num">${fmt(x.previsto_na_janela)}</td>
+                    <td class="num">${fmt(x.valor)}</td>
+                    <td class="num ${cls}">${x.diferenca == null ? '—' : (x.diferenca > 0 ? '+' : '') + fmt(x.diferenca) + ' (' + pct(x.diferenca_pct) + ')'}</td>
+                    <td class="num">${fmt(x.custo_real_unitario)}</td>
+                    <td>${x.dentro_do_periodo ? 'sim' : 'não'}</td>
+                </tr>`;
+            }).join('')}
+            </tbody></table></div>
+            <p class="ajuda" style="margin-top:0.6rem">
+                Cada fatura é comparada com a previsão da <b>janela dela</b>, não com a do período da tela —
+                é assim que "previ ${simbolo}7,40 por pote e veio ${simbolo}8,15" fica visível.
+                "Previsto na janela" fica em "—" quando não houve venda casada naquele intervalo.
+            </p>`;
+    }
+    document.getElementById('reconciliacao').innerHTML = html;
+}
+
+function classeMargem(m) { return m == null ? '' : m >= 0.6 ? 'boa' : m >= 0.35 ? 'media' : 'ruim'; }
+
+function renderOfertas() {
+    const linhas = resumo.ofertas || [];
+    document.getElementById('corpoOfertas').innerHTML = linhas.length === 0
+        ? `<tr><td colspan="9" class="vazio">Nenhuma oferta cadastrada ainda. O lucro só existe depois que o custo entra.</td></tr>`
+        : linhas.map(l => {
+            const o = ofertas.find(x => x.id === l.oferta_id);
+            const custoUnit = l.oferta_id == null || !o ? null : (o.unidades * o.custo_unidade_previsto + o.frete_previsto);
+            return `<tr>
+                <td class="nome-linha">${esc(l.nome)}
+                    ${o ? `<small>custo/pote ${fmt(o.custo_unidade_previsto)} · frete ${fmt(o.frete_previsto)}${o.external_ids.length ? ' · id ' + esc(o.external_ids.join(', ')) : ' · casa por preço'}</small>`
+                        : '<small>custo desconhecido — fora do lucro e da margem</small>'}</td>
+                <td class="num">${fmt0(l.preco)}</td>
+                <td class="num">${inteiro(l.unidades)}</td>
+                <td class="num">${fmt(custoUnit)}</td>
+                <td>${l.margem_prevista == null ? '—' : `<span class="pill-margem ${classeMargem(l.margem_prevista)}">${pct(l.margem_prevista)}</span>`}</td>
+                <td class="num">${inteiro(l.vendas)}</td>
+                <td class="num">${fmt0(l.receita)}</td>
+                <td class="num" style="color:var(--success); font-weight:700">${fmt0(l.lucro_previsto)}</td>
+                <td>${l.oferta_id == null ? '' : `
+                    <button class="btn mini ghost" onclick="editarOferta(${l.oferta_id})">Editar</button>
+                    <button class="btn mini perigo" onclick="apagarOferta(${l.oferta_id})">×</button>`}</td>
+            </tr>`;
+        }).join('');
+
+    const f = resumo.faturamento;
+    document.getElementById('rodapeOfertas').innerHTML = `<tr>
+        <td>Total <small style="font-weight:500; color:var(--text-muted)">${f.cobertura_pct == null ? 'sem venda no período' : pct(f.cobertura_pct) + ' do faturamento tem oferta cadastrada'}</small></td>
+        <td></td><td></td><td></td><td></td>
+        <td class="num">${inteiro(f.vendas)}</td>
+        <td class="num">${fmt0(f.total)}</td>
+        <td class="num" style="color:var(--success)">${fmt0(resumo.resultado.lucro)}</td>
+        <td></td>
+    </tr>`;
+}
+
+async function renderFaturas() {
+    const faturas = await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/faturas`);
+    document.getElementById('corpoFaturas').innerHTML = faturas.length === 0
+        ? `<tr><td colspan="7" class="vazio">Nenhuma fatura lançada. Sem ela, o custo da tela é previsão.</td></tr>`
+        : faturas.map(f => `<tr>
+            <td class="nome-linha">${esc(f.fornecedor)}${f.numero ? `<small>${esc(f.numero)}</small>` : ''}</td>
+            <td>${NOME_CATEGORIA[f.categoria] || f.categoria}</td>
+            <td>${dataBR(f.competencia_inicio)} – ${dataBR(f.competencia_fim)}</td>
+            <td class="num">${fmt(f.valor)}</td>
+            <td class="num">${inteiro(f.unidades)}</td>
+            <td class="num">${fmt(f.unidades ? f.valor / f.unidades : null)}</td>
+            <td><button class="btn mini perigo" onclick="apagarFatura(${f.id})">×</button></td>
+        </tr>`).join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prévia da margem ao vivo — é o ponto do cadastro: ver o efeito do custo antes de salvar.
+// ─────────────────────────────────────────────────────────────────────────────
+function lerFormOferta() {
+    const n = (id) => parseFloat(document.getElementById(id).value) || 0;
+    return {
+        nome: document.getElementById('fNome').value.trim(),
+        unidades: n('fPotes'), preco: n('fPreco'),
+        custo_unidade_previsto: n('fCusto'), frete_previsto: n('fFrete'),
+        taxa_gateway_pct: n('fTaxa'), comissao_afiliado_pct: n('fComissao'),
+        external_ids: document.getElementById('fIds').value,
+    };
+}
+
+function previa() {
+    const o = lerFormOferta();
+    const custoPotes = o.unidades * o.custo_unidade_previsto;
+    const taxa = o.preco * (o.taxa_gateway_pct / 100);
+    const comissao = o.preco * (o.comissao_afiliado_pct / 100);
+    const lucro = o.preco - custoPotes - o.frete_previsto - taxa - comissao;
+    const margem = o.preco > 0 ? lucro / o.preco : null;
+
+    document.getElementById('pPotes').textContent = fmt(custoPotes);
+    document.getElementById('pFrete').textContent = fmt(o.frete_previsto);
+    document.getElementById('pTaxa').textContent = fmt(taxa);
+    document.getElementById('pComissao').textContent = o.comissao_afiliado_pct > 0 ? fmt(comissao) : '—';
+    const el = document.getElementById('pLucro');
+    el.textContent = fmt(lucro);
+    el.style.color = lucro >= 0 ? 'var(--success)' : 'var(--danger)';
+    document.getElementById('pMargem').textContent = pct(margem);
+
+    // A prévia mostra a venda POR AFILIADO quando há percentual: é o pior caso, e é o que interessa
+    // saber antes de aceitar a comissão. Sem percentual, dizer isso seria afirmar o que não foi medido.
+    document.getElementById('notaComissao').innerHTML = o.comissao_afiliado_pct > 0
+        ? 'A prévia acima é de uma venda <b>com afiliado</b>. Em venda direta a comissão não entra, e a margem é maior.'
+        : 'Comissão em 0%: a prévia é de venda direta. Preencha o percentual quando começar a rodar afiliado — ele só é descontado das vendas que chegam com afiliado identificado.';
+}
+document.getElementById('formOferta').addEventListener('input', previa);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Escrita
+// ─────────────────────────────────────────────────────────────────────────────
+document.getElementById('formOferta').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btnSalvarOferta');
+    btn.disabled = true; btn.textContent = 'Salvando…';
+    try {
+        const corpo = lerFormOferta();
+        if (editandoOfertaId) {
+            await api(`/admin/produtor/clientes/${clienteId}/ofertas/${editandoOfertaId}`, { method: 'PATCH', body: JSON.stringify(corpo) });
+        } else {
+            await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/ofertas`, { method: 'POST', body: JSON.stringify(corpo) });
+        }
+        cancelarEdicao();
+        await carregarResumo();
+    } catch (err) {
+        mostrarErro(err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = editandoOfertaId ? 'Salvar alterações' : 'Adicionar oferta';
+    }
+});
+
+function editarOferta(id) {
+    const o = ofertas.find(x => x.id === id);
+    if (!o) return;
+    editandoOfertaId = id;
+    document.getElementById('fNome').value = o.nome;
+    document.getElementById('fPotes').value = o.unidades;
+    document.getElementById('fPreco').value = o.preco;
+    document.getElementById('fCusto').value = o.custo_unidade_previsto;
+    document.getElementById('fFrete').value = o.frete_previsto;
+    document.getElementById('fTaxa').value = o.taxa_gateway_pct;
+    document.getElementById('fComissao').value = o.comissao_afiliado_pct;
+    document.getElementById('fIds').value = (o.external_ids || []).join(', ');
+    document.getElementById('btnSalvarOferta').textContent = 'Salvar alterações';
+    document.getElementById('btnCancelarEdicao').style.display = 'block';
+    previa();
+    document.getElementById('fNome').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelarEdicao() {
+    editandoOfertaId = null;
+    document.getElementById('formOferta').reset();
+    document.getElementById('btnSalvarOferta').textContent = 'Adicionar oferta';
+    document.getElementById('btnCancelarEdicao').style.display = 'none';
+    previa();
+}
+document.getElementById('btnCancelarEdicao').addEventListener('click', cancelarEdicao);
+
+async function apagarOferta(id) {
+    const o = ofertas.find(x => x.id === id);
+    if (!confirm(`Apagar a oferta "${o?.nome ?? id}"?\n\nAs vendas dela continuam no faturamento, mas voltam a ficar sem custo — e saem do lucro.`)) return;
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/ofertas/${id}`, { method: 'DELETE' });
+        await carregarResumo();
+    } catch (e) { mostrarErro(e.message); }
+}
+
+document.getElementById('formFatura').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btnSalvarFatura');
+    btn.disabled = true; btn.textContent = 'Lançando…';
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/faturas`, {
+            method: 'POST',
+            body: JSON.stringify({
+                fornecedor: document.getElementById('gFornecedor').value,
+                numero: document.getElementById('gNumero').value,
+                categoria: document.getElementById('gCategoria').value,
+                competencia_inicio: document.getElementById('gInicio').value,
+                competencia_fim: document.getElementById('gFim').value,
+                valor: document.getElementById('gValor').value,
+                unidades: document.getElementById('gUnidades').value,
+                observacao: document.getElementById('gObs').value,
+                moeda: resumo?.moeda || 'USD',
+            }),
+        });
+        document.getElementById('formFatura').reset();
+        await carregarResumo();
+    } catch (err) {
+        mostrarErro(err.message);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Lançar fatura';
+    }
+});
+
+async function apagarFatura(id) {
+    if (!confirm('Apagar esta fatura?\n\nO custo do período dela volta a ser previsão.')) return;
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/faturas/${id}`, { method: 'DELETE' });
+        await carregarResumo();
+    } catch (e) { mostrarErro(e.message); }
+}
+
+carregarTudo();
+previa();
+</script>
+</body>
+</html>

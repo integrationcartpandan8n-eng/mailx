@@ -350,6 +350,12 @@ export interface ResumoProdutor {
   real: {
     /** null = nenhuma fatura lançada nesta categoria no período. Não é zero. */
     fulfillment: number | null;
+    /**
+     * Previsto SÓ dos dias cobertos pela fatura — o par correto do `fulfillment` acima.
+     * null quando não há fatura. A diferença da tela sai destes dois, nunca do previsto do
+     * período inteiro: janelas diferentes fazem custo maior parecer economia.
+     */
+    previsto_na_cobertura: number | null;
     comissao_afiliado: number | null;
     taxa_gateway: number | null;
     outros: number | null;
@@ -574,6 +580,20 @@ export async function calcularResumo(
     + previstoNaoCoberto('produto', diasCobertosProduto)
     + previstoNaoCoberto('frete', diasCobertosFrete);
 
+  /**
+   * Previsto SÓ dos dias que a fatura cobre — é contra este número que o "veio mais caro ou mais
+   * barato" pode ser calculado.
+   *
+   * Comparar a fatura com o previsto do período INTEIRO é a armadilha desta tela: uma fatura de
+   * 01 a 22 num mês de 31 dias fica naturalmente menor que a previsão do mês, e a diferença sai
+   * negativa — a tela anunciaria economia justamente quando o fornecedor cobrou mais caro. Foi o
+   * que aconteceu: o topo dizia −$143,30 (abaixo do previsto) enquanto a reconciliação da mesma
+   * fatura dizia +$113,20 (acima). Os dois olhavam janelas diferentes.
+   */
+  const previstoNaCobertura = realFulfillment == null ? null :
+    (previstoCustoProduto - previstoNaoCoberto('produto', diasCobertosProduto))
+    + (previstoFrete - previstoNaoCoberto('frete', diasCobertosFrete));
+
   const taxaUsada = (realTaxa ?? 0) + previstoNaoCoberto('taxa', diasCobertosTaxa);
   const comissaoUsada = (realComissao ?? 0) + previstoNaoCoberto('comissao', diasCobertosComissao);
 
@@ -705,6 +725,7 @@ export async function calcularResumo(
 
     real: {
       fulfillment: realFulfillment,
+      previsto_na_cobertura: previstoNaCobertura,
       comissao_afiliado: realComissao,
       taxa_gateway: realTaxa,
       outros: realOutros,
