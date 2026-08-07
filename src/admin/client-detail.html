@@ -1822,7 +1822,7 @@
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-box-open"></i> Produtos</div>
-                <span style="font-size:0.72rem; color:var(--text-muted)">Descobertos via webhook — habilite para enviar emails</span>
+                <span style="font-size:0.72rem; color:var(--text-muted)">Descobertos via webhook — ative para o produto entrar nas automações e nos relatórios</span>
             </div>
             <div class="card-body" style="padding:0">
                 <table class="kit-table">
@@ -1832,7 +1832,12 @@
                             <th>Plataforma</th>
                             <th>ID Externo</th>
                             <th>Tags AC</th>
-                            <th>Enviar Emails</th>
+                            <!-- Era "Enviar Emails". A chave nao controla email: ela e o kits.enabled, que
+                                 decide se o produto entra em TUDO — lista da SlickText no SMS, contagem de
+                                 leads, escopo da conversao por segmento, avisos de produto sem lista. Com o
+                                 nome antigo, quem precisava ligar um produto pra corrigir o relatorio de SMS
+                                 encontrava uma coluna falando de email e hesitava. -->
+                            <th>Ativo <span class="kpi-tip" tabindex="0" data-tip="Produto ativo entra em tudo: recebe etiquetas no ActiveCampaign, ganha lista da SlickText no auto-vínculo, conta na tabela de conversão por segmento e nos leads. Produto inativo continua registrando venda no histórico, mas fica fora desses cálculos — e a nota da tabela de conversão diz quais ficaram de fora e por quê.">ⓘ</span></th>
                             <th></th>
                         </tr>
                     </thead>
