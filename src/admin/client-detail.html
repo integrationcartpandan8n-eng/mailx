@@ -4403,7 +4403,7 @@
                     <div class="rn-dest ruim">
                         <span class="t">Precisa de atenção</span>
                         <span class="n">${escapeHtml(humanizeMsgCode(pior.mensagem).human)} · ${tipoTxt(pior.tipo_automacao)}${pior.produto ? ' · ' + escapeHtml(pior.produto) : ''}</span>
-                        <span class="f"><span class="neg">${money(pior.receita_liquida)}</span> no período${pior.vendas === 0 ? ' — reembolso de vendas anteriores e nenhuma venda nova' : ''}.${semVenda > 1 ? ` Outras ${semVenda - 1} mensagens estão no negativo.` : ''}</span>
+                        <span class="f"><span class="neg">${money(pior.receita_liquida)}</span> no período${pior.vendas === 0 ? ' — reembolso de vendas anteriores e nenhuma venda nova' : ''}.${semVenda > 1 ? (semVenda - 1 === 1 ? ' Outra mensagem também está no negativo.' : ` Outras ${semVenda - 1} mensagens estão no negativo.`) : ''}</span>
                     </div>` : '';
 
                 if (blocoBom || blocoRuim) destaquesHtml = `<div class="rn-destaques">${blocoBom}${blocoRuim}</div>`;
