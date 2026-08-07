@@ -97,7 +97,21 @@ function num(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function mapOferta(r: any): OfertaRow {
+/**
+ * Data em 'YYYY-MM-DD' venha ela como texto (SELECT com ::text) ou como Date (RETURNING *).
+ *
+ * O driver do Postgres devolve DATE como objeto Date do JS, e `String(date).slice(0,10)` produz
+ * "Thu Jul 01" — data em inglês e sem ano, que é exatamente o defeito que já apareceu em produção
+ * neste projeto com os retratos de lista. Aqui os dois caminhos existem de verdade: o GET casteia
+ * para texto no SQL, o POST devolve o que o INSERT retornou.
+ */
+function dataTexto(v: any): string {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v).slice(0, 10);
+}
+
+export function mapOferta(r: any): OfertaRow {
   return {
     id: r.id,
     client_id: r.client_id,
@@ -123,7 +137,7 @@ export async function listarOfertas(clientId: number, kitId: number): Promise<Of
   return rows.map(mapOferta);
 }
 
-function mapFatura(r: any): FaturaRow {
+export function mapFatura(r: any): FaturaRow {
   return {
     id: r.id,
     client_id: r.client_id,
@@ -131,11 +145,9 @@ function mapFatura(r: any): FaturaRow {
     fornecedor: r.fornecedor,
     numero: r.numero ?? null,
     categoria: r.categoria,
-    // ::text no SQL de propósito: o driver do Postgres devolve DATE como objeto Date do JS e
-    // String(date).slice(0,10) já produziu data em inglês na tela deste projeto.
-    competencia_inicio: String(r.competencia_inicio).slice(0, 10),
-    competencia_fim: String(r.competencia_fim).slice(0, 10),
-    emitida_em: r.emitida_em ? String(r.emitida_em).slice(0, 10) : null,
+    competencia_inicio: dataTexto(r.competencia_inicio),
+    competencia_fim: dataTexto(r.competencia_fim),
+    emitida_em: r.emitida_em ? dataTexto(r.emitida_em) : null,
     valor: num(r.valor),
     moeda: r.moeda || 'USD',
     unidades: r.unidades == null ? null : parseInt(r.unidades, 10),

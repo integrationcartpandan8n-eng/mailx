@@ -9,6 +9,7 @@ import { SlickTextClient } from '../services/slicktext';
 import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { env, METRICS_ONLY } from '../config/env';
+import { produtorAdminRouter } from '../produtor/admin-router';
 import {
   SESSION_COOKIE,
   parseCookies,
@@ -477,7 +478,11 @@ adminRouter.use((req: Request, res: Response, next: NextFunction) => {
 
   if (!isValidSession(token)) {
     // API requests get 401, HTML requests get redirected
-    if (req.path.startsWith('/dashboard/') || req.path.startsWith('/clientes') || req.path.startsWith('/integration/') || req.path.startsWith('/bootstrap')) {
+    // '/produtor/' entra na lista para as chamadas da tela de Produtor receberem 401 e mostrarem
+    // "sessão expirada, recarregue" — sem isso elas ganhariam um redirect 302 para a página de
+    // login e o fetch tentaria interpretar HTML como JSON, virando um erro que não explica nada.
+    // A sessão do admin vive em memória, então isso acontece em todo pm2 restart.
+    if (req.path.startsWith('/dashboard/') || req.path.startsWith('/clientes') || req.path.startsWith('/integration/') || req.path.startsWith('/bootstrap') || req.path.startsWith('/produtor/')) {
       res.status(401).json({ error: 'Unauthorized' });
     } else {
       res.redirect('/admin/login');
@@ -544,6 +549,13 @@ adminRouter.get('/integration', (_req: Request, res: Response) => {
 adminRouter.get('/client-detail', (_req: Request, res: Response) => {
   serveHtml('client-detail.html', res);
 });
+
+// ── Aba Produtor (custo, fatura do fulfillment, margem) ──
+//
+// Router próprio, em módulo próprio (src/produtor/). Montado aqui só para herdar a autenticação e
+// a checagem de banco que já existem acima — nenhuma rota, query ou tabela deste arquivo é lida
+// ou alterada por ele. O dado do produtor vive em tabelas `produtor_*`, separadas das da MailX.
+adminRouter.use('/produtor', produtorAdminRouter);
 
 // ── Dashboard API Endpoints ──
 
