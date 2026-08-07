@@ -59,15 +59,6 @@ export const PRODUTOR_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_produtor_ofertas_kit
     ON produtor_ofertas (client_id, kit_id);
 
-  -- O custo de produto e o frete saíram da oferta depois que as faturas reais da Red Rock
-  -- mostraram como a cobrança funciona: o pote custa o mesmo ($3,00) sendo vendido na oferta de
-  -- 6, de 3 ou de 1 — o custo é do PRODUTO. E não existe "frete por venda": existe frete por
-  -- ENVIO, mais taxa por pedido, mais pick por unidade, que são preços do FORNECEDOR e valem
-  -- para todas as ofertas. Repetir isso em cada oferta convidava a cadastrar valores diferentes
-  -- para a mesma coisa.
-  ALTER TABLE produtor_ofertas DROP COLUMN IF EXISTS custo_unidade_previsto;
-  ALTER TABLE produtor_ofertas DROP COLUMN IF EXISTS frete_previsto;
-
   -- ─────────────────────────────────────────────────────────────────────
   -- Custo unitário de cada produto, como ele aparece na fatura.
   --
