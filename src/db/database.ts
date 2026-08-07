@@ -1,6 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { PRODUTOR_SCHEMA_SQL } from '../produtor/schema';
 
 let pool: Pool | null = null;
 let dbReady = false;
@@ -275,6 +276,14 @@ export async function initDatabase(): Promise<void> {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_list_snapshot_unique
           ON list_contact_snapshots (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date);
       `);
+
+      // Aba Produtor: tabelas próprias, num bloco próprio, com o SQL morando em
+      // src/produtor/schema.ts. A fronteira entre o dado do produtor (custo, fatura, margem) e o
+      // dado da MailX existe no código e no banco, não só na cabeça de quem escreveu. Roda aqui
+      // junto com o resto porque schema que depende de alguém lembrar de rodar é schema que um dia
+      // não existe em produção.
+      await client.query(PRODUTOR_SCHEMA_SQL);
+
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
     } finally {
