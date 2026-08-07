@@ -1647,7 +1647,14 @@
                 pipelineSparklines.forEach(ch => ch.destroy());
                 pipelineSparklines.clear();
 
+                // Cada cliente renderiza dentro do seu próprio try. Antes, um único card que
+                // estourasse abortava o loop inteiro e caía no catch de fora: os cards já
+                // renderizados ficavam na tela junto com a faixa vermelha, e o erro não dizia QUAL
+                // cliente quebrou — então não havia como corrigir a causa. Agora um cliente com
+                // problema não impede os outros de aparecer, e o nome dele vai no erro.
+                const falhas = [];
                 clients.forEach(c => {
+                  try {
                     const statusMap = { 'dns_pending': 'dns' };
                     const colId = `col-${statusMap[c.status] || c.status}`;
                     const col = document.getElementById(colId);
@@ -1740,8 +1747,24 @@
                             pipelineSparklines.set(c.id, chart);
                         }
                     }
+                  } catch (err) {
+                    falhas.push(`${c.name || c.email || ('cliente #' + c.id)}: ${err.message}`);
+                    console.error('Falha ao renderizar cliente no pipeline', c.id, err);
+                  }
                 });
-                clearDataLoadError('clientes/pipeline');
+
+                // Falha de UM cliente é reportada com o nome dele, e os demais continuam na tela —
+                // com a faixa dizendo exatamente quantos e quais faltaram, em vez de "os números
+                // podem estar incompletos" sem dizer o que falta.
+                if (falhas.length > 0) {
+                    reportDataLoadError(
+                        `pipeline de clientes (${falhas.length} de ${clients.length} não renderizou: ${falhas.join(' · ')})`,
+                        new Error(falhas[0]),
+                        () => loadClients()
+                    );
+                } else {
+                    clearDataLoadError('clientes/pipeline');
+                }
             } catch (e) {
                 reportDataLoadError('clientes/pipeline', e, () => loadClients());
             }
