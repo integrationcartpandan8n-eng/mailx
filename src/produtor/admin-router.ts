@@ -322,6 +322,95 @@ produtorAdminRouter.delete('/clientes/:id/faturas/:faturaId', asyncHandler(async
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Diagnóstico: o que está realmente ligado?
+//
+// O ambiente de desenvolvimento não tem acesso ao banco de produção, então a única forma honesta
+// de saber quais contas de gateway existem e quais produtos têm venda é perguntar ao próprio
+// servidor de produção. Só leitura, e nenhum segredo sai daqui: das credenciais devolve apenas se
+// existem e o tamanho, nunca o valor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.get('/diagnostico/origens', asyncHandler(async (_req, res) => {
+  const clientes = await query(`
+    SELECT c.id, c.company_name, c.status, c.default_currency,
+           (SELECT COUNT(*) FROM kits k WHERE k.client_id = c.id) AS produtos,
+           (SELECT COUNT(*) FROM webhook_logs w
+             WHERE w.client_id = c.id AND w.event_type = 'order.paid') AS vendas,
+           (SELECT MIN(w.created_at)::date::text FROM webhook_logs w
+             WHERE w.client_id = c.id AND w.event_type = 'order.paid') AS primeira_venda,
+           (SELECT MAX(w.created_at)::date::text FROM webhook_logs w
+             WHERE w.client_id = c.id AND w.event_type = 'order.paid') AS ultima_venda
+      FROM clients c ORDER BY c.id
+  `);
+
+  const lojas = await query(`
+    SELECT si.client_id, c.company_name, si.platform, si.shop_slug, si.status,
+           si.display_name, si.created_at::date::text AS criada_em,
+           (si.api_token IS NOT NULL AND si.api_token <> '') AS tem_credencial,
+           LENGTH(COALESCE(si.api_token, '')) AS tamanho_credencial
+      FROM store_integrations si
+      LEFT JOIN clients c ON c.id = si.client_id
+     ORDER BY si.platform, si.shop_slug
+  `);
+
+  // Produtos com venda de verdade, para saber se Divine Purity já chega por algum caminho.
+  const produtos = await query(`
+    SELECT k.client_id, c.company_name, k.id AS kit_id, k.name, k.platform, k.external_id,
+           COUNT(w.id) FILTER (WHERE w.event_type = 'order.paid') AS vendas,
+           MIN(w.created_at)::date::text AS primeira,
+           MAX(w.created_at)::date::text AS ultima,
+           (SELECT COUNT(*) FROM produtor_ofertas o WHERE o.kit_id = k.id) AS ofertas_cadastradas,
+           EXISTS (SELECT 1 FROM produtor_custo_produto p WHERE p.kit_id = k.id) AS tem_custo
+      FROM kits k
+      LEFT JOIN clients c ON c.id = k.client_id
+      LEFT JOIN webhook_logs w ON w.client_id = k.client_id
+       AND (w.product_external_id = k.external_id OR LOWER(COALESCE(w.product_name,'')) = LOWER(k.name))
+     GROUP BY k.id, c.company_name
+     ORDER BY COUNT(w.id) DESC, k.name
+     LIMIT 60
+  `);
+
+  // Nomes de produto que chegaram por webhook mas não viraram kit de ninguém.
+  const nomesSoltos = await query(`
+    SELECT product_name, source, COUNT(*) AS vendas,
+           MIN(created_at)::date::text AS primeira, MAX(created_at)::date::text AS ultima
+      FROM webhook_logs
+     WHERE event_type = 'order.paid' AND product_name IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM kits k WHERE LOWER(k.name) = LOWER(webhook_logs.product_name))
+     GROUP BY product_name, source ORDER BY COUNT(*) DESC LIMIT 30
+  `);
+
+  res.json({
+    leia_assim:
+      'Cada conta de gateway é uma linha em lojas. A Digistore descobre de qual conta veio a ' +
+      'venda testando a assinatura do IPN contra TODAS as passphrases cadastradas, então contas ' +
+      'novas convivem com as existentes sem conflito. Credenciais não são devolvidas — só se ' +
+      'existem e o tamanho.',
+    clientes: clientes.map((c: any) => ({
+      id: c.id, nome: c.company_name, status: c.status, moeda: c.default_currency,
+      produtos: parseInt(c.produtos, 10), vendas: parseInt(c.vendas, 10),
+      primeira_venda: c.primeira_venda, ultima_venda: c.ultima_venda,
+    })),
+    lojas: lojas.map((l: any) => ({
+      cliente_id: l.client_id, cliente: l.company_name, plataforma: l.platform,
+      identificador: l.shop_slug, apelido: l.display_name, status: l.status,
+      criada_em: l.criada_em, tem_credencial: l.tem_credencial,
+      tamanho_credencial: parseInt(l.tamanho_credencial, 10),
+    })),
+    produtos: produtos.map((p: any) => ({
+      cliente: p.company_name, kit_id: p.kit_id, nome: p.name, plataforma: p.platform,
+      external_id: p.external_id, vendas: parseInt(p.vendas, 10),
+      primeira: p.primeira, ultima: p.ultima,
+      ofertas_cadastradas: parseInt(p.ofertas_cadastradas, 10), tem_custo: p.tem_custo,
+    })),
+    produtos_sem_kit: nomesSoltos.map((n: any) => ({
+      nome: n.product_name, origem: n.source, vendas: parseInt(n.vendas, 10),
+      primeira: n.primeira, ultima: n.ultima,
+    })),
+  });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tabela de preços do fulfillment e custo unitário por produto
 //
 // Ficam fora da oferta porque não são da oferta: o pote custa o mesmo na embalagem de 6, de 3 ou
