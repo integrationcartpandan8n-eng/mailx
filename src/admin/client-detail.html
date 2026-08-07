@@ -306,6 +306,51 @@
         /* Seção "Desempenho por Mensagem de Automação" */
         .section-block { margin-bottom: 1.25rem; }
 
+        /* ── Resumo de negócio da aba SMS ── */
+        .rn { display: flex; flex-direction: column; gap: 0.9rem; margin-bottom: 1.25rem; }
+        .rn-frase {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-sm);
+            padding: 1rem 1.15rem;
+        }
+        .rn-frase p { font-size: 0.98rem; line-height: 1.6; color: var(--text-dim); margin: 0; }
+        .rn-frase b { color: #fff; font-weight: 700; }
+        .rn-frase .rn-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; color: #fff; }
+        .rn-fonte { display: block; margin-top: 0.55rem; font-size: 0.72rem; color: var(--text-muted); line-height: 1.5; }
+
+        .rn-herois { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.85rem; }
+        .rn-heroi {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 1rem 1.1rem;
+            display: flex; flex-direction: column; gap: 0.2rem;
+        }
+        .rn-heroi .k { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+        .rn-heroi .v { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05; color: #fff; font-variant-numeric: tabular-nums; }
+        .rn-heroi .d { font-size: 0.75rem; color: var(--text-dim); }
+        .rn-heroi .barra { height: 5px; background: rgba(255,255,255,0.07); border-radius: 99px; margin-top: 0.4rem; overflow: hidden; }
+        .rn-heroi .barra i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+
+        .rn-destaques { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+        @media (max-width: 58rem) { .rn-destaques { grid-template-columns: 1fr; } }
+        .rn-dest {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.9rem 1.05rem;
+            display: flex; flex-direction: column; gap: 0.35rem;
+        }
+        .rn-dest.bom { border-left: 3px solid var(--success); }
+        .rn-dest.ruim { border-left: 3px solid var(--danger); }
+        .rn-dest .t { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; color: var(--text-muted); }
+        .rn-dest .n { font-size: 0.92rem; font-weight: 700; color: #fff; }
+        .rn-dest .f { font-size: 0.81rem; color: var(--text-dim); line-height: 1.5; }
+        .rn-dest .f .pos { color: var(--success); font-weight: 700; }
+        .rn-dest .f .neg { color: var(--danger); font-weight: 700; }
+
         /* Filtro por produto — chips acima do resumo. Ficam na mesma família visual dos
            seletores de período (mesma altura, mesmo raio), com o valor do produto embaixo do nome
            pra escolha ser por relevância e não por ordem alfabética. */
@@ -1630,6 +1675,12 @@
             <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
                 ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
             </div>
+
+            <!-- Resumo de negócio. Entra ACIMA de tudo e não remove nada: quem já conhece a tela
+                 continua com os mesmos cards abaixo, e quem abre pela primeira vez entende sem
+                 precisar ler card nenhum. A fonte de cada número aparece ESCRITA, não em tooltip —
+                 quem não conhece o sistema não passa o mouse procurando procedência. -->
+            <div id="smsResumoNegocio"></div>
             <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
@@ -3800,6 +3851,8 @@
 
                 // SMS Revenue KPIs (mailxsms UTM-attributed) — já respeita o período selecionado
                 const r = data.revenue || {};
+                window.__smsRevenue = r;
+                renderResumoNegocioSms();
                 document.getElementById('smsRevenueKpis').innerHTML = [
                     { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'FONTE: nosso banco de webhooks da Digistore — não vem da SlickText. Soma o valor dos pedidos aprovados cujo link de origem tem utm_source=mailx-sms. ESCOPO: período selecionado. A SlickText não sabe quanto uma mensagem faturou; ela sabe envio e clique. O faturamento é nosso cruzamento entre o pedido e o link que o gerou.' },
                     { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco de webhooks da Digistore. Conta pedidos aprovados (event_type=order.paid) cujo link tem utm_source=mailx-sms. ESCOPO: período selecionado. Cancelamento e reembolso NÃO saem desta contagem — aparecem separados no card de reembolso.' },
@@ -4287,6 +4340,119 @@
                 linkSmsCampaign(decodeURIComponent(linkBtn.dataset.linkEnvios));
             }
         });
+
+        // ── Resumo de negócio da aba SMS ──
+        //
+        // Para quem NÃO conhece o sistema. O pedido foi explícito: o head operacional precisa
+        // entender batendo o olho e não sabe de onde os números são puxados. Duas consequências de
+        // desenho:
+        //
+        // 1. A fonte vem ESCRITA na tela, não em tooltip. Quem não conhece não passa o mouse
+        //    procurando procedência — ou está visível, ou não existe para essa pessoa.
+        // 2. A frase vem antes de qualquer card. "O SMS gerou X em Y vendas, que é Z% do que o
+        //    cliente faturou" responde a pergunta que se faz ao abrir; onze cards não respondem,
+        //    eles pedem que a pessoa monte a resposta sozinha.
+        //
+        // É ADITIVO: entra acima e não remove nada. Quem já usa a tela continua com os mesmos cards.
+        function renderResumoNegocioSms() {
+            const el = document.getElementById('smsResumoNegocio');
+            const r = window.__smsRevenue;
+            if (!el || !r) return;
+
+            const vendas = r.vendas_sms || 0;
+            // Sem venda no período não existe leitura de negócio a fazer — e uma frase dizendo
+            // "gerou $0,00 em 0 vendas" ocupa espaço para não informar nada.
+            if (vendas === 0) {
+                el.innerHTML = `<div class="rn"><div class="rn-frase">
+                    <p>Nenhuma venda atribuída ao SMS no período selecionado.
+                    <span class="rn-fonte">Se você esperava vendas aqui, verifique se as mensagens estão vinculadas
+                    (botão Auto-vincular) e se os links carregam <code>utm_source=mailx-sms</code>.</span></p>
+                </div></div>`;
+                return;
+            }
+
+            const rep = r.representatividade_sms ?? 0;
+            const rec = r.recuperacoes_sms || 0;
+            const ups = r.vendas_upsell_sms || 0;
+            // Fatia da recuperação dentro do próprio SMS: é o que diz se o canal vive de recuperar
+            // carrinho ou de vender upsell, e é a pergunta que o operacional faz.
+            const recShare = vendas > 0 ? Math.round((rec / vendas) * 100) : 0;
+
+            // Campeã e pior vêm da tabela granular. Podem não estar carregadas ainda — a frase e os
+            // números principais aparecem sem elas, e os destaques entram quando a tabela chegar.
+            const rows = (window.__smsGranularData?.rows || []).slice();
+            let destaquesHtml = '';
+            if (rows.length > 0) {
+                const porReceita = rows.slice().sort((a, b) => b.receita_liquida - a.receita_liquida);
+                const melhor = porReceita.find(x => x.vendas > 0);
+                const pior = porReceita[porReceita.length - 1];
+                const totalRec = rows.reduce((sum, x) => sum + x.receita_liquida, 0);
+                const semVenda = rows.filter(x => x.vendas === 0 && x.receita_liquida < 0).length;
+
+                const tipoTxt = (t) => /upsell|compra aprovada/i.test(t || '') ? 'Compra Aprovada' : 'Carrinho Abandonado';
+                const money = (v) => (v < 0 ? '−' : '') + '$' + Math.abs(Math.round(v)).toLocaleString('pt-BR');
+
+                const blocoBom = melhor ? `
+                    <div class="rn-dest bom">
+                        <span class="t">Mensagem que mais vendeu</span>
+                        <span class="n">${escapeHtml(humanizeMsgCode(melhor.mensagem).human)} · ${tipoTxt(melhor.tipo_automacao)}${melhor.produto ? ' · ' + escapeHtml(melhor.produto) : ''}</span>
+                        <span class="f"><span class="pos">${money(melhor.receita_liquida)}</span> em <b>${melhor.vendas.toLocaleString('pt-BR')} vendas</b>${totalRec > 0 ? ` — ${Math.round(melhor.receita_liquida / totalRec * 100)}% da receita do SMS` : ''}.</span>
+                    </div>` : '';
+
+                const blocoRuim = (pior && pior.receita_liquida < 0) ? `
+                    <div class="rn-dest ruim">
+                        <span class="t">Precisa de atenção</span>
+                        <span class="n">${escapeHtml(humanizeMsgCode(pior.mensagem).human)} · ${tipoTxt(pior.tipo_automacao)}${pior.produto ? ' · ' + escapeHtml(pior.produto) : ''}</span>
+                        <span class="f"><span class="neg">${money(pior.receita_liquida)}</span> no período${pior.vendas === 0 ? ' — reembolso de vendas anteriores e nenhuma venda nova' : ''}.${semVenda > 1 ? ` Outras ${semVenda - 1} mensagens estão no negativo.` : ''}</span>
+                    </div>` : '';
+
+                if (blocoBom || blocoRuim) destaquesHtml = `<div class="rn-destaques">${blocoBom}${blocoRuim}</div>`;
+            }
+
+            el.innerHTML = `
+                <div class="rn">
+                    <div class="rn-frase">
+                        <p>
+                            O SMS gerou <span class="rn-val">${r.faturamento_sms || '$ 0,00'}</span> em
+                            <b>${vendas.toLocaleString('pt-BR')} vendas</b> no período —
+                            <b>${rep.toLocaleString('pt-BR')}%</b> de tudo que o cliente faturou.
+                            Desse total, <span class="rn-val">${r.faturamento_recuperacoes_sms || '$ 0,00'}</span>
+                            vieram de <b>carrinho recuperado</b> (${rec.toLocaleString('pt-BR')} vendas) e
+                            <span class="rn-val">${r.faturamento_upsell_sms || '$ 0,00'}</span> de
+                            <b>upsell</b> (${ups.toLocaleString('pt-BR')} vendas).
+                            <span class="rn-fonte">
+                                Faturamento e vendas vêm do nosso banco, dos webhooks de pedido aprovado da Digistore,
+                                filtrados pelos links com <code>utm_source=mailx-sms</code> — respeitam o período escolhido acima.
+                                Envios, cliques, contatos e créditos vêm da API da SlickText.
+                                Reembolso não sai da contagem de vendas: aparece separado.
+                            </span>
+                        </p>
+                    </div>
+
+                    <div class="rn-herois">
+                        <div class="rn-heroi">
+                            <span class="k">Faturamento SMS</span>
+                            <span class="v">${r.faturamento_sms || '$ 0,00'}</span>
+                            <span class="d">${vendas.toLocaleString('pt-BR')} vendas · ticket ${r.ticket_medio_sms || '$ 0,00'}</span>
+                        </div>
+                        <div class="rn-heroi">
+                            <span class="k">Fatia do faturamento do cliente</span>
+                            <span class="v">${rep.toLocaleString('pt-BR')}%</span>
+                            <span class="d">de ${r.faturamento_total_cliente || '$ 0,00'} em todos os canais</span>
+                            <span class="barra"><i style="width:${Math.max(0, Math.min(100, rep))}%"></i></span>
+                        </div>
+                        <div class="rn-heroi">
+                            <span class="k">Vem de carrinho recuperado</span>
+                            <span class="v">${r.faturamento_recuperacoes_sms || '$ 0,00'}</span>
+                            <span class="d">${recShare}% das vendas de SMS são recuperação</span>
+                            <span class="barra"><i style="width:${Math.max(0, Math.min(100, recShare))}%"></i></span>
+                        </div>
+                    </div>
+
+                    ${destaquesHtml}
+                </div>
+            `;
+        }
 
         // ── Envios por Automação ──
         // O total de mensagens que cada fluxo disparou no período. A tabela acima mostra envio por
@@ -4818,6 +4984,7 @@
                 ? renderSmsGranularProduto(data, sym)
                 : renderSmsGranularMensagem(data, sym);
             renderCreditosAutomacao();
+            renderResumoNegocioSms();
             // Sem await: a tabela já está na tela e o bloco de envios por automação preenche quando
             // a SlickText responder. Só na primeira renderização — trocar a visão produto/mensagem
             // não muda o número por automação, e refazer a consulta a cada clique seria desperdício.
