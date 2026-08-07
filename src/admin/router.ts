@@ -1823,6 +1823,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   let leadsWarning: string | null = null;
   let leadsPeriodoInfo: { de: string; ate: string; janela_bate: boolean } | null = null;
   let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
+  // Insumos da conversão POR PRODUTO (pedido 3.4 do documento: "precisa ser dividido por produto").
+  let contagemPorLista = new Map<string, number>();
+  let kitsComListas: Array<{ nome: string; listaAbandono: string | null; listaCompra: string | null }> = [];
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1852,8 +1855,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           const r = await autoLinkSlickTextLists(clients[i]!.st, parseInt(clientId as string));
           unmatched = i === 0 ? r.unmatched : unmatched.filter(u => r.unmatched.some(x => x.kitId === u.kitId));
         }
-        const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+        const kits = await query<{ name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+          `SELECT DISTINCT name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
         );
 
@@ -1872,6 +1875,16 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
 
         const abandonoPorLista = await Promise.all(abandonoIds.map(async id => ({ id, ...(await contarLista(id)) })));
         const compraPorLista = await Promise.all(compraIds.map(async id => ({ id, ...(await contarLista(id)) })));
+
+        // Contagem por list_id, pra conversão POR PRODUTO reaproveitar sem repetir chamada na
+        // SlickText: as mesmas listas são as dos produtos, só agrupadas de outro jeito.
+        contagemPorLista = new Map<string, number>();
+        for (const l of [...abandonoPorLista, ...compraPorLista]) contagemPorLista.set(l.id, l.count);
+        kitsComListas = kits.map(k => ({
+          nome: k.name,
+          listaAbandono: k.st_list_abandono_id,
+          listaCompra: k.st_list_compra_id,
+        }));
 
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
@@ -2035,6 +2048,89 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     ORDER BY 4 DESC, 3 DESC
     LIMIT 12
   `, foraParams).catch(() => []);
+
+  // ── Conversão por Segmento POR PRODUTO (pedido 3.4: "precisa ser dividido por produto tmb") ──
+  //
+  // O agrupamento é pelo produto que está no utm_campaign da venda — que é o produto da AUTOMAÇÃO,
+  // não o SKU do pedido. É a única chave que funciona aqui: a venda de um upsell traz o SKU do
+  // upsell, mas quem a gerou foi o fluxo da família, e é na lista da família que o lead está.
+  //
+  // E o resultado sai por FAMÍLIA ("NeuroMind Pro"), não por SKU ("M1 - NeuroMind Pro 2 Bottles"),
+  // porque a lista da SlickText é uma só para a família toda. Quebrar por SKU contaria a mesma lista
+  // várias vezes — foi exatamente o erro que fez os contatos aparecerem como 498 mil numa conta de
+  // 83 mil.
+  const porProdParams: (string | number)[] = [clientId];
+  const porProdPeriod = periodSql(period, porProdParams);
+  const vendasPorUtm = await query<{ utm_campaign: string | null; rec: string; total: string }>(`
+    SELECT utm_campaign,
+           COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec,
+           COUNT(*) AS total
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+      AND EXISTS (SELECT 1 FROM sms_campaign_map m
+                  WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign)
+      ${porProdPeriod ? `AND ${porProdPeriod}` : ''}
+    GROUP BY utm_campaign
+  `, porProdParams).catch(() => []);
+
+  const conversaoPorProduto = (() => {
+    if (vendasPorUtm.length === 0 || kitsComListas.length === 0) return [];
+
+    // Casamento por chave normalizada (sem espaço, hífen, acento ou caixa), igual ao auto-vínculo de
+    // listas: o utm traz "NeuromindPro" e o kit se chama "M1 - NeuroMind Pro (2 Bottles)".
+    const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    type Agrupado = { produto: string; rec: number; vendas: number; listasAb: Set<string>; listasCo: Set<string> };
+    const porProduto = new Map<string, Agrupado>();
+
+    for (const v of vendasPorUtm) {
+      if (!v.utm_campaign) continue;
+      const produto = parseUtmCampaign(v.utm_campaign).produto;
+      if (!produto) continue;
+      const chave = norm(produto);
+      if (!chave) continue;
+
+      const atual = porProduto.get(chave) ?? { produto, rec: 0, vendas: 0, listasAb: new Set<string>(), listasCo: new Set<string>() };
+      atual.rec += parseInt(v.rec);
+      atual.vendas += parseInt(v.total);
+
+      // Todo kit cuja família casa com esse produto contribui suas listas. Set porque vários SKUs da
+      // mesma família apontam para a MESMA lista, e somar seria contar a lista de novo.
+      for (const k of kitsComListas) {
+        const nk = norm(k.nome);
+        if (!nk.includes(chave) && !chave.includes(nk)) continue;
+        if (k.listaAbandono) atual.listasAb.add(k.listaAbandono);
+        if (k.listaCompra) atual.listasCo.add(k.listaCompra);
+      }
+      porProduto.set(chave, atual);
+    }
+
+    const somaListas = (ids: Set<string>) => [...ids].reduce((t, id) => t + (contagemPorLista.get(id) ?? 0), 0);
+
+    return [...porProduto.values()]
+      .map(a => {
+        const leadsAb = somaListas(a.listasAb);
+        const leadsCo = somaListas(a.listasCo);
+        return {
+          produto: a.produto,
+          // null, não 0, quando o produto do utm não casou com nenhum kit com lista: a taxa não é
+          // calculável, e 0 leads com vendas > 0 renderizaria uma taxa infinita ou um zero mentiroso.
+          carrinho_abandonado: {
+            leads: a.listasAb.size > 0 ? leadsAb : null,
+            vendas: a.rec,
+            taxa: leadsAb > 0 ? parseFloat(((a.rec / leadsAb) * 100).toFixed(2)) : null,
+          },
+          compradores: {
+            leads: a.listasCo.size > 0 ? leadsCo : null,
+            vendas: a.vendas,
+            taxa: leadsCo > 0 ? parseFloat(((a.vendas / leadsCo) * 100).toFixed(2)) : null,
+          },
+          // Estampa que a lista é da família, para ninguém procurar uma lista por SKU que não existe.
+          listas_usadas: { abandono: a.listasAb.size, compradores: a.listasCo.size },
+        };
+      })
+      .sort((x, y) => y.compradores.vendas - x.compradores.vendas);
+  })();
 
   // Agrupado por produto E mensagem: com escopo por automação, saber a MENSAGEM é o que permite
   // agir (é o que se vincula), e o produto é o que identifica a venda pra quem lê.
@@ -2354,6 +2450,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       },
       // Quais produtos ficaram fora e por quê — a nota da tela lista isso em vez de só contar.
       fora_escopo_detalhe: smsSegForaDetalhe,
+      // Pedido 3.4 do documento: a mesma divisão, aberta por produto (por família, ver o bloco).
+      por_produto: conversaoPorProduto,
     },
     conversao_por_segmento_email: {
       carrinho_abandonado: {
