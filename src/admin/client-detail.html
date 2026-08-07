@@ -197,6 +197,32 @@
         .gp-label { font-size: 0.78rem; color: var(--text-dim); }
         .gp-label b { color: var(--text); font-weight: 600; }
         .gp-pills { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+        .gp-loading {
+            display: none;
+            align-items: center;
+            gap: 0.4rem;
+            margin-left: 0.7rem;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--accent-light);
+            white-space: nowrap;
+        }
+        body.periodo-carregando .gp-loading { display: inline-flex; }
+
+        /* Enquanto carrega, o conteudo que depende do periodo fica visivelmente inativo: da pra ver
+           que ainda esta ali, sem parecer atual. Nao esconde — esconder faria a pagina saltar de
+           altura a cada troca e perder a posicao de rolagem. */
+        body.periodo-carregando .card,
+        body.periodo-carregando .section-block {
+            opacity: 0.45;
+            pointer-events: none;
+            transition: opacity 0.15s;
+        }
+        /* A barra de periodo continua viva: e o unico controle que precisa responder. */
+        body.periodo-carregando .global-period-bar { opacity: 1; pointer-events: auto; }
+        body.periodo-carregando .gp-pill { cursor: wait; }
+        body.periodo-carregando .gp-pill:not(.active) { opacity: 0.5; }
+
         .gp-pill {
             border: 1px solid rgba(255,255,255,0.08); background: transparent; color: var(--text-dim);
             font-size: 0.76rem; padding: 0.4rem 0.9rem; border-radius: 7px; cursor: pointer; font-family: inherit; font-weight: 600;
@@ -1193,6 +1219,10 @@
             <div class="gp-left">
                 <i class="fas fa-calendar-days gp-icon"></i>
                 <span class="gp-label">Período de análise — aplica a <b>todos</b> os gráficos desta página</span>
+                <!-- Aparece durante a troca de período. Sem ele, a tela seguia mostrando os números
+                     do período ANTERIOR por alguns segundos, sem nenhum sinal de que estavam
+                     desatualizados — número velho parado numa tela nova é dado errado, não demora. -->
+                <span class="gp-loading" id="gpLoading"><i class="fas fa-circle-notch fa-spin"></i> atualizando…</span>
             </div>
             <div class="gp-pills">
                 <button type="button" class="gp-pill" id="gpTodayBtn" data-today title="Hoje até agora — pra bater os valores do dia com o gateway">Hoje</button>
@@ -2806,7 +2836,16 @@
             reloadAllCharts(from, to, timeOpts);
         }
 
-        function reloadAllCharts(from, to, timeOpts = {}) {
+        // Estado de carregamento da troca de período. Existe porque cada widget da página busca por
+        // conta própria e demora diferente: sem isso, trocar o período deixava os números do período
+        // anterior na tela enquanto as consultas iam voltando uma a uma, e por alguns segundos a
+        // página misturava dois períodos sem avisar. Aqui o pior caso não é a demora, é a mistura.
+        function setPeriodoCarregando(ligado) {
+            document.body.classList.toggle('periodo-carregando', !!ligado);
+            document.body.setAttribute('aria-busy', ligado ? 'true' : 'false');
+        }
+
+        async function reloadAllCharts(from, to, timeOpts = {}) {
             // "Hoje" chega aqui com from=to=data atual do SERVIDOR (não do navegador) — ver
             // applyToday(). Passa como um intervalo normal de 1 dia pra todo widget que já
             // sabe lidar com from/to; timeOpts.today só liga o branch CURRENT_DATE no backend
@@ -2815,14 +2854,23 @@
             const todayBanner = document.getElementById('todayInfoBanner');
             if (todayBanner) todayBanner.style.display = timeOpts.today ? 'flex' : 'none';
 
-            loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime);
+            setPeriodoCarregando(true);
             const refundSection = document.getElementById('refundChartSection');
-            if (refundSection && refundSection.style.display !== 'none') {
-                loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime);
+            // allSettled: uma consulta que falha não pode deixar a página travada em "atualizando"
+            // para sempre — quem falhou já mostra o próprio aviso de erro.
+            try {
+                await Promise.allSettled([
+                    loadRevenueChartsClient(from, to, timeOpts.fromTime, timeOpts.toTime),
+                    refundSection && refundSection.style.display !== 'none'
+                        ? loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime)
+                        : null,
+                    loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime }),
+                    reloadClientStatsForPeriod(from, to, timeOpts),
+                    loadSmsStats(from, to, timeOpts),
+                ].filter(Boolean));
+            } finally {
+                setPeriodoCarregando(false);
             }
-            loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime });
-            reloadClientStatsForPeriod(from, to, timeOpts);
-            loadSmsStats(from, to, timeOpts);
         }
 
         async function reloadClientStatsForPeriod(from, to, timeOpts = {}) {
