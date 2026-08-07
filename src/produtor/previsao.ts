@@ -130,10 +130,21 @@ export async function lerTabelaFulfillment(clientId: number): Promise<TabelaFulf
 async function vendasPorDiaEProduto(
   clientId: number,
   periodo: { from: string; to: string } | null
-): Promise<Array<{
-  dia: string; kit_id: number | null; unidades_por_venda: number | null;
-  vendas: number; devolucoes: number;
-}>> {
+): Promise<{
+  linhas: Array<{ dia: string; kit_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
+  pedidosPorDia: Map<string, number> | null;
+  fonte: 'importacao' | 'webhook';
+}> {
+  // Fonte 1: vendas importadas do export da Digistore.
+  //
+  // Têm prioridade sobre webhook_logs quando existem, porque são as vendas DESTE produto — a conta
+  // da Digistore do produto de casa não é a que alimenta a MailX. E o export traz o que o webhook
+  // não traz: a quantidade de cada linha, que multiplica as unidades do pedido.
+  const importadas = await vendasImportadasPorDia(clientId, periodo);
+  if (importadas.temDados) {
+    return { linhas: importadas.linhas, pedidosPorDia: importadas.pedidosPorDia, fonte: 'importacao' };
+  }
+
   const params: any[] = [clientId];
   let filtro = '';
   if (periodo) {
@@ -184,13 +195,114 @@ async function vendasPorDiaEProduto(
     ORDER BY 1
   `, params);
 
-  return rows.map((r: any) => ({
-    dia: String(r.dia).slice(0, 10),
-    kit_id: r.kit_id == null ? null : Number(r.kit_id),
-    unidades_por_venda: r.unidades_por_venda == null ? null : Number(r.unidades_por_venda),
-    vendas: parseInt(r.vendas, 10) || 0,
-    devolucoes: parseInt(r.devolucoes, 10) || 0,
-  }));
+  return {
+    fonte: 'webhook',
+    // Sem importação não se sabe agrupar linhas em pedidos: cada transação conta como um, e é o
+    // fator_pedidos que corrige isso até o export entrar.
+    pedidosPorDia: null,
+    linhas: rows.map((r: any) => ({
+      dia: String(r.dia).slice(0, 10),
+      kit_id: r.kit_id == null ? null : Number(r.kit_id),
+      unidades_por_venda: r.unidades_por_venda == null ? null : Number(r.unidades_por_venda),
+      vendas: parseInt(r.vendas, 10) || 0,
+      devolucoes: parseInt(r.devolucoes, 10) || 0,
+    })),
+  };
+}
+
+/**
+ * Vendas importadas, agregadas por dia e produto.
+ *
+ * Duas diferenças em relação ao caminho do webhook, e as duas importam:
+ *
+ * 1. `quantidade` multiplica as unidades. Comprar 2× a oferta de 6 potes são 12 potes na fatura,
+ *    e o webhook não carrega essa informação.
+ * 2. Pedidos são contados por PEDIDO DISTINTO, não por linha. Quando o upsell vem como add-on da
+ *    mesma ordem, as duas linhas compartilham o pedido e o fulfillment despacha uma caixa só —
+ *    era a explicação para a fatura ter 106 pedidos onde as transações davam 141.
+ */
+async function vendasImportadasPorDia(
+  clientId: number,
+  periodo: { from: string; to: string } | null
+): Promise<{
+  temDados: boolean;
+  linhas: Array<{ dia: string; kit_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
+  /** Pedidos distintos POR DIA. Contar por grupo somaria em dobro o pedido que leva dois produtos. */
+  pedidosPorDia: Map<string, number>;
+}> {
+  const existe = await queryOne<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE client_id = $1 LIMIT 1`, [clientId]
+  );
+  if (!existe || parseInt(existe.n, 10) === 0) {
+    return { temDados: false, linhas: [], pedidosPorDia: new Map() };
+  }
+
+  const params: any[] = [clientId];
+  let filtro = '';
+  if (periodo) {
+    params.push(periodo.from, periodo.to);
+    filtro = `AND v.data >= $2::date AND v.data <= $3::date`;
+  }
+
+  const rows = await query(`
+    WITH oferta AS (
+      SELECT o.id, o.kit_id, o.unidades, o.preco, o.external_ids
+        FROM produtor_ofertas o
+        JOIN produtor_custo_produto c ON c.kit_id = o.kit_id AND c.client_id = o.client_id
+       WHERE o.client_id = $1 AND o.ativo
+    ),
+    casada AS (
+      SELECT v.*, m.kit_id, m.unidades AS unidades_oferta
+        FROM produtor_vendas v
+        LEFT JOIN LATERAL (
+          SELECT o.kit_id, o.unidades,
+                 CASE WHEN COALESCE(array_length(o.external_ids,1),0) > 0
+                       AND v.produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
+            FROM oferta o
+           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.produto_id = ANY(o.external_ids))
+              OR (COALESCE(array_length(o.external_ids,1),0) = 0 AND v.valor_bruto IS NOT NULL
+                  AND ROUND(ABS(v.valor_bruto),2) = ROUND(o.preco,2))
+           ORDER BY prioridade, o.kit_id, o.unidades
+           LIMIT 1
+        ) m ON true
+       WHERE v.client_id = $1 ${filtro}
+    )
+    SELECT
+      data::text AS dia,
+      kit_id,
+      unidades_oferta,
+      COALESCE(SUM(quantidade) FILTER (WHERE tipo = 'pagamento'), 0) AS quantidade,
+      COUNT(*) FILTER (WHERE tipo IN ('reembolso','chargeback')) AS devolucoes
+    FROM casada
+    GROUP BY 1, 2, 3
+    ORDER BY 1
+  `, params);
+
+  // Pedidos distintos por DIA, numa consulta própria. Contar dentro do agrupamento por produto
+  // somaria o mesmo pedido uma vez para cada produto que ele leva — e é justamente o pedido com
+  // upsell, o caso que a fatura mostrou (106 pedidos onde as transações davam 141).
+  const pedidosRows = await query(`
+    SELECT data::text AS dia, COUNT(DISTINCT COALESCE(pedido_id, transacao_id)) AS pedidos
+      FROM produtor_vendas v
+     WHERE v.client_id = $1 AND v.tipo = 'pagamento' ${filtro}
+     GROUP BY 1
+  `, params);
+  const pedidosPorDia = new Map<string, number>(
+    pedidosRows.map((r: any) => [String(r.dia).slice(0, 10), parseInt(r.pedidos, 10) || 0])
+  );
+
+  return {
+    temDados: true,
+    pedidosPorDia,
+    linhas: rows.map((r: any) => ({
+      dia: String(r.dia).slice(0, 10),
+      kit_id: r.kit_id == null ? null : Number(r.kit_id),
+      unidades_por_venda: r.unidades_oferta == null ? null : Number(r.unidades_oferta),
+      // "vendas" aqui é a QUANTIDADE comprada: é ela que multiplica as unidades da oferta.
+      vendas: parseInt(r.quantidade, 10) || 0,
+      devolucoes: parseInt(r.devolucoes, 10) || 0,
+    })),
+  };
 }
 
 export async function preverInvoice(
@@ -231,7 +343,9 @@ export async function preverInvoice(
     });
   }
 
-  const linhas = await vendasPorDiaEProduto(clientId, periodo);
+  const fonteVendas = await vendasPorDiaEProduto(clientId, periodo);
+  const linhas = fonteVendas.linhas;
+  const pedidosPorDia = fonteVendas.pedidosPorDia;
 
   const unidadesPorKit = new Map<number, number>();
   const semOfertaPorKit = new Map<number, number>();
@@ -271,7 +385,14 @@ export async function preverInvoice(
     );
   }
 
-  const pedidos = Math.round(transacoes * t.fator_pedidos);
+  // Com o export importado, o número de pedidos é CONTADO (pedidos distintos), não estimado — e
+  // aí o fator não se aplica: ele existe só para corrigir a contagem por transação do webhook.
+  const pedidosContados = pedidosPorDia
+    ? [...pedidosPorDia.entries()]
+        .filter(([dia]) => !periodo || (dia >= periodo.from && dia <= periodo.to))
+        .reduce((s, [, n]) => s + n, 0)
+    : null;
+  const pedidos = pedidosContados ?? Math.round(transacoes * t.fator_pedidos);
 
   const produtos: LinhaProdutoPrevisto[] = [...porKit.entries()].map(([kitId, c]) => {
     const u = unidadesPorKit.get(kitId) ?? 0;
@@ -320,8 +441,8 @@ export async function preverInvoice(
 
   // Série diária: é o pedido do chefe — ver o invoice se formando ao longo da semana em vez de
   // descobrir o valor quando o papel chega.
-  const custoFixoPorDia = (d: { pedidos: number; unidades: number }) => {
-    const ped = Math.round(d.pedidos * t.fator_pedidos);
+  const custoFixoPorDia = (dia: string, d: { pedidos: number; unidades: number }) => {
+    const ped = pedidosPorDia ? (pedidosPorDia.get(dia) ?? 0) : Math.round(d.pedidos * t.fator_pedidos);
     return d.unidades * t.custo_pick_unidade + ped * (t.custo_pedido + t.custo_embalagem_pedido);
   };
   const custoProdutoDoDia = (dia: string) => linhas
@@ -330,18 +451,24 @@ export async function preverInvoice(
 
   let acc = 0;
   const por_dia = [...diasMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([dia, d]) => {
-    const v = custoFixoPorDia(d) + custoProdutoDoDia(dia);
+    const v = custoFixoPorDia(dia, d) + custoProdutoDoDia(dia);
     acc += v;
     return {
       dia,
-      pedidos: Math.round(d.pedidos * t.fator_pedidos),
+      pedidos: pedidosPorDia ? (pedidosPorDia.get(dia) ?? 0) : Math.round(d.pedidos * t.fator_pedidos),
       unidades: d.unidades,
       fixo: v,
       acumulado_fixo: acc,
     };
   });
 
-  if (t.fator_pedidos !== 1) {
+  if (fonteVendas.fonte === 'importacao') {
+    ressalvas.push(
+      'Os pedidos são CONTADOS a partir do export importado (pedidos distintos), não estimados. ' +
+      'Quando o upsell vem como add-on da mesma ordem, ele conta como um despacho só — que é ' +
+      'como o fulfillment cobra.'
+    );
+  } else if (t.fator_pedidos !== 1) {
     ressalvas.push(
       `O número de pedidos é ${t.fator_pedidos}× o de transações, conforme cadastrado — use a ` +
       `comparação com as faturas já lançadas para conferir se esse fator ainda vale.`

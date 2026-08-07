@@ -198,6 +198,26 @@
 
     <div class="kpis" id="kpis"></div>
 
+    <!-- ═══ Importar vendas ═══ -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><i class="fas fa-file-arrow-up"></i> Importar vendas da Digistore</div>
+            <span class="card-sub">o export de transações — é daqui que sai a previsão do invoice</span>
+        </div>
+        <div class="card-body">
+            <div style="display:flex; gap:0.7rem; align-items:center; flex-wrap:wrap">
+                <input type="file" id="arquivoCsv" accept=".csv,text/csv" style="flex:1 1 18rem">
+                <button class="btn" id="btnImportar" type="button">Importar</button>
+            </div>
+            <span class="ajuda" style="display:block; margin-top:0.5rem">
+                Reimportar o mesmo período é seguro: cada transação entra uma vez só, pelo número dela.
+                Períodos sobrepostos não duplicam venda.
+            </span>
+            <div id="resultadoImport" style="margin-top:0.9rem"></div>
+            <div id="historicoImport" style="margin-top:0.9rem"></div>
+        </div>
+    </div>
+
     <!-- ═══ Previsão do invoice — o pedido do chefe ═══ -->
     <div class="card">
         <div class="card-header">
@@ -1100,6 +1120,61 @@ document.getElementById('formFatura').addEventListener('submit', async (e) => {
     }
 });
 
+document.getElementById('btnImportar').addEventListener('click', async () => {
+    const input = document.getElementById('arquivoCsv');
+    const arq = input.files && input.files[0];
+    if (!arq) { mostrarErro('Escolha o arquivo do export antes de importar.'); return; }
+    const btn = document.getElementById('btnImportar');
+    btn.disabled = true; btn.textContent = 'Importando…';
+    try {
+        const texto = await arq.text();
+        const r = await fetch(`/admin/produtor/clientes/${clienteId}/importar?arquivo=${encodeURIComponent(arq.name)}`, {
+            method: 'POST', headers: { 'Content-Type': 'text/csv', 'Accept': 'application/json' }, body: texto,
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Falha ao importar.');
+
+        // O que foi ignorado aparece com o motivo. Importação que só diz "pronto" esconde
+        // justamente a linha que não entrou — e é ela que faz a previsão sair menor.
+        const semCusto = (d.produtos_sem_custo || []);
+        document.getElementById('resultadoImport').innerHTML = `
+            <div class="aviso" style="background:var(--success-bg); border-color:var(--success)">
+                <i class="fas fa-check" style="color:var(--success)"></i>
+                <span><b>${inteiro(d.gravadas)} venda(s) importadas</b> de ${inteiro(d.linhas_lidas)} linha(s),
+                cobrindo ${dataBR(d.periodo.de)} a ${dataBR(d.periodo.ate)}.
+                ${d.repetidas ? `${inteiro(d.repetidas)} já estavam no sistema e não foram duplicadas.` : ''}</span>
+            </div>
+            ${(d.avisos || []).map(a => `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(a)}</span></div>`).join('')}
+            ${semCusto.length ? `<div class="aviso"><i class="fas fa-triangle-exclamation"></i><span>
+                <b>Sem custo cadastrado:</b> ${semCusto.map(p => `${esc(p.nome)} (${inteiro(p.vendas)} venda(s))`).join(', ')}.
+                Enquanto não tiverem custo, essas unidades ficam de fora da previsão e o invoice previsto sai menor do que vai vir.
+            </span></div>` : ''}`;
+        input.value = '';
+        await carregarResumo();
+        await carregarHistoricoImport();
+    } catch (err) {
+        mostrarErro(err.message);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Importar';
+    }
+});
+
+async function carregarHistoricoImport() {
+    try {
+        const lista = await api(`/admin/produtor/clientes/${clienteId}/importacoes`);
+        document.getElementById('historicoImport').innerHTML = lista.length === 0 ? '' : `
+            <div class="scroll"><table>
+                <thead><tr><th>Arquivo</th><th>Período</th><th>Gravadas</th><th>Repetidas</th></tr></thead>
+                <tbody>${lista.map(i => `<tr>
+                    <td class="nome-linha">${esc(i.arquivo)}</td>
+                    <td>${dataBR(i.periodo_inicio)} – ${dataBR(i.periodo_fim)}</td>
+                    <td class="num">${inteiro(i.linhas_gravadas)}</td>
+                    <td class="num">${inteiro(i.linhas_repetidas)}</td>
+                </tr>`).join('')}</tbody>
+            </table></div>`;
+    } catch (e) { /* histórico é acessório: não derruba a tela */ }
+}
+
 document.getElementById('formFulfillment').addEventListener('submit', async (e) => {
     e.preventDefault();
     const g = (id) => document.getElementById(id).value;
@@ -1143,6 +1218,7 @@ async function apagarFatura(id) {
 }
 
 carregarTudo();
+carregarHistoricoImport();
 previa();
 </script>
 </body>

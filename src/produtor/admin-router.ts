@@ -11,7 +11,7 @@
  * fosse bloqueado por METRICS_ONLY, a funcionalidade nasceria desligada em produção, que é onde
  * ela precisa rodar. Por isso as escritas daqui NÃO passam por esse flag — de propósito.
  */
-import { Router, Request, Response, NextFunction } from 'express';
+import express, { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { query, queryOne } from '../db/database';
@@ -21,6 +21,7 @@ import {
   mapOferta, mapFatura,
 } from './service';
 import { preverInvoice, lerTabelaFulfillment } from './previsao';
+import { parseExportDigistore } from './import-digistore';
 
 const CTX = 'ProdutorAdmin';
 
@@ -505,6 +506,109 @@ produtorAdminRouter.put('/clientes/:id/kits/:kitId/custo', asyncHandler(async (r
     ]
   );
   res.json(rows[0]);
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação do export da Digistore
+//
+// O produto é de casa e a conta da Digistore dele não é a que alimenta a MailX, então
+// webhook_logs não tem essas vendas. E o IPN, quando for ligado, só traz do dia da ligação em
+// diante — as faturas da Red Rock que existem hoje são de maio a agosto. Sem o export, não há
+// como comparar a previsão com nenhuma fatura que já chegou.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.post(
+  '/clientes/:id/importar',
+  express.text({ type: '*/*', limit: '25mb' }),
+  asyncHandler(async (req, res) => {
+    const clientId = idNaRota(req, 'id');
+    const conteudo = typeof req.body === 'string' ? req.body : '';
+    if (conteudo.trim().length === 0) throw new ErroDeEntrada('O arquivo chegou vazio.');
+
+    const nome = String(req.query.arquivo || 'export.csv').slice(0, 255);
+    const r = parseExportDigistore(conteudo);
+    if (r.vendas.length === 0) {
+      res.status(400).json({
+        error: 'Nenhuma venda foi reconhecida no arquivo.',
+        avisos: r.avisos,
+        colunas_encontradas: r.colunas_encontradas,
+      });
+      return;
+    }
+
+    const datas = r.vendas.map(v => v.data).sort();
+    const imp = await query<{ id: number }>(
+      `INSERT INTO produtor_importacoes (client_id, arquivo, linhas_lidas, periodo_inicio, periodo_fim, aviso)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [clientId, nome, r.linhas_lidas, datas[0], datas[datas.length - 1],
+       r.avisos.length ? r.avisos.join(' | ') : null]
+    );
+    const importacaoId = imp[0].id;
+
+    // ON CONFLICT DO NOTHING: reimportar o mesmo período é o caso NORMAL (o export vem por
+    // intervalo e os intervalos se sobrepõem). Duplicar dobraria o invoice previsto e pareceria
+    // crescimento — o índice por número de transação é o que impede.
+    let gravadas = 0;
+    for (const v of r.vendas) {
+      const ins = await query(
+        `INSERT INTO produtor_vendas (client_id, importacao_id, transacao_id, pedido_id, data,
+           tipo, tipo_bruto, produto_id, produto_nome, quantidade, valor_bruto, moeda, pais, afiliado)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (client_id, transacao_id, COALESCE(produto_id, '')) DO NOTHING
+         RETURNING id`,
+        [clientId, importacaoId, v.transacao_id, v.pedido_id, v.data, v.tipo, v.tipo_bruto,
+         v.produto_id, v.produto_nome, v.quantidade, v.valor_bruto, v.moeda, v.pais, v.afiliado]
+      );
+      if (ins.length > 0) gravadas++;
+    }
+    const repetidas = r.vendas.length - gravadas;
+    await query(
+      `UPDATE produtor_importacoes SET linhas_gravadas = $2, linhas_repetidas = $3 WHERE id = $1`,
+      [importacaoId, gravadas, repetidas]
+    );
+
+    // Produtos do arquivo que ainda não têm custo cadastrado: é o que faz a previsão sair menor
+    // do que a fatura, e some se a tela não disser.
+    const semCusto = await query<{ produto_nome: string; produto_id: string; vendas: string }>(
+      `SELECT produto_nome, produto_id, COUNT(*) AS vendas
+         FROM produtor_vendas v
+        WHERE v.client_id = $1 AND v.importacao_id = $2 AND v.tipo = 'pagamento'
+          AND NOT EXISTS (
+            SELECT 1 FROM produtor_custo_produto c
+             WHERE c.client_id = v.client_id AND LOWER(c.nome_na_fatura) = LOWER(v.produto_nome)
+          )
+        GROUP BY 1, 2 ORDER BY COUNT(*) DESC`,
+      [clientId, importacaoId]
+    );
+
+    logger.info(CTX, `Importação: ${gravadas} gravadas, ${repetidas} repetidas (cliente ${clientId}, ${nome})`);
+    res.json({
+      importacao_id: importacaoId,
+      arquivo: nome,
+      linhas_lidas: r.linhas_lidas,
+      vendas_reconhecidas: r.vendas.length,
+      gravadas,
+      repetidas,
+      periodo: { de: datas[0], ate: datas[datas.length - 1] },
+      colunas_encontradas: r.colunas_encontradas,
+      avisos: r.avisos,
+      produtos_sem_custo: semCusto.map(p => ({
+        nome: p.produto_nome, produto_id: p.produto_id, vendas: parseInt(p.vendas, 10),
+      })),
+    });
+  })
+);
+
+produtorAdminRouter.get('/clientes/:id/importacoes', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const rows = await query(
+    `SELECT id, arquivo, linhas_lidas, linhas_gravadas, linhas_repetidas,
+            periodo_inicio::text AS periodo_inicio, periodo_fim::text AS periodo_fim,
+            aviso, created_at
+       FROM produtor_importacoes WHERE client_id = $1 ORDER BY id DESC LIMIT 30`,
+    [clientId]
+  );
+  res.json(rows);
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────

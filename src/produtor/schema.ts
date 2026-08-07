@@ -131,6 +131,66 @@ export const PRODUTOR_SCHEMA_SQL = `
     ON produtor_fulfillment (client_id);
 
   -- ─────────────────────────────────────────────────────────────────────
+  -- Vendas do produtor, vindas do export da Digistore.
+  --
+  -- Tabela PRÓPRIA, e não webhook_logs, por três motivos. O produto é de
+  -- casa e a conta da Digistore dele não é a que alimenta a MailX, então
+  -- webhook_logs não tem essas vendas. O export traz o que o webhook não
+  -- traz e a previsão precisa: quantidade por linha e país de destino.
+  -- E escrever em webhook_logs mexeria na tabela que a aba SMS usa.
+  --
+  -- Quando o IPN da conta do produtor for ligado, ele grava AQUI também —
+  -- o export cobre o passado, o IPN cobre o presente, e a tela não precisa
+  -- saber de qual dos dois veio cada dia.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_importacoes (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    arquivo VARCHAR(255) NOT NULL,
+    linhas_lidas INTEGER NOT NULL DEFAULT 0,
+    linhas_gravadas INTEGER NOT NULL DEFAULT 0,
+    linhas_repetidas INTEGER NOT NULL DEFAULT 0,
+    periodo_inicio DATE,
+    periodo_fim DATE,
+    aviso TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS produtor_vendas (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    importacao_id INTEGER REFERENCES produtor_importacoes(id) ON DELETE SET NULL,
+
+    transacao_id VARCHAR(80) NOT NULL,
+    pedido_id VARCHAR(80),
+    data DATE NOT NULL,
+    -- 'pagamento' | 'reembolso' | 'chargeback' | 'outro'. O tipo original fica
+    -- em tipo_bruto porque a Digistore usa rótulos diferentes para a mesma
+    -- coisa ("refund", "refund request", "chargeback alert") e classificar sem
+    -- guardar o original impede conferir depois de que linha veio o número.
+    tipo VARCHAR(20) NOT NULL,
+    tipo_bruto VARCHAR(60),
+
+    produto_id VARCHAR(80),
+    produto_nome VARCHAR(255),
+    quantidade INTEGER NOT NULL DEFAULT 1,
+    valor_bruto NUMERIC(12,2),
+    moeda VARCHAR(3),
+    pais VARCHAR(80),
+    afiliado VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW()
+  );
+
+  -- Reimportar o mesmo arquivo (ou um export com período sobreposto) não pode
+  -- duplicar venda: o número de transação da Digistore é único e é a chave.
+  -- Sem isso, subir o arquivo duas vezes dobraria o invoice previsto e
+  -- pareceria crescimento.
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_vendas_transacao
+    ON produtor_vendas (client_id, transacao_id, COALESCE(produto_id, ''));
+  CREATE INDEX IF NOT EXISTS idx_produtor_vendas_data
+    ON produtor_vendas (client_id, data);
+
+  -- ─────────────────────────────────────────────────────────────────────
   -- Fatura lançada = o custo REAL. O fornecedor manda o papel dizendo
   -- quanto foi; no período que ela cobre, ela substitui a previsão.
   --
