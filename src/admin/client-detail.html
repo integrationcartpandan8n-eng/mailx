@@ -3801,18 +3801,18 @@
                 // SMS Revenue KPIs (mailxsms UTM-attributed) — já respeita o período selecionado
                 const r = data.revenue || {};
                 document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms), no período selecionado.' },
-                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS, no período selecionado.' },
-                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'Faturamento SMS ÷ Vendas SMS do período.' },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
-                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de um fluxo de upsell.' },
-                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'Faturamento só das vendas de upsell SMS acima.' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'FONTE: nosso banco de webhooks da Digistore — não vem da SlickText. Soma o valor dos pedidos aprovados cujo link de origem tem utm_source=mailx-sms. ESCOPO: período selecionado. A SlickText não sabe quanto uma mensagem faturou; ela sabe envio e clique. O faturamento é nosso cruzamento entre o pedido e o link que o gerou.' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco de webhooks da Digistore. Conta pedidos aprovados (event_type=order.paid) cujo link tem utm_source=mailx-sms. ESCOPO: período selecionado. Cancelamento e reembolso NÃO saem desta contagem — aparecem separados no card de reembolso.' },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'CÁLCULO: Faturamento SMS ÷ Vendas SMS, os dois cards ao lado. Não é média informada por ninguém — é divisão dos dois números que você está vendo, no mesmo período.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco. É um subconjunto das Vendas SMS: as que vieram de fluxo de carrinho abandonado, identificadas pelo utm_campaign começar com CarrinhoAbandonado. ESCOPO: período selecionado. Recuperação + Upsell não fecham necessariamente o total: pode haver venda SMS de fluxo que não é nem um nem outro.' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'FONTE: nosso banco. Soma o valor apenas dos pedidos contados em Recuperações SMS ao lado. ESCOPO: período selecionado.' },
+                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco. Subconjunto das Vendas SMS: as de fluxo de upsell / compra aprovada, identificadas pelo utm_campaign. ESCOPO: período selecionado.' },
+                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'FONTE: nosso banco. Soma o valor apenas dos pedidos contados em Vendas Upsell SMS ao lado. ESCOPO: período selecionado.' },
                     // Faturamento total do CLIENTE (todos os canais, mesmo período) + representatividade
                     // do SMS nesse total — seção 3.1.2/3.2 da spec original, aplicada por canal.
-                    { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
-                    { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (r.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas SMS.' },
-                    { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento SMS ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
+                    { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'FONTE: nosso banco, TODOS os pedidos aprovados do cliente no período, sem filtro de origem — inclui afiliado, tráfego pago e orgânico, onde a MailX não participa. É a base de comparação da representatividade. ESCOPO: período selecionado.' },
+                    { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (r.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco, contagem de todos os pedidos aprovados do cliente no período, sem filtro de origem. ESCOPO: período selecionado.' },
+                    { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'CÁLCULO: Faturamento SMS ÷ Fat. Total do Cliente × 100 — os dois cards desta mesma tela, mesmo período. É a fatia do faturamento do cliente que passou pelo SMS da MailX.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
@@ -3821,18 +3821,18 @@
                 const brandTotal = c.analytics?.totals?.total ?? 0;
                 const totalContatos = brandTotal || (c.total || 0);
                 document.getElementById('smsContactKpis').innerHTML = [
-                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: 'Total de contatos SMS da marca no SlickText (independe de período).' },
-                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de compra aprovada, por produto.' },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de carrinho abandonado, por produto.' },
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint de analytics de contatos da marca. ESCOPO: total atual da conta, VITALÍCIO — a API não permite contar contatos por data, então este número não muda ao trocar o período.' },
+                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Compra Aprovada dos produtos ativos (endpoint /lists/{id}/contacts/count). Lista compartilhada por vários produtos da mesma família é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Abandono de Carrinho dos produtos ativos. Lista compartilhada é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Credits/Messages KPIs
                 const credits = data.credits?.usage || {};
                 document.getElementById('smsSendKpis').innerHTML = [
-                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR'), tip: 'Créditos de SMS restantes no plano SlickText do cliente.' },
-                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR'), tip: 'Créditos já consumidos no ciclo atual do plano.' },
-                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR'), tip: 'Limite total de créditos do plano contratado.' },
-                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0, tip: 'Quantidade de listas criadas no SlickText para este cliente.' },
+                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage da marca. ESCOPO: saldo agora, não do período. Atenção: mensagem acima de 160 caracteres consome mais de um crédito por envio.' },
+                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage. ESCOPO: acumulado da conta, VITALÍCIO — não é o consumo do período selecionado.' },
+                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage — o total contratado no plano do cliente.' },
+                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0, tip: 'FONTE: API da SlickText — todas as listas existentes na conta, incluindo as que não são de produto (rastreio, teste). Contando todas as contas SlickText do cliente.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Lists per product table
@@ -4934,7 +4934,7 @@
                 { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00', tip: 'Faturamento só das recuperações Email acima.' },
                 { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
                 { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
-                { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'FONTE: nosso banco, TODOS os pedidos aprovados do cliente no período, sem filtro de origem — inclui afiliado, tráfego pago e orgânico, onde a MailX não participa. É a base de comparação da representatividade. ESCOPO: período selecionado.' },
                 { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (em.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas de Email.' },
                 { icon: 'fa-percentage purple', label: 'Representatividade Email', value: `${(em.representatividade_email ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento Email ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
             ].map(k => `
