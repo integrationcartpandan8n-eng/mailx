@@ -29,8 +29,6 @@ export const PRODUTOR_SCHEMA_SQL = `
     unidades INTEGER NOT NULL DEFAULT 1,
     preco NUMERIC(12,2) NOT NULL,
 
-    custo_unidade_previsto NUMERIC(12,2) NOT NULL DEFAULT 0,
-    frete_previsto NUMERIC(12,2) NOT NULL DEFAULT 0,
     taxa_gateway_pct NUMERIC(6,3) NOT NULL DEFAULT 0,
 
     -- Comissão de afiliado. Hoje não roda afiliado nenhum, e o campo entra
@@ -60,6 +58,77 @@ export const PRODUTOR_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_produtor_ofertas_kit
     ON produtor_ofertas (client_id, kit_id);
+
+  -- O custo de produto e o frete saíram da oferta depois que as faturas reais da Red Rock
+  -- mostraram como a cobrança funciona: o pote custa o mesmo ($3,00) sendo vendido na oferta de
+  -- 6, de 3 ou de 1 — o custo é do PRODUTO. E não existe "frete por venda": existe frete por
+  -- ENVIO, mais taxa por pedido, mais pick por unidade, que são preços do FORNECEDOR e valem
+  -- para todas as ofertas. Repetir isso em cada oferta convidava a cadastrar valores diferentes
+  -- para a mesma coisa.
+  ALTER TABLE produtor_ofertas DROP COLUMN IF EXISTS custo_unidade_previsto;
+  ALTER TABLE produtor_ofertas DROP COLUMN IF EXISTS frete_previsto;
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- Custo unitário de cada produto, como ele aparece na fatura.
+  --
+  -- A coluna "nome_na_fatura" existe porque o nome do fornecedor não é o nosso: a
+  -- Red Rock cobra "Divine Purity Drops" pelo que aqui é "Divine Purity",
+  -- e "divinedetox" pelo Divine Detox (o upsell em cápsula). Sem o
+  -- vínculo explícito, casar por semelhança erraria em silêncio.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_custo_produto (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    kit_id INTEGER NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+    nome_na_fatura VARCHAR(255) NOT NULL,
+    custo_unidade NUMERIC(12,4) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_custo_produto_kit
+    ON produtor_custo_produto (client_id, kit_id);
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- Tabela de preços do fulfillment.
+  --
+  -- Cada linha da fatura tem um DIRECIONADOR diferente, e foi isso que as
+  -- 12 faturas mostraram: pick é por unidade, taxa é por pedido,
+  -- embalagem é por pedido, frete é por envio. Guardar tudo como "frete"
+  -- misturaria coisas que crescem por motivos diferentes.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_fulfillment (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    fornecedor VARCHAR(255) NOT NULL,
+
+    custo_pick_unidade NUMERIC(12,4) NOT NULL DEFAULT 0,
+    custo_pedido NUMERIC(12,4) NOT NULL DEFAULT 0,
+    custo_embalagem_pedido NUMERIC(12,4) NOT NULL DEFAULT 0,
+    custo_devolucao NUMERIC(12,4) NOT NULL DEFAULT 0,
+
+    -- Frete NÃO é um número só, é uma faixa — e essa é a parte honesta da
+    -- previsão. Nas 12 faturas ele ficou entre $0,86 e $17,12 por pedido,
+    -- porque o número de ENVIOS de uma semana não é o número de PEDIDOS
+    -- dela (existe defasagem entre vender e despachar) e porque o preço
+    -- muda com destino e peso. Um valor único cravado erraria 17% e
+    -- ninguém saberia de qual pedaço veio o erro.
+    frete_pedido_min NUMERIC(12,4),
+    frete_pedido_tipico NUMERIC(12,4),
+    frete_pedido_max NUMERIC(12,4),
+
+    -- Quantos PEDIDOS da fatura correspondem a cada transação do gateway.
+    -- Se a operação despacha o upsell junto com o produto principal, duas
+    -- transações viram um pedido só e 1.0 superestima. Começa em 1.0 e a
+    -- tela mostra a razão MEDIDA contra as faturas já lançadas, em vez de
+    -- alguém ter que adivinhar.
+    fator_pedidos NUMERIC(6,3) NOT NULL DEFAULT 1.0,
+
+    observacao TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_fulfillment_cliente
+    ON produtor_fulfillment (client_id);
 
   -- ─────────────────────────────────────────────────────────────────────
   -- Fatura lançada = o custo REAL. O fornecedor manda o papel dizendo

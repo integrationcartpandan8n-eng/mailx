@@ -20,7 +20,8 @@
  *    (aconteceram), mas não têm custo conhecido. Margem só é calculada sobre o que tem custo, e a
  *    tela mostra a cobertura — denominador incompleto faz toda porcentagem sair maior do que é.
  */
-import { query } from '../db/database';
+import { query, queryOne } from '../db/database';
+import { lerTabelaFulfillment } from './previsao';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos
@@ -38,8 +39,6 @@ export interface OfertaRow {
   nome: string;
   unidades: number;
   preco: number;
-  custo_unidade_previsto: number;
-  frete_previsto: number;
   taxa_gateway_pct: number;
   comissao_afiliado_pct: number;
   external_ids: string[];
@@ -119,8 +118,6 @@ export function mapOferta(r: any): OfertaRow {
     nome: r.nome,
     unidades: parseInt(r.unidades, 10) || 0,
     preco: num(r.preco),
-    custo_unidade_previsto: num(r.custo_unidade_previsto),
-    frete_previsto: num(r.frete_previsto),
     taxa_gateway_pct: num(r.taxa_gateway_pct),
     comissao_afiliado_pct: num(r.comissao_afiliado_pct),
     external_ids: Array.isArray(r.external_ids) ? r.external_ids : [],
@@ -411,14 +408,47 @@ export async function calcularResumo(
   periodo: Periodo | null,
   moeda: string
 ): Promise<ResumoProdutor> {
-  const [ofertas, faturas, dias] = await Promise.all([
+  const [ofertas, faturas, dias, tabela, custoProd] = await Promise.all([
     listarOfertas(clientId, kit.id),
     listarFaturas(clientId, kit.id),
     agregarVendasPorDia(clientId, kit),
+    lerTabelaFulfillment(clientId),
+    queryOne<{ custo_unidade: string }>(
+      `SELECT custo_unidade FROM produtor_custo_produto WHERE client_id = $1 AND kit_id = $2`,
+      [clientId, kit.id]
+    ),
   ]);
+
+  // O custo do fulfillment não é da oferta: o pote custa o mesmo na oferta de 6, de 3 ou de 1
+  // (isso é do PRODUTO), e pick/taxa/embalagem/frete são preços do FORNECEDOR, iguais para todas
+  // as ofertas. Foi o que as 12 faturas da Red Rock mostraram.
+  const custoUnidade = custoProd ? num(custoProd.custo_unidade) : 0;
+  const t = tabela;
+  /** Custo de fulfillment de UMA venda desta oferta: potes + pick + taxa + embalagem + frete. */
+  const custoPorVenda = (o: OfertaRow) => ({
+    produto: o.unidades * custoUnidade,
+    servicos: t
+      ? o.unidades * t.custo_pick_unidade + t.custo_pedido + t.custo_embalagem_pedido
+        + (t.frete_pedido_tipico ?? 0)
+      : 0,
+  });
 
   const porId = new Map<number, OfertaRow>(ofertas.map(o => [o.id, o]));
   const ressalvas: string[] = [];
+
+  if (!custoProd) {
+    ressalvas.push(
+      'Este produto não tem custo unitário cadastrado, então o custo de produto está entrando como ' +
+      'zero e o lucro aparece MAIOR do que é. Cadastre o custo por unidade na tela de Produtor.'
+    );
+  }
+  if (!tabela) {
+    ressalvas.push(
+      'A tabela de preços do fulfillment não foi cadastrada: pick, taxa por pedido, embalagem e ' +
+      'frete não estão sendo descontados do lucro. Nas faturas reais isso é cerca de um terço do ' +
+      'custo.'
+    );
+  }
 
   // ── Recorte do período ──
   const noPeriodo = dias.filter(d => dentro(d.dia, periodo));
@@ -451,8 +481,9 @@ export async function calcularResumo(
 
   for (const o of ofertas) {
     const a = agregado.get(o.id) ?? { vendas: 0, receita: 0, vendas_afiliado: 0, receita_afiliado: 0 };
-    const custoProduto = o.unidades * o.custo_unidade_previsto * a.vendas;
-    const frete = o.frete_previsto * a.vendas;
+    const cv = custoPorVenda(o);
+    const custoProduto = cv.produto * a.vendas;
+    const frete = cv.servicos * a.vendas;
     const taxa = a.receita * (o.taxa_gateway_pct / 100);
     // Comissão só sobre a receita das vendas COM afiliado. Sobre o faturamento inteiro, cobraria
     // comissão de venda direta — e como afiliado tende a ser a maior fatia, o erro não pareceria
@@ -474,7 +505,7 @@ export async function calcularResumo(
       preco: o.preco,
       vendas: a.vendas,
       receita: a.receita,
-      custo_previsto_unitario: o.custo_unidade_previsto,
+      custo_previsto_unitario: custoUnidade,
       custo_produto_previsto: custoProduto,
       frete_previsto: frete,
       taxa_gateway: taxa,
@@ -567,8 +598,8 @@ export async function calcularResumo(
       if (l.oferta_id == null || cobertos.has(l.dia)) continue;
       const o = porId.get(l.oferta_id);
       if (!o) continue;
-      if (componente === 'produto') total += o.unidades * o.custo_unidade_previsto * l.vendas;
-      else if (componente === 'frete') total += o.frete_previsto * l.vendas;
+      if (componente === 'produto') total += custoPorVenda(o).produto * l.vendas;
+      else if (componente === 'frete') total += custoPorVenda(o).servicos * l.vendas;
       else if (componente === 'taxa') total += l.receita * (o.taxa_gateway_pct / 100);
       else total += l.receita_afiliado * (o.comissao_afiliado_pct / 100);
     }
@@ -630,8 +661,8 @@ export async function calcularResumo(
       const o = porId.get(l.oferta_id as number);
       if (!o) continue;
       unidadesVendidas += o.unidades * l.vendas;
-      if (COBRE_PRODUTO.includes(f.categoria)) previsto += o.unidades * o.custo_unidade_previsto * l.vendas;
-      if (COBRE_FRETE.includes(f.categoria)) previsto += o.frete_previsto * l.vendas;
+      if (COBRE_PRODUTO.includes(f.categoria)) previsto += custoPorVenda(o).produto * l.vendas;
+      if (COBRE_FRETE.includes(f.categoria)) previsto += custoPorVenda(o).servicos * l.vendas;
       if (f.categoria === 'taxa_gateway') previsto += l.receita * (o.taxa_gateway_pct / 100);
       if (f.categoria === 'comissao_afiliado') previsto += l.receita_afiliado * (o.comissao_afiliado_pct / 100);
     }

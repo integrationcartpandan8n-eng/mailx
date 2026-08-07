@@ -198,6 +198,20 @@
 
     <div class="kpis" id="kpis"></div>
 
+    <!-- ═══ Previsão do invoice — o pedido do chefe ═══ -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><i class="fas fa-file-invoice"></i> Previsão do invoice</div>
+            <span class="escopo" id="escopoPrevisao">—</span>
+            <span class="card-sub" id="subPrevisao">todos os produtos do cliente — a fatura cobra todos na mesma folha</span>
+        </div>
+        <div class="card-body">
+            <div id="avisosPrevisao"></div>
+            <div class="comp" id="compPrevisao"></div>
+            <div id="detalhePrevisao" style="margin-top:1.25rem"></div>
+        </div>
+    </div>
+
     <!-- ═══ Previsto vs Real — o card do briefing ═══ -->
     <div class="card">
         <div class="card-header">
@@ -256,16 +270,6 @@
                     </div>
                     <div class="dupla">
                         <div class="campo">
-                            <label for="fCusto">Custo por pote</label>
-                            <input id="fCusto" class="num-input" type="number" min="0" step="0.01" value="7.40" required>
-                        </div>
-                        <div class="campo">
-                            <label for="fFrete">Frete por venda</label>
-                            <input id="fFrete" class="num-input" type="number" min="0" step="0.01" value="6.90" required>
-                        </div>
-                    </div>
-                    <div class="dupla">
-                        <div class="campo">
                             <label for="fTaxa">Taxa do gateway (%)</label>
                             <input id="fTaxa" class="num-input" type="number" min="0" max="100" step="0.1" value="9.5" required>
                         </div>
@@ -286,7 +290,8 @@
 
                     <div class="previa" aria-live="polite">
                         <div class="linha"><span>Custo dos potes</span><b id="pPotes">—</b></div>
-                        <div class="linha"><span>Frete</span><b id="pFrete">—</b></div>
+                        <div class="linha"><span>Pick + taxa + embalagem</span><b id="pServicos">—</b></div>
+                        <div class="linha"><span>Frete (típico)</span><b id="pFrete">—</b></div>
                         <div class="linha"><span>Taxa do gateway</span><b id="pTaxa">—</b></div>
                         <div class="linha"><span>Comissão de afiliado</span><b id="pComissao">—</b></div>
                         <div class="linha total"><span>Lucro por venda</span><b id="pLucro">—</b></div>
@@ -300,6 +305,117 @@
                     <button class="btn ghost" type="button" style="width:100%; margin-top:0.5rem; display:none" id="btnCancelarEdicao">
                         Cancelar edição
                     </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Tabela de preços do fulfillment ═══ -->
+    <div class="grid2">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-truck-fast"></i> Custo por produto</div>
+                <span class="card-sub">o custo de uma unidade, como o fornecedor cobra</span>
+            </div>
+            <div class="card-body" style="padding:0">
+                <div class="scroll">
+                    <table>
+                        <thead><tr><th>Produto</th><th>Nome na fatura</th><th>Custo/unidade</th><th></th></tr></thead>
+                        <tbody id="corpoCustos"></tbody>
+                    </table>
+                </div>
+                <div style="padding:1rem 1.25rem; border-top:1px solid var(--border)">
+                    <form id="formCusto">
+                        <div class="dupla">
+                            <div class="campo">
+                                <label for="cProduto">Produto</label>
+                                <select id="cProduto"></select>
+                            </div>
+                            <div class="campo">
+                                <label for="cNomeFatura">Nome na fatura</label>
+                                <input id="cNomeFatura" type="text" placeholder="Divine Purity Drops" required>
+                            </div>
+                        </div>
+                        <div class="campo">
+                            <label for="cCusto">Custo por unidade</label>
+                            <input id="cCusto" class="num-input" type="number" min="0" step="0.0001" placeholder="3.00" required>
+                        </div>
+                        <span class="ajuda">
+                            O nome tem que ser <b>exatamente</b> como aparece na fatura. A Red Rock cobra
+                            "Divine Purity Drops" pelo Divine Purity e "divinedetox" pelo Divine Detox —
+                            casar por semelhança acertaria hoje e erraria calado amanhã.
+                        </span>
+                        <button class="btn" type="submit" style="width:100%; margin-top:0.7rem">Salvar custo do produto</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-list-check"></i> Preços do fulfillment</div>
+                <span class="card-sub">valem para todas as ofertas</span>
+            </div>
+            <div class="card-body">
+                <form id="formFulfillment">
+                    <div class="campo">
+                        <label for="tFornecedor">Fornecedor</label>
+                        <input id="tFornecedor" type="text" value="Red Rock Labs" required>
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="tPick">Pick por unidade</label>
+                            <input id="tPick" class="num-input" type="number" min="0" step="0.0001" placeholder="0.25">
+                        </div>
+                        <div class="campo">
+                            <label for="tPedido">Taxa por pedido</label>
+                            <input id="tPedido" class="num-input" type="number" min="0" step="0.0001" placeholder="0.75">
+                        </div>
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="tEmbalagem">Embalagem por pedido</label>
+                            <input id="tEmbalagem" class="num-input" type="number" min="0" step="0.0001" placeholder="0.42">
+                        </div>
+                        <div class="campo">
+                            <label for="tDevolucao">Custo por devolução</label>
+                            <input id="tDevolucao" class="num-input" type="number" min="0" step="0.0001" placeholder="3.00">
+                        </div>
+                    </div>
+                    <span class="ajuda" style="display:block; margin:-0.3rem 0 0.7rem">
+                        Embalagem é a <b>média</b> entre envelope e caixa. Nas faturas da Red Rock o
+                        envelope sai $0,38 e a caixa ~$0,62, e a mistura das duas deu $0,42 por pedido —
+                        usar só o preço do envelope subestima em 10%.
+                    </span>
+                    <label style="font-size:0.68rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-muted)">Frete por pedido — faixa</label>
+                    <div class="dupla" style="margin-top:0.25rem">
+                        <div class="campo">
+                            <label for="tFreteMin" style="text-transform:none; letter-spacing:0">mínimo</label>
+                            <input id="tFreteMin" class="num-input" type="number" min="0" step="0.01" placeholder="4.65">
+                        </div>
+                        <div class="campo">
+                            <label for="tFreteTip" style="text-transform:none; letter-spacing:0">típico</label>
+                            <input id="tFreteTip" class="num-input" type="number" min="0" step="0.01" placeholder="5.95">
+                        </div>
+                    </div>
+                    <div class="campo">
+                        <label for="tFreteMax" style="text-transform:none; letter-spacing:0">máximo</label>
+                        <input id="tFreteMax" class="num-input" type="number" min="0" step="0.01" placeholder="8.85">
+                    </div>
+                    <span class="ajuda">
+                        Frete é faixa, não número. O total previsto sai como intervalo porque o número de
+                        <b>envios</b> de uma semana não é o de <b>pedidos</b> dela — existe defasagem entre
+                        vender e despachar, e o preço muda com destino e peso.
+                    </span>
+                    <div class="campo" style="margin-top:0.7rem">
+                        <label for="tFator">Pedidos por transação</label>
+                        <input id="tFator" class="num-input" type="number" min="0.01" max="10" step="0.01" value="1">
+                        <span class="ajuda">
+                            Deixe 1 até conferir. Se a operação despacha o upsell junto com o produto
+                            principal, duas transações viram um pedido só e 1 superestima.
+                        </span>
+                    </div>
+                    <button class="btn" type="submit" style="width:100%">Salvar tabela de preços</button>
                 </form>
             </div>
         </div>
@@ -405,6 +521,16 @@ let resumo = null;
 let ofertas = [];
 let editandoOfertaId = null;
 let simbolo = '$';
+let tabelaFulfillment = null;   // preços do fornecedor (null = não cadastrada, NÃO zero)
+let custosProduto = [];         // custo unitário por produto
+let previsao = null;
+let produtosDoCliente = [];
+
+/** Custo unitário do produto selecionado. null = não cadastrado — diferente de zero. */
+function custoDoProduto() {
+    const c = custosProduto.find(x => x.kit_id === kitId);
+    return c ? c.custo_unidade : null;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Formatação
@@ -497,6 +623,7 @@ async function carregarTudo() {
             mostrarErro('Este cliente ainda não tem produto nenhum registrado. O produto aparece sozinho quando chega a primeira venda pelo webhook.');
             return;
         }
+        produtosDoCliente = produtos;
         sel.innerHTML = produtos.map(p =>
             `<option value="${p.id}">${esc(p.nome)} — ${inteiro(p.vendas)} venda(s), ${p.ofertas} oferta(s)</option>`
         ).join('');
@@ -517,11 +644,18 @@ async function carregarResumo() {
     limparErro();
     try {
         const qs = periodo ? `?from=${periodo.from}&to=${periodo.to}` : '';
-        [resumo, ofertas] = await Promise.all([
+        let ff;
+        [resumo, ofertas, ff, previsao] = await Promise.all([
             api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/resumo${qs}`),
             api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/ofertas`),
+            api(`/admin/produtor/clientes/${clienteId}/fulfillment`),
+            api(`/admin/produtor/clientes/${clienteId}/previsao${qs}`),
         ]);
+        tabelaFulfillment = ff.tabela;
+        custosProduto = ff.custos;
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
+        renderPrevisao();
+        renderFulfillment();
         renderRessalvas();
         renderKpis();
         renderPrevistoVsReal();
@@ -539,6 +673,106 @@ async function carregarResumo() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────────────────────
+function renderPrevisao() {
+    document.getElementById('escopoPrevisao').textContent = rotuloPeriodo();
+    const p = previsao;
+    document.getElementById('avisosPrevisao').innerHTML = (p.ressalvas || []).map(r =>
+        `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(r)}</span></div>`).join('');
+
+    const faixa = p.total
+        ? `${fmt0(p.total.min)} a ${fmt0(p.total.max)}`
+        : '—';
+
+    document.getElementById('compPrevisao').innerHTML = `
+        <div>
+            <div class="k">Invoice previsto</div>
+            <div class="v">${p.total ? fmt0(p.total.tipico) : '—'}</div>
+            <div class="d">${p.total ? 'entre ' + esc(faixa) : 'falta a faixa de frete para fechar o total'}</div>
+        </div>
+        <div>
+            <div class="k">Parte exata</div>
+            <div class="v">${fmt(p.fixo.total)}</div>
+            <div class="d">produto ${fmt0(p.fixo.produto)} · pick ${fmt0(p.fixo.pick)} · pedido ${fmt0(p.fixo.pedido)} · embalagem ${fmt0(p.fixo.embalagem)}</div>
+        </div>
+        <div>
+            <div class="k">Frete (estimado)</div>
+            <div class="v">${p.frete ? fmt0(p.frete.tipico) : '—'}</div>
+            <div class="d">${p.frete ? `entre ${fmt0(p.frete.min)} e ${fmt0(p.frete.max)} — é a parte que não dá para cravar` : 'faixa não cadastrada'}</div>
+        </div>
+        <div>
+            <div class="k">Volume</div>
+            <div class="v">${inteiro(p.pedidos)}</div>
+            <div class="d">pedidos · ${inteiro(p.unidades)} unidades${p.devolucoes ? ' · ' + inteiro(p.devolucoes) + ' devolução(ões)' : ''}</div>
+        </div>
+    `;
+
+    let html = '';
+    if (p.produtos.length) {
+        html += `<div class="scroll"><table>
+            <thead><tr><th>Produto</th><th>Nome na fatura</th><th>Custo/unid.</th><th>Unidades</th><th>Custo previsto</th></tr></thead>
+            <tbody>${p.produtos.map(x => `<tr>
+                <td class="nome-linha">${esc(x.produto)}${x.vendas_sem_oferta ? `<small>${inteiro(x.vendas_sem_oferta)} venda(s) sem oferta — unidades desconhecidas</small>` : ''}</td>
+                <td>${esc(x.nome_na_fatura)}</td>
+                <td class="num">${fmt(x.custo_unidade)}</td>
+                <td class="num">${inteiro(x.unidades)}</td>
+                <td class="num">${fmt(x.valor)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`;
+    }
+
+    // A série diária é o pedido: ver o invoice se formando, em vez de descobrir quando o papel chega.
+    if (p.por_dia.length) {
+        const max = Math.max(...p.por_dia.map(d => d.acumulado_fixo), 1);
+        html += `<div style="margin-top:1.1rem">
+            <div style="font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:0.5rem">
+                Acumulando dia a dia (parte exata)
+            </div>
+            <div class="scroll"><table>
+                <thead><tr><th>Dia</th><th>Pedidos</th><th>Unidades</th><th>Do dia</th><th>Acumulado</th><th style="width:30%"></th></tr></thead>
+                <tbody>${p.por_dia.map(d => `<tr>
+                    <td>${dataBR(d.dia)}</td>
+                    <td class="num">${inteiro(d.pedidos)}</td>
+                    <td class="num">${inteiro(d.unidades)}</td>
+                    <td class="num">${fmt(d.fixo)}</td>
+                    <td class="num" style="font-weight:700">${fmt(d.acumulado_fixo)}</td>
+                    <td><span style="display:block; height:6px; border-radius:99px; background:var(--accent); width:${(d.acumulado_fixo / max * 100).toFixed(1)}%"></span></td>
+                </tr>`).join('')}</tbody>
+            </table></div>
+        </div>`;
+    }
+    document.getElementById('detalhePrevisao').innerHTML = html;
+}
+
+function renderFulfillment() {
+    const t = tabelaFulfillment;
+    if (t) {
+        const v = (id, val) => { document.getElementById(id).value = val == null ? '' : val; };
+        v('tFornecedor', t.fornecedor); v('tPick', t.custo_pick_unidade); v('tPedido', t.custo_pedido);
+        v('tEmbalagem', t.custo_embalagem_pedido); v('tDevolucao', t.custo_devolucao);
+        v('tFreteMin', t.frete_pedido_min); v('tFreteTip', t.frete_pedido_tipico);
+        v('tFreteMax', t.frete_pedido_max); v('tFator', t.fator_pedidos);
+    }
+    document.getElementById('corpoCustos').innerHTML = custosProduto.length === 0
+        ? `<tr><td colspan="4" class="vazio">Nenhum custo cadastrado. Sem ele o lucro aparece maior do que é.</td></tr>`
+        : custosProduto.map(c => `<tr>
+            <td class="nome-linha">${esc(c.produto)}</td>
+            <td>${esc(c.nome_na_fatura)}</td>
+            <td class="num">${fmt(c.custo_unidade, 4)}</td>
+            <td><button class="btn mini ghost" onclick="editarCusto(${c.kit_id})">Editar</button></td>
+        </tr>`).join('');
+    document.getElementById('cProduto').innerHTML = produtosDoCliente
+        .map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('');
+}
+
+function editarCusto(kid) {
+    const c = custosProduto.find(x => x.kit_id === kid);
+    if (!c) return;
+    document.getElementById('cProduto').value = String(kid);
+    document.getElementById('cNomeFatura').value = c.nome_na_fatura;
+    document.getElementById('cCusto').value = c.custo_unidade;
+    document.getElementById('cNomeFatura').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function renderRessalvas() {
     document.getElementById('ressalvas').innerHTML = (resumo.ressalvas || []).map(r =>
         `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(r)}</span></div>`
@@ -677,10 +911,13 @@ function renderOfertas() {
         ? `<tr><td colspan="9" class="vazio">Nenhuma oferta cadastrada ainda. O lucro só existe depois que o custo entra.</td></tr>`
         : linhas.map(l => {
             const o = ofertas.find(x => x.id === l.oferta_id);
-            const custoUnit = l.oferta_id == null || !o ? null : (o.unidades * o.custo_unidade_previsto + o.frete_previsto);
+            const cu = custoDoProduto();
+            const t = tabelaFulfillment;
+            const custoUnit = (l.oferta_id == null || !o || cu == null) ? null
+                : o.unidades * cu + (t ? o.unidades * t.custo_pick_unidade + t.custo_pedido + t.custo_embalagem_pedido + (t.frete_pedido_tipico ?? 0) : 0);
             return `<tr>
                 <td class="nome-linha">${esc(l.nome)}
-                    ${o ? `<small>custo/pote ${fmt(o.custo_unidade_previsto)} · frete ${fmt(o.frete_previsto)}${o.external_ids.length ? ' · id ' + esc(o.external_ids.join(', ')) : ' · casa por preço'}</small>`
+                    ${o ? `<small>${cu == null ? 'custo do produto não cadastrado' : fmt(cu) + '/unidade'}${o.external_ids.length ? ' · id ' + esc(o.external_ids.join(', ')) : ' · casa por preço'}</small>`
                         : '<small>custo desconhecido — fora do lucro e da margem</small>'}</td>
                 <td class="num">${fmt0(l.preco)}</td>
                 <td class="num">${inteiro(l.unidades)}</td>
@@ -729,7 +966,6 @@ function lerFormOferta() {
     return {
         nome: document.getElementById('fNome').value.trim(),
         unidades: n('fPotes'), preco: n('fPreco'),
-        custo_unidade_previsto: n('fCusto'), frete_previsto: n('fFrete'),
         taxa_gateway_pct: n('fTaxa'), comissao_afiliado_pct: n('fComissao'),
         external_ids: document.getElementById('fIds').value,
     };
@@ -737,23 +973,41 @@ function lerFormOferta() {
 
 function previa() {
     const o = lerFormOferta();
-    const custoPotes = o.unidades * o.custo_unidade_previsto;
+    // O custo não vem mais do formulário da oferta: o pote custa o mesmo na embalagem de 6, de 3 ou
+    // de 1 (é do produto) e pick/taxa/embalagem/frete são preços do fornecedor. A prévia usa o que
+    // está cadastrado, e avisa quando não há cadastro em vez de calcular margem sobre custo zero.
+    const cu = custoDoProduto();
+    const t = tabelaFulfillment;
+    const custoPotes = o.unidades * (cu ?? 0);
+    const servicos = t ? (o.unidades * t.custo_pick_unidade + t.custo_pedido + t.custo_embalagem_pedido) : 0;
+    const freteTip = t && t.frete_pedido_tipico != null ? t.frete_pedido_tipico : null;
     const taxa = o.preco * (o.taxa_gateway_pct / 100);
     const comissao = o.preco * (o.comissao_afiliado_pct / 100);
-    const lucro = o.preco - custoPotes - o.frete_previsto - taxa - comissao;
-    const margem = o.preco > 0 ? lucro / o.preco : null;
+    const completo = cu != null && t != null && freteTip != null;
+    const lucro = completo ? o.preco - custoPotes - servicos - freteTip - taxa - comissao : null;
+    const margem = completo && o.preco > 0 ? lucro / o.preco : null;
 
-    document.getElementById('pPotes').textContent = fmt(custoPotes);
-    document.getElementById('pFrete').textContent = fmt(o.frete_previsto);
+    document.getElementById('pPotes').textContent = cu == null ? '—' : fmt(custoPotes);
+    document.getElementById('pServicos').textContent = t ? fmt(servicos) : '—';
+    document.getElementById('pFrete').textContent = freteTip == null ? '—' : fmt(freteTip);
     document.getElementById('pTaxa').textContent = fmt(taxa);
     document.getElementById('pComissao').textContent = o.comissao_afiliado_pct > 0 ? fmt(comissao) : '—';
     const el = document.getElementById('pLucro');
     el.textContent = fmt(lucro);
-    el.style.color = lucro >= 0 ? 'var(--success)' : 'var(--danger)';
+    el.style.color = lucro == null ? 'var(--text-muted)' : (lucro >= 0 ? 'var(--success)' : 'var(--danger)');
     document.getElementById('pMargem').textContent = pct(margem);
 
     // A prévia mostra a venda POR AFILIADO quando há percentual: é o pior caso, e é o que interessa
     // saber antes de aceitar a comissão. Sem percentual, dizer isso seria afirmar o que não foi medido.
+    if (!completo) {
+        document.getElementById('notaComissao').innerHTML =
+            '<b>Sem margem ainda:</b> falta ' + [
+                cu == null ? 'o custo por unidade deste produto' : null,
+                !t ? 'a tabela de preços do fulfillment' : null,
+                t && freteTip == null ? 'a faixa de frete por pedido' : null,
+            ].filter(Boolean).join(' e ') + '. Preencher acima. Mostrar margem sem custo daria um lucro que não existe.';
+        return;
+    }
     document.getElementById('notaComissao').innerHTML = o.comissao_afiliado_pct > 0
         ? 'A prévia acima é de uma venda <b>com afiliado</b>. Em venda direta a comissão não entra, e a margem é maior.'
         : 'Comissão em 0%: a prévia é de venda direta. Preencha o percentual quando começar a rodar afiliado — ele só é descontado das vendas que chegam com afiliado identificado.';
@@ -791,8 +1045,6 @@ function editarOferta(id) {
     document.getElementById('fNome').value = o.nome;
     document.getElementById('fPotes').value = o.unidades;
     document.getElementById('fPreco').value = o.preco;
-    document.getElementById('fCusto').value = o.custo_unidade_previsto;
-    document.getElementById('fFrete').value = o.frete_previsto;
     document.getElementById('fTaxa').value = o.taxa_gateway_pct;
     document.getElementById('fComissao').value = o.comissao_afiliado_pct;
     document.getElementById('fIds').value = (o.external_ids || []).join(', ');
@@ -846,6 +1098,40 @@ document.getElementById('formFatura').addEventListener('submit', async (e) => {
     } finally {
         btn.disabled = false; btn.textContent = 'Lançar fatura';
     }
+});
+
+document.getElementById('formFulfillment').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const g = (id) => document.getElementById(id).value;
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/fulfillment`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                fornecedor: g('tFornecedor'),
+                custo_pick_unidade: g('tPick') || 0, custo_pedido: g('tPedido') || 0,
+                custo_embalagem_pedido: g('tEmbalagem') || 0, custo_devolucao: g('tDevolucao') || 0,
+                frete_pedido_min: g('tFreteMin'), frete_pedido_tipico: g('tFreteTip'),
+                frete_pedido_max: g('tFreteMax'), fator_pedidos: g('tFator') || 1,
+            }),
+        });
+        await carregarResumo();
+    } catch (err) { mostrarErro(err.message); }
+});
+
+document.getElementById('formCusto').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        const kid = parseInt(document.getElementById('cProduto').value, 10);
+        await api(`/admin/produtor/clientes/${clienteId}/kits/${kid}/custo`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                nome_na_fatura: document.getElementById('cNomeFatura').value,
+                custo_unidade: document.getElementById('cCusto').value,
+            }),
+        });
+        document.getElementById('formCusto').reset();
+        await carregarResumo();
+    } catch (err) { mostrarErro(err.message); }
 });
 
 async function apagarFatura(id) {

@@ -20,6 +20,7 @@ import {
   CATEGORIAS_FATURA, CategoriaFatura, calcularResumo, listarFaturas, listarOfertas,
   mapOferta, mapFatura,
 } from './service';
+import { preverInvoice, lerTabelaFulfillment } from './previsao';
 
 const CTX = 'ProdutorAdmin';
 
@@ -179,8 +180,6 @@ function corpoDaOferta(body: any) {
     nome: texto(body.nome, 'Nome da oferta'),
     unidades: numero(body.unidades, 'Potes', { min: 1, max: 1000, inteiro: true }),
     preco: numero(body.preco, 'Preço', { min: 0.01, max: 1000000 }),
-    custo_unidade_previsto: numero(body.custo_unidade_previsto ?? 0, 'Custo por pote', { min: 0, max: 1000000 }),
-    frete_previsto: numero(body.frete_previsto ?? 0, 'Frete por venda', { min: 0, max: 1000000 }),
     taxa_gateway_pct: numero(body.taxa_gateway_pct ?? 0, 'Taxa do gateway', { min: 0, max: 100 }),
     comissao_afiliado_pct: numero(body.comissao_afiliado_pct ?? 0, 'Comissão de afiliado', { min: 0, max: 100 }),
     external_ids: listaDeIds(body.external_ids),
@@ -196,10 +195,9 @@ produtorAdminRouter.post('/clientes/:id/kits/:kitId/ofertas', asyncHandler(async
 
   const rows = await query(
     `INSERT INTO produtor_ofertas (client_id, kit_id, nome, unidades, preco,
-       custo_unidade_previsto, frete_previsto, taxa_gateway_pct, comissao_afiliado_pct,
-       external_ids, observacao)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-    [clientId, kitId, o.nome, o.unidades, o.preco, o.custo_unidade_previsto, o.frete_previsto,
+       taxa_gateway_pct, comissao_afiliado_pct, external_ids, observacao)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [clientId, kitId, o.nome, o.unidades, o.preco,
      o.taxa_gateway_pct, o.comissao_afiliado_pct, o.external_ids, o.observacao]
   );
   logger.info(CTX, `Oferta cadastrada: "${o.nome}" (cliente ${clientId}, produto ${kitId})`);
@@ -216,11 +214,11 @@ produtorAdminRouter.patch('/clientes/:id/ofertas/:ofertaId', asyncHandler(async 
 
   const rows = await query(
     `UPDATE produtor_ofertas
-        SET nome=$3, unidades=$4, preco=$5, custo_unidade_previsto=$6, frete_previsto=$7,
-            taxa_gateway_pct=$8, comissao_afiliado_pct=$9, external_ids=$10, observacao=$11,
-            ativo=$12, updated_at=NOW()
+        SET nome=$3, unidades=$4, preco=$5,
+            taxa_gateway_pct=$6, comissao_afiliado_pct=$7, external_ids=$8, observacao=$9,
+            ativo=$10, updated_at=NOW()
       WHERE id=$1 AND client_id=$2 RETURNING *`,
-    [ofertaId, clientId, o.nome, o.unidades, o.preco, o.custo_unidade_previsto, o.frete_previsto,
+    [ofertaId, clientId, o.nome, o.unidades, o.preco,
      o.taxa_gateway_pct, o.comissao_afiliado_pct, o.external_ids, o.observacao, ativo]
   );
   if (rows.length === 0) throw new ErroDeEntrada('Oferta não encontrada para este cliente.');
@@ -321,6 +319,120 @@ produtorAdminRouter.delete('/clientes/:id/faturas/:faturaId', asyncHandler(async
   );
   if (rows.length === 0) throw new ErroDeEntrada('Fatura não encontrada para este cliente.');
   res.json({ ok: true });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tabela de preços do fulfillment e custo unitário por produto
+//
+// Ficam fora da oferta porque não são da oferta: o pote custa o mesmo na embalagem de 6, de 3 ou
+// de 1 (é do PRODUTO), e pick/taxa/embalagem/frete são preços do FORNECEDOR, iguais para todas as
+// ofertas. As 12 faturas da Red Rock mostram isso linha por linha.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.get('/clientes/:id/fulfillment', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const [tabela, custos] = await Promise.all([
+    lerTabelaFulfillment(clientId),
+    query(`SELECT c.kit_id, c.nome_na_fatura, c.custo_unidade, k.name AS produto
+             FROM produtor_custo_produto c JOIN kits k ON k.id = c.kit_id
+            WHERE c.client_id = $1 ORDER BY k.name`, [clientId]),
+  ]);
+  res.json({
+    tabela,
+    custos: custos.map((c: any) => ({
+      kit_id: Number(c.kit_id), produto: c.produto, nome_na_fatura: c.nome_na_fatura,
+      custo_unidade: parseFloat(c.custo_unidade),
+    })),
+  });
+}));
+
+produtorAdminRouter.put('/clientes/:id/fulfillment', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const b = req.body ?? {};
+
+  const faixa = (campo: string, rot: string) =>
+    b[campo] === '' || b[campo] == null ? null : numero(b[campo], rot, { min: 0, max: 100000 });
+  const min = faixa('frete_pedido_min', 'Frete mínimo por pedido');
+  const tip = faixa('frete_pedido_tipico', 'Frete típico por pedido');
+  const max = faixa('frete_pedido_max', 'Frete máximo por pedido');
+  // Faixa invertida produziria um "entre" que não contém o valor típico, e a tela mostraria um
+  // intervalo que nega o próprio número do meio.
+  if (min != null && tip != null && min > tip) throw new ErroDeEntrada('O frete mínimo é maior que o típico.');
+  if (max != null && tip != null && max < tip) throw new ErroDeEntrada('O frete máximo é menor que o típico.');
+
+  const rows = await query(
+    `INSERT INTO produtor_fulfillment (client_id, fornecedor, custo_pick_unidade, custo_pedido,
+       custo_embalagem_pedido, custo_devolucao, frete_pedido_min, frete_pedido_tipico,
+       frete_pedido_max, fator_pedidos, observacao)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (client_id) DO UPDATE SET
+       fornecedor = EXCLUDED.fornecedor,
+       custo_pick_unidade = EXCLUDED.custo_pick_unidade,
+       custo_pedido = EXCLUDED.custo_pedido,
+       custo_embalagem_pedido = EXCLUDED.custo_embalagem_pedido,
+       custo_devolucao = EXCLUDED.custo_devolucao,
+       frete_pedido_min = EXCLUDED.frete_pedido_min,
+       frete_pedido_tipico = EXCLUDED.frete_pedido_tipico,
+       frete_pedido_max = EXCLUDED.frete_pedido_max,
+       fator_pedidos = EXCLUDED.fator_pedidos,
+       observacao = EXCLUDED.observacao,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      clientId,
+      texto(b.fornecedor, 'Fornecedor'),
+      numero(b.custo_pick_unidade ?? 0, 'Pick por unidade', { min: 0, max: 10000 }),
+      numero(b.custo_pedido ?? 0, 'Taxa por pedido', { min: 0, max: 10000 }),
+      numero(b.custo_embalagem_pedido ?? 0, 'Embalagem por pedido', { min: 0, max: 10000 }),
+      numero(b.custo_devolucao ?? 0, 'Custo por devolução', { min: 0, max: 10000 }),
+      min, tip, max,
+      numero(b.fator_pedidos ?? 1, 'Pedidos por transação', { min: 0.01, max: 10 }),
+      b.observacao ? String(b.observacao).slice(0, 2000) : null,
+    ]
+  );
+  logger.info(CTX, `Tabela de fulfillment salva (cliente ${clientId})`);
+  res.json(rows[0]);
+}));
+
+produtorAdminRouter.put('/clientes/:id/kits/:kitId/custo', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const kitId = idNaRota(req, 'kitId');
+  await exigirKitDoCliente(clientId, kitId);
+  const rows = await query(
+    `INSERT INTO produtor_custo_produto (client_id, kit_id, nome_na_fatura, custo_unidade)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (client_id, kit_id) DO UPDATE SET
+       nome_na_fatura = EXCLUDED.nome_na_fatura,
+       custo_unidade = EXCLUDED.custo_unidade,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      clientId, kitId,
+      // O nome como a Red Rock escreve. Sem o vínculo explícito, casar "Divine Purity" com
+      // "Divine Purity Drops" por semelhança acertaria hoje e erraria no dia que aparecesse um
+      // "Divine Purity Capsules" — e erraria calado.
+      texto(req.body?.nome_na_fatura, 'Nome na fatura'),
+      numero(req.body?.custo_unidade ?? 0, 'Custo por unidade', { min: 0, max: 100000 }),
+    ]
+  );
+  res.json(rows[0]);
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Previsão do invoice — escopo do CLIENTE, não de um produto
+//
+// A fatura da Red Rock cobra Divine Purity e Divine Detox na mesma folha. Prever olhando um
+// produto de cada vez daria um número que nunca bateria com papel nenhum.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.get('/clientes/:id/previsao', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  const periodo = from && to && DATA_QUERY_RE.test(from) && DATA_QUERY_RE.test(to) && from <= to
+    ? { from, to }
+    : null;
+  res.json(await preverInvoice(clientId, periodo, await moedaDoCliente(clientId)));
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
