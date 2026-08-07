@@ -1127,7 +1127,18 @@ document.getElementById('btnImportar').addEventListener('click', async () => {
     const btn = document.getElementById('btnImportar');
     btn.disabled = true; btn.textContent = 'Importando…';
     try {
-        const texto = await arq.text();
+        // As três opções de export da Digistore geram encodings diferentes, e o histórico de
+        // vocês mostra que o "CSV for Excel" (Windows-1252) já foi usado. arq.text() decodifica
+        // sempre como UTF-8: num arquivo 1252 isso transforma cada acento em caractere de
+        // substituição em silêncio, e o nome de um afiliado ou produto entraria torto no banco
+        // sem erro nenhum aparecer. Tenta UTF-8 exigindo validade; se não for, relê como 1252.
+        const bytes = await arq.arrayBuffer();
+        let texto;
+        try {
+            texto = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        } catch (_) {
+            texto = new TextDecoder('windows-1252').decode(bytes);
+        }
         const r = await fetch(`/admin/produtor/clientes/${clienteId}/importar?arquivo=${encodeURIComponent(arq.name)}`, {
             method: 'POST', headers: { 'Content-Type': 'text/csv', 'Accept': 'application/json' }, body: texto,
         });
