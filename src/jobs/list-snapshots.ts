@@ -122,13 +122,30 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
 }
 
 export function startListSnapshotJob(): void {
+  // A PRIMEIRA execução depois de subir sempre escreve no log, mesmo sem nada a fazer.
+  //
+  // Antes só logava quando gravava ou falhava, e o resultado foi ficar sem saber se o job tinha
+  // rodado: com todas as listas já em dia ele ficava calado, e silêncio significava as duas coisas
+  // ao mesmo tempo — "não havia nada a gravar" e "o corpo nunca executou". Num job que roda sozinho,
+  // sem ninguém olhando, essas duas precisam ser distinguíveis.
+  //
+  // As execuções seguintes continuam caladas quando não há nada a fazer: 48 linhas por dia dizendo
+  // "nada a fazer" treinaria qualquer um a ignorar o log deste job, que é onde a falha vai aparecer.
+  let primeiraExecucao = true;
   const rodar = async () => {
     try {
       const r = await gravarRetratosDeHoje();
-      if (r.gravadas > 0 || r.falhas > 0) {
-        logger.info(CTX, `Retratos de hoje: ${r.gravadas} gravadas, ${r.jaTinham} já tinham, ${r.falhas} sem contagem`);
+      const total = r.gravadas + r.jaTinham + r.falhas;
+      if (r.gravadas > 0 || r.falhas > 0 || primeiraExecucao) {
+        logger.info(
+          CTX,
+          `Retratos de hoje: ${r.gravadas} gravadas, ${r.jaTinham} já tinham, ${r.falhas} sem contagem ` +
+          `(${total} lista(s) ativa(s))${primeiraExecucao ? ' — primeira verificação após subir' : ''}`
+        );
       }
+      primeiraExecucao = false;
     } catch (err: any) {
+      primeiraExecucao = false;
       // Nunca derruba o servidor: o retrato é para o relatório de amanhã, não para a requisição de
       // agora. Falhar em silêncio ruidoso (log) é melhor que matar o processo.
       logger.error(CTX, `Job de retratos falhou: ${err.message}`);
