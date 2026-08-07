@@ -3005,21 +3005,24 @@ adminRouter.get('/clientes/:id/diagnostico/origem-dos-webhooks', asyncHandler(as
   // Agrupado pelos identificadores que a Digistore manda. COALESCE pra chave ausente virar '(não
   // veio no payload)' em vez de sumir a linha inteira do agrupamento.
   const porOrigem = await query<{
-    vendor: string; publisher: string; produto: string; produto_nome: string;
+    vendor: string; publisher: string; produto: string; produto_nome: string; ipn_config: string;
     eventos: string; primeiro: string; ultimo: string; dias_sem_receber: string;
   }>(
     `SELECT
-       COALESCE(payload->>'vendor_id', payload->>'vendor', '(não veio no payload)') AS vendor,
-       COALESCE(payload->>'publisher_id', payload->>'publisher', '—') AS publisher,
+       -- merchant_id/merchant_name é o que o IPN da Digistore realmente manda; vendor_id não existe
+       -- neste formato (conferido no dump de chaves de um payload real desta integração).
+       COALESCE(payload->>'merchant_id', '(não veio no payload)') AS vendor,
+       COALESCE(payload->>'merchant_name', '—') AS publisher,
        COALESCE(payload->>'product_id', '—') AS produto,
        COALESCE(payload->>'product_name', '—') AS produto_nome,
+       COALESCE(payload->>'ipn_config_id', '—') AS ipn_config,
        COUNT(*) AS eventos,
        MIN(created_at)::date::text AS primeiro,
        MAX(created_at)::text AS ultimo,
        EXTRACT(DAY FROM NOW() - MAX(created_at))::int::text AS dias_sem_receber
      FROM webhook_logs
      WHERE client_id = $1 AND source = 'digistore24' AND payload IS NOT NULL
-     GROUP BY 1, 2, 3, 4
+     GROUP BY 1, 2, 3, 4, 5
      ORDER BY MAX(created_at) DESC`,
     [clientId]
   ).catch(() => []);
@@ -3038,9 +3041,22 @@ adminRouter.get('/clientes/:id/diagnostico/origem-dos-webhooks', asyncHandler(as
     [clientId]
   ).catch(() => []);
 
+  // Resumo por CONTA, no topo. A pergunta é "qual Digistore", e ela se perdia em 38 linhas de
+  // produto: cada produto virava uma linha e a conta aparecia repetida em todas.
+  const porConta = new Map<string, { merchant: string; nome: string; eventos: number; ultimo: string }>();
+  for (const o of porOrigem) {
+    const chave = `${o.vendor}|${o.publisher}`;
+    const atual = porConta.get(chave) ?? { merchant: o.vendor, nome: o.publisher, eventos: 0, ultimo: '' };
+    atual.eventos += parseInt(o.eventos);
+    if (o.ultimo > atual.ultimo) atual.ultimo = o.ultimo;
+    porConta.set(chave, atual);
+  }
+
   res.json({
+    contas_que_enviaram: [...porConta.values()].sort((a, b) => (a.ultimo > b.ultimo ? -1 : 1)),
     como_ler: [
-      'origens[] é agrupado pelos identificadores que a própria Digistore manda no IPN — é a resposta de "qual conta".',
+      'contas_que_enviaram é a resposta direta de "qual Digistore" — merchant_id e merchant_name vêm do próprio IPN.',
+      'origens[] é o detalhe por produto dentro de cada conta.',
       'dias_sem_receber por origem: origem parada enquanto outra continua chegando é entrega interrompida NAQUELA conta, não venda que parou.',
       'chaves_de_um_payload mostra os campos que o IPN realmente traz nesta integração, para conferir se vendor/publisher existem mesmo.',
     ],
@@ -3052,6 +3068,9 @@ adminRouter.get('/clientes/:id/diagnostico/origem-dos-webhooks', asyncHandler(as
       publisher: o.publisher,
       product_id: o.produto,
       product_name: o.produto_nome,
+      // Qual configuração de IPN entregou. Se houver mais de uma, é mais de um cadastro de webhook
+      // apontando pra cá — e uma delas pode ter sido desativada sem a outra.
+      ipn_config_id: o.ipn_config,
       eventos: parseInt(o.eventos),
       primeiro_evento: o.primeiro,
       ultimo_evento: o.ultimo,
