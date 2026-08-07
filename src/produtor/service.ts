@@ -184,6 +184,15 @@ async function agregarVendasPorDia(
   clientId: number,
   kit: { id: number; name: string; external_id: string | null }
 ): Promise<DiaRow[]> {
+  // Mesma fonte da previsão do invoice.
+  //
+  // Sem isto, esta tela lia webhook_logs enquanto a previsão lia as vendas importadas — e como a
+  // conta da Digistore do produto de casa não alimenta a MailX, o resultado era faturamento e
+  // lucro em ZERO ao lado de uma previsão de vinte mil dólares, na mesma tela. Duas fontes para o
+  // mesmo indicador é sempre ruim; com uma delas vazia, é uma tela que se desmente sozinha.
+  const importadas = await agregarVendasImportadas(clientId, kit.id);
+  if (importadas) return importadas;
+
   const rows = await query(`
     WITH oferta AS (
       SELECT id, preco, external_ids
@@ -254,6 +263,80 @@ async function agregarVendasPorDia(
     GROUP BY 1, 2
     ORDER BY 2
   `, [clientId, kit.id, kit.external_id, kit.name]);
+
+  return rows.map((r: any) => ({
+    oferta_id: r.oferta_id == null ? null : Number(r.oferta_id),
+    dia: String(r.dia).slice(0, 10),
+    vendas: parseInt(r.vendas, 10) || 0,
+    receita: num(r.receita),
+    vendas_afiliado: parseInt(r.vendas_afiliado, 10) || 0,
+    receita_afiliado: num(r.receita_afiliado),
+    reembolsos: parseInt(r.reembolsos, 10) || 0,
+    valor_reembolso: num(r.valor_reembolso),
+  }));
+}
+
+/**
+ * Agregação por (oferta, dia) a partir das vendas IMPORTADAS do export da Digistore.
+ *
+ * Devolve null quando não há importação nenhuma — aí quem chama volta para webhook_logs, que é o
+ * caminho dos clientes cujas vendas chegam pelos webhooks da MailX.
+ *
+ * Duas diferenças em relação ao webhook, as duas com efeito no custo:
+ *  - `quantidade` multiplica as unidades (comprar 2× a oferta de 6 potes são 12 potes na fatura);
+ *  - o preço NÃO serve para casar a venda com a oferta quando existe id, porque o `Gross amount`
+ *    da Digistore inclui imposto que muda por estado — no export real, a mesma oferta de 6 potes
+ *    aparece a 234,00, 248,04, 248,27… Casar por preço aqui não encontraria quase nada.
+ */
+async function agregarVendasImportadas(clientId: number, kitId: number): Promise<DiaRow[] | null> {
+  const existe = await queryOne<{ n: string }>(
+    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE client_id = $1`, [clientId]
+  );
+  if (!existe || parseInt(existe.n, 10) === 0) return null;
+
+  const rows = await query(`
+    WITH oferta AS (
+      SELECT id, preco, external_ids FROM produtor_ofertas
+       WHERE client_id = $1 AND kit_id = $2 AND ativo
+    ),
+    casada AS (
+      SELECT v.*, m.oferta_id
+        FROM produtor_vendas v
+        LEFT JOIN LATERAL (
+          SELECT o.id AS oferta_id,
+                 CASE WHEN COALESCE(array_length(o.external_ids,1),0) > 0
+                       AND v.produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
+            FROM oferta o
+           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.produto_id = ANY(o.external_ids))
+              OR (COALESCE(array_length(o.external_ids,1),0) = 0 AND v.valor_bruto IS NOT NULL
+                  AND ROUND(ABS(v.valor_bruto),2) = ROUND(o.preco,2))
+           ORDER BY prioridade, o.id
+           LIMIT 1
+        ) m ON true
+       WHERE v.client_id = $1
+         -- Só o que pertence a este produto: venda casada com oferta dele, ou venda cujo produto
+         -- na fatura é o dele. Sem esse recorte, a tela de um produto mostraria as vendas do outro.
+         AND (m.oferta_id IS NOT NULL OR EXISTS (
+               SELECT 1 FROM produtor_custo_produto c
+                WHERE c.client_id = v.client_id AND c.kit_id = $2
+                  AND LOWER(c.nome_na_fatura) = LOWER(v.produto_nome)
+             ))
+    )
+    SELECT
+      oferta_id,
+      data::text AS dia,
+      COALESCE(SUM(quantidade) FILTER (WHERE tipo = 'pagamento'), 0) AS vendas,
+      COALESCE(SUM(valor_bruto) FILTER (WHERE tipo = 'pagamento'), 0) AS receita,
+      COALESCE(SUM(quantidade) FILTER (
+        WHERE tipo = 'pagamento' AND NULLIF(TRIM(COALESCE(afiliado,'')),'') IS NOT NULL), 0) AS vendas_afiliado,
+      COALESCE(SUM(valor_bruto) FILTER (
+        WHERE tipo = 'pagamento' AND NULLIF(TRIM(COALESCE(afiliado,'')),'') IS NOT NULL), 0) AS receita_afiliado,
+      COUNT(*) FILTER (WHERE tipo IN ('reembolso','chargeback')) AS reembolsos,
+      COALESCE(SUM(ABS(valor_bruto)) FILTER (WHERE tipo IN ('reembolso','chargeback')), 0) AS valor_reembolso
+    FROM casada
+    GROUP BY 1, 2
+    ORDER BY 2
+  `, [clientId, kitId]);
 
   return rows.map((r: any) => ({
     oferta_id: r.oferta_id == null ? null : Number(r.oferta_id),
