@@ -3328,7 +3328,7 @@
                     ? `<div style="margin-top:0.45rem; display:flex; flex-direction:column; gap:0.2rem">` + detalhe.map(f => {
                         const qtd = [];
                         if (f.vendas_fora > 0) qtd.push(`${f.vendas_fora} venda${f.vendas_fora > 1 ? 's' : ''}`);
-                        if (f.recuperacoes_fora > 0) qtd.push(`${f.recuperacoes_fora} recuperação${f.recuperacoes_fora > 1 ? 'ões' : ''}`);
+                        if (f.recuperacoes_fora > 0) qtd.push(`${f.recuperacoes_fora} ${f.recuperacoes_fora > 1 ? 'recuperações' : 'recuperação'}`);
                         return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>
                             — ${qtd.join(' · ')} <span style="opacity:0.75">(${escapeHtml(f.motivo)})</span></div>`;
                       }).join('') + `</div>`
@@ -3858,7 +3858,7 @@
                 let manualClicksHtml;
                 if (typeof cached.clicks === 'number' && cached.clicksIsPeriod) {
                     const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
-                    manualClicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+                    manualClicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} ${clickRatio === 1 ? 'clique' : 'cliques'}/venda` : ''}</small>`;
                 } else if (typeof cached.lifetimeClicks === 'number') {
                     // Cliques de link manual só existem como total vitalício (probes esgotaram a
                     // API) — rotulado, sem razão cliques/venda (janelas diferentes).
@@ -3895,7 +3895,7 @@
             let clicksHtml = '';
             if (typeof cached.clicks === 'number' && cached.clicksIsPeriod) {
                 const clickRatio = vendas > 0 ? Math.round(cached.clicks / vendas) : null;
-                clicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} cliques/venda` : ''}</small>`;
+                clicksHtml = `<small class="envios-clicks">${cached.clicks.toLocaleString('pt-BR')} cliques${clickRatio != null ? ` · ${clickRatio.toLocaleString('pt-BR')} ${clickRatio === 1 ? 'clique' : 'cliques'}/venda` : ''}</small>`;
             } else {
                 clicksHtml = `<small class="envios-clicks-muted" title="A SlickText não retornou os cliques dessa mensagem no período (nenhum link com esse utm_campaign encontrado, ou a consulta falhou).">cliques indisponíveis</small>`;
             }
@@ -3922,7 +3922,7 @@
             // Escopo de workflow inteiro: count e cliques são do período — razões honestas.
             const ratio = vendas > 0 && cached.count > 0 ? Math.round(cached.count / vendas) : null;
             const ratioHtml = ratio != null
-                ? `<small>${ratio.toLocaleString('pt-BR')} envios/venda</small>`
+                ? `<small>${ratio.toLocaleString('pt-BR')} ${ratio === 1 ? 'envio' : 'envios'}/venda</small>`
                 : `<small>envios no período${cached.capped ? ' (parcial)' : ''}</small>`;
 
             // Estampado: vínculo do WORKFLOW inteiro (sem node) — o número soma todas as
