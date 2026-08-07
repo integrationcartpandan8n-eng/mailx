@@ -599,6 +599,138 @@ produtorAdminRouter.post(
   })
 );
 
+/**
+ * Desfazer uma importação.
+ *
+ * Subir o arquivo errado é o erro mais fácil de cometer nesta tela — e sem desfazer, a saída seria
+ * mexer no banco. Cada venda guarda de qual importação veio, então apagar é exato: some o que
+ * aquele arquivo trouxe e nada mais. Venda que veio em DUAS importações (períodos sobrepostos)
+ * pertence à primeira, então desfazer a segunda não a remove — o que é o certo.
+ */
+produtorAdminRouter.delete('/clientes/:id/importacoes/:impId', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const impId = idNaRota(req, 'impId');
+  const apagadas = await query(
+    `DELETE FROM produtor_vendas WHERE client_id = $1 AND importacao_id = $2 RETURNING id`,
+    [clientId, impId]
+  );
+  const rows = await query(
+    `DELETE FROM produtor_importacoes WHERE id = $1 AND client_id = $2 RETURNING arquivo`,
+    [impId, clientId]
+  );
+  if (rows.length === 0) throw new ErroDeEntrada('Importação não encontrada para este cliente.');
+  logger.info(CTX, `Importação ${impId} desfeita: ${apagadas.length} venda(s) removidas`);
+  res.json({ ok: true, vendas_removidas: apagadas.length, arquivo: rows[0].arquivo });
+}));
+
+/**
+ * Ofertas encontradas nas vendas importadas, prontas para cadastrar.
+ *
+ * O produtor tem 15 ofertas, e o dado para todas elas já está no arquivo: o Prd ID identifica a
+ * oferta e a quantidade de potes está no próprio nome ("M3 - Divine Purity Drops (6 Bottles)").
+ * Fazer a pessoa digitar 15 vezes o que o sistema já sabe é trabalho inventado — e cada digitação
+ * é uma chance de errar um id e a venda deixar de casar.
+ *
+ * Não cria nada sozinho: devolve a lista para conferência. Cadastro automático que ninguém revisou
+ * é pior que cadastro manual, porque o erro entra com cara de dado do sistema.
+ */
+produtorAdminRouter.get('/clientes/:id/ofertas-sugeridas', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const rows = await query<{
+    produto_id: string; produto_nome: string; vendas: string; preco_mediano: string; ja_existe: boolean;
+  }>(`
+    SELECT v.produto_id, v.produto_nome,
+           COUNT(*) AS vendas,
+           -- Mediana, não média: o preço varia por imposto estadual em quase toda venda, e a média
+           -- seria puxada pelos extremos. O preço aqui é só referência para quem confere — o
+           -- casamento da venda é pelo Prd ID, que é exato.
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(v.valor_bruto)) AS preco_mediano,
+           EXISTS (
+             SELECT 1 FROM produtor_ofertas o
+              WHERE o.client_id = v.client_id AND v.produto_id = ANY(o.external_ids)
+           ) AS ja_existe
+      FROM produtor_vendas v
+     WHERE v.client_id = $1 AND v.tipo = 'pagamento' AND v.produto_id IS NOT NULL
+     GROUP BY v.client_id, v.produto_id, v.produto_nome
+     ORDER BY COUNT(*) DESC
+  `, [clientId]);
+
+  // Quantidade de potes tirada do próprio nome. Sem isso não dá para saber quantas unidades a
+  // oferta despacha, que é o que multiplica o custo na fatura.
+  const POTES = /\((\d+)\s*(?:bottles?|potes?|unidades?)\)/i;
+
+  res.json(rows.map(r => {
+    const m = (r.produto_nome || '').match(POTES);
+    return {
+      produto_id: r.produto_id,
+      nome: r.produto_nome,
+      vendas: parseInt(r.vendas, 10),
+      preco_referencia: r.preco_mediano == null ? null : parseFloat(r.preco_mediano),
+      // null e não 1: produto sem contagem no nome pode ser digital (não despacha nada) ou ter a
+      // quantidade escrita de outro jeito. Chutar 1 faria o custo sair errado sem ninguém ver.
+      unidades: m ? parseInt(m[1], 10) : null,
+      ja_existe: r.ja_existe,
+    };
+  }));
+}));
+
+/** Cadastra de uma vez as ofertas conferidas na tela. */
+produtorAdminRouter.post('/clientes/:id/ofertas-em-lote', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const itens = Array.isArray(req.body?.ofertas) ? req.body.ofertas : [];
+  if (itens.length === 0) throw new ErroDeEntrada('Nenhuma oferta selecionada.');
+  if (itens.length > 200) throw new ErroDeEntrada('Máximo de 200 ofertas por vez.');
+
+  const criadas: any[] = [];
+  const ignoradas: Array<{ nome: string; motivo: string }> = [];
+  // Cada oferta traz o SEU produto. Um lote inteiro num produto só jogaria as ofertas do upsell
+  // (DivineDetox) dentro do produto principal, e o custo por unidade sairia errado nas duas
+  // pontas sem nada na tela denunciar.
+  const kitsValidos = new Set(
+    (await query<{ id: number }>(`SELECT id FROM kits WHERE client_id = $1`, [clientId])).map(k => k.id)
+  );
+  for (const it of itens) {
+    const nome = String(it?.nome ?? '').trim().slice(0, 255);
+    const unidades = parseInt(it?.unidades, 10);
+    const produtoId = String(it?.produto_id ?? '').trim();
+    const kitId = parseInt(it?.kit_id, 10);
+    if (!nome || !produtoId) { ignoradas.push({ nome: nome || '(sem nome)', motivo: 'faltou nome ou id do gateway' }); continue; }
+    if (!kitsValidos.has(kitId)) { ignoradas.push({ nome, motivo: 'produto não escolhido ou não pertence a este cliente' }); continue; }
+    if (!Number.isInteger(unidades) || unidades < 1) {
+      ignoradas.push({ nome, motivo: 'quantidade de unidades desconhecida — informe manualmente' });
+      continue;
+    }
+    const rows = await query(
+      `INSERT INTO produtor_ofertas (client_id, kit_id, nome, unidades, preco,
+         taxa_gateway_pct, comissao_afiliado_pct, external_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [clientId, kitId, nome, unidades,
+       Number.isFinite(parseFloat(it?.preco)) ? parseFloat(it.preco) : 0,
+       Number.isFinite(parseFloat(it?.taxa_gateway_pct)) ? parseFloat(it.taxa_gateway_pct) : 0,
+       0, [produtoId]]
+    );
+    criadas.push(mapOferta(rows[0]));
+  }
+  logger.info(CTX, `${criadas.length} oferta(s) cadastradas em lote (cliente ${clientId})`);
+  res.status(201).json({ criadas, ignoradas });
+}));
+
+/** Nomes de produto vistos nas vendas e nas faturas — para não digitar de cabeça. */
+produtorAdminRouter.get('/clientes/:id/sugestoes', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const [dasVendas, dasFaturas] = await Promise.all([
+    query<{ nome: string }>(
+      `SELECT DISTINCT produto_nome AS nome FROM produtor_vendas
+        WHERE client_id = $1 AND produto_nome IS NOT NULL ORDER BY 1`, [clientId]),
+    query<{ nome: string }>(
+      `SELECT DISTINCT fornecedor AS nome FROM produtor_faturas WHERE client_id = $1 ORDER BY 1`, [clientId]),
+  ]);
+  res.json({
+    produtos_nas_vendas: dasVendas.map(r => r.nome),
+    fornecedores: dasFaturas.map(r => r.nome),
+  });
+}));
+
 produtorAdminRouter.get('/clientes/:id/importacoes', asyncHandler(async (req, res) => {
   const clientId = idNaRota(req, 'id');
   const rows = await query(

@@ -140,6 +140,51 @@
         .previa .linha b { font-family: var(--mono); color: var(--text); }
         .previa .total { border-top: 1px solid var(--border); padding-top: 0.4rem; font-weight: 700; color: var(--text); }
 
+        /* ── Guia de etapas: heuristica 1 (status do sistema) e 8 (minimalismo).
+           Antes a tela abria com cinco faixas de aviso empilhadas e nenhuma dizia por onde
+           comecar. Agora mostra UMA acao — a proxima — e o resto fica atras de um toggle. ── */
+        .guia {
+            background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 1.1rem 1.25rem; margin-bottom: 1.25rem;
+        }
+        .guia.pronto { border-color: var(--success); background: linear-gradient(180deg, var(--success-bg), transparent); }
+        .passos { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+        .passo {
+            display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; font-weight: 650;
+            color: var(--text-muted); background: var(--surface-2);
+            border: 1px solid var(--border); border-radius: 999px; padding: 0.28rem 0.7rem;
+        }
+        .passo .n {
+            width: 1.15rem; height: 1.15rem; border-radius: 50%; display: grid; place-items: center;
+            background: var(--border); color: var(--text-dim); font-size: 0.62rem; flex-shrink: 0;
+        }
+        .passo.feito { color: var(--success); border-color: rgba(0,214,143,0.35); }
+        .passo.feito .n { background: var(--success); color: #04231a; }
+        .passo.agora { color: #fff; background: var(--accent); border-color: var(--accent); }
+        .passo.agora .n { background: rgba(255,255,255,0.25); color: #fff; }
+        .guia h2 { font-size: 1rem; font-weight: 750; letter-spacing: -0.01em; margin-bottom: 0.3rem; }
+        .guia p { font-size: 0.82rem; color: var(--text-dim); line-height: 1.55; max-width: 68ch; }
+        .guia .acoes { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.85rem; }
+
+        .toggle-detalhes {
+            font: inherit; font-size: 0.74rem; font-weight: 650; cursor: pointer; margin-top: 0.7rem;
+            background: transparent; border: 0; color: var(--accent-light); padding: 0;
+            display: inline-flex; align-items: center; gap: 0.35rem;
+        }
+        .detalhes-fechado { display: none; }
+
+        /* Painel de ofertas sugeridas — heuristica 7 (flexibilidade): 15 ofertas de uma vez,
+           em vez de 15 formularios. */
+        .sugestao-linha {
+            display: grid; grid-template-columns: auto 1fr 5rem 6rem; gap: 0.7rem; align-items: center;
+            padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem;
+        }
+        @media (max-width: 40rem) { .sugestao-linha { grid-template-columns: auto 1fr; } }
+        .sugestao-linha input[type=checkbox] { width: auto; }
+        .sugestao-linha .sn { font-weight: 650; }
+        .sugestao-linha .sn small { display: block; color: var(--text-muted); font-size: 0.68rem; font-weight: 500; }
+        .sugestao-linha.ja { opacity: 0.45; }
+
         .aviso {
             display: flex; gap: 0.6rem; align-items: flex-start;
             background: var(--warning-bg); border: 1px solid var(--warning); border-radius: var(--radius-sm);
@@ -181,6 +226,13 @@
         <button class="btn mini" style="margin-left:auto" onclick="carregarTudo()">Tentar de novo</button>
     </div>
 
+    <div class="guia" id="guia" style="display:none">
+        <div class="passos" id="passos"></div>
+        <h2 id="guiaTitulo"></h2>
+        <p id="guiaTexto"></p>
+        <div class="acoes" id="guiaAcoes"></div>
+    </div>
+
     <div class="barra-periodo">
         <span class="rot"><i class="fas fa-box"></i> Produto</span>
         <div style="min-width:16rem; flex:0 1 22rem"><select id="seletorProduto"></select></div>
@@ -195,6 +247,7 @@
     </div>
 
     <div id="ressalvas"></div>
+    <button type="button" class="toggle-detalhes" id="toggleRessalvas" style="display:none; margin-bottom:1rem"></button>
 
     <div class="kpis" id="kpis"></div>
 
@@ -271,6 +324,17 @@
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-plus"></i> Cadastrar oferta</div>
                 <span class="card-sub">o custo entra uma vez e vale para todas as vendas dela</span>
+            </div>
+            <div class="card-body" id="painelSugestoes" style="display:none; border-bottom:1px solid var(--border)">
+                <div style="font-size:0.8rem; color:var(--text-soft); margin-bottom:0.6rem">
+                    <b>Encontrei estas ofertas nas vendas importadas.</b> Nome, quantidade de potes e id
+                    do gateway saíram do próprio arquivo — confira e cadastre de uma vez.
+                </div>
+                <div id="listaSugestoes"></div>
+                <div style="display:flex; gap:0.6rem; margin-top:0.8rem; flex-wrap:wrap">
+                    <button class="btn" type="button" id="btnCadastrarLote">Cadastrar selecionadas</button>
+                    <button class="btn ghost" type="button" id="btnFecharSugestoes">Cadastrar uma a uma</button>
+                </div>
             </div>
             <div class="card-body">
                 <form id="formOferta">
@@ -353,7 +417,8 @@
                             </div>
                             <div class="campo">
                                 <label for="cNomeFatura">Nome na fatura</label>
-                                <input id="cNomeFatura" type="text" placeholder="Divine Purity Drops" required>
+                                <input id="cNomeFatura" type="text" placeholder="Divine Purity Drops" required list="nomesDeProduto">
+                                <datalist id="nomesDeProduto"></datalist>
                             </div>
                         </div>
                         <div class="campo">
@@ -470,7 +535,8 @@
                 <form id="formFatura">
                     <div class="campo">
                         <label for="gFornecedor">Fornecedor</label>
-                        <input id="gFornecedor" type="text" required placeholder="Nome do fulfillment">
+                        <input id="gFornecedor" type="text" required placeholder="Nome do fulfillment" list="nomesDeFornecedor">
+                        <datalist id="nomesDeFornecedor"></datalist>
                     </div>
                     <div class="dupla">
                         <div class="campo">
@@ -545,6 +611,9 @@ let tabelaFulfillment = null;   // preços do fornecedor (null = não cadastrada
 let custosProduto = [];         // custo unitário por produto
 let previsao = null;
 let produtosDoCliente = [];
+let sugestoes = [];       // ofertas encontradas nas vendas importadas
+let faturasDoKit = [];
+let importacoes = [];
 
 /** Custo unitário do produto selecionado. null = não cadastrado — diferente de zero. */
 function custoDoProduto() {
@@ -673,10 +742,24 @@ async function carregarResumo() {
         ]);
         tabelaFulfillment = ff.tabela;
         custosProduto = ff.custos;
+        // Sugestões e listas de apoio não podem derrubar a tela: são conforto, não o número.
+        try {
+            [sugestoes, importacoes] = await Promise.all([
+                api(`/admin/produtor/clientes/${clienteId}/ofertas-sugeridas`),
+                api(`/admin/produtor/clientes/${clienteId}/importacoes`),
+            ]);
+            const sug = await api(`/admin/produtor/clientes/${clienteId}/sugestoes`);
+            document.getElementById('nomesDeProduto').innerHTML =
+                (sug.produtos_nas_vendas || []).map(n => `<option value="${esc(n)}">`).join('');
+            document.getElementById('nomesDeFornecedor').innerHTML =
+                (sug.fornecedores || []).map(n => `<option value="${esc(n)}">`).join('');
+        } catch (_) { sugestoes = []; importacoes = []; }
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
         renderPrevisao();
         renderFulfillment();
         renderRessalvas();
+        renderGuia();
+        renderSugestoes();
         renderKpis();
         renderPrevistoVsReal();
         renderOfertas();
@@ -693,6 +776,158 @@ async function carregarResumo() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Guia de etapas — heurísticas 1 (status), 5 (prevenção) e 8 (minimalismo).
+ *
+ * A tela tem seis cards e só faz sentido preenchidos numa ordem. Antes ela abria com cinco faixas
+ * de aviso e nenhuma dizia por onde começar; quem chegava não tinha como saber que cadastrar
+ * oferta antes do custo não produz margem nenhuma. Agora existe UMA próxima ação por vez, e as
+ * bolinhas mostram onde você está no caminho.
+ */
+function renderGuia() {
+    const temVendas = (previsao?.transacoes ?? 0) > 0 || importacoes.length > 0;
+    const temCusto = custosProduto.length > 0;
+    const temTabela = !!tabelaFulfillment;
+    const temOfertas = ofertas.length > 0;
+    const temFatura = faturasDoKit.length > 0;
+
+    const etapas = [
+        { nome: 'Importar vendas', feito: temVendas },
+        { nome: 'Custo do produto', feito: temCusto },
+        { nome: 'Preços do fulfillment', feito: temTabela },
+        { nome: 'Ofertas', feito: temOfertas },
+        { nome: 'Faturas', feito: temFatura },
+    ];
+    const iAtual = etapas.findIndex(e => !e.feito);
+
+    document.getElementById('passos').innerHTML = etapas.map((e, i) => `
+        <span class="passo ${e.feito ? 'feito' : (i === iAtual ? 'agora' : '')}">
+            <span class="n">${e.feito ? '<i class="fas fa-check" style="font-size:0.55rem"></i>' : i + 1}</span>
+            ${esc(e.nome)}
+        </span>`).join('');
+
+    const rolarPara = (id) => `document.getElementById('${id}').scrollIntoView({behavior:'smooth',block:'center'})`;
+    const passos = [
+        {
+            titulo: 'Comece importando as vendas',
+            texto: 'Exporte as transações da Digistore e suba o arquivo. É de onde sai tudo: quantas unidades foram vendidas, quantos pedidos foram despachados e o faturamento. Sem isso não há o que prever.',
+            acao: `<button class="btn" onclick="${rolarPara('arquivoCsv')}">Ir para a importação</button>`,
+        },
+        {
+            titulo: 'Diga quanto custa cada unidade',
+            texto: 'O custo por pote, com o nome exatamente como aparece na fatura do fulfillment. É a maior fatia do invoice — sem ele a previsão sai muito menor do que a realidade.',
+            acao: `<button class="btn" onclick="${rolarPara('cNomeFatura')}">Cadastrar custo</button>`,
+        },
+        {
+            titulo: 'Cadastre os preços do fulfillment',
+            texto: 'Pick por unidade, taxa por pedido, embalagem e a faixa de frete. Valem para todas as ofertas e completam a conta do invoice.',
+            acao: `<button class="btn" onclick="${rolarPara('tFornecedor')}">Cadastrar preços</button>`,
+        },
+        {
+            titulo: 'Cadastre as ofertas',
+            texto: sugestoes.filter(x => !x.ja_existe).length > 0
+                ? `Encontrei ${sugestoes.filter(x => !x.ja_existe).length} oferta(s) nas vendas importadas, com nome, potes e id do gateway já preenchidos. É só conferir.`
+                : 'Cada oferta diz quantas unidades saem por venda — é o que transforma venda em potes despachados.',
+            acao: `<button class="btn" onclick="${rolarPara('painelSugestoes')}">Ver ofertas encontradas</button>`,
+        },
+        {
+            titulo: 'Lance as faturas que já chegaram',
+            texto: 'Com as faturas lançadas, a tela passa a mostrar previsto contra real e a diferença — que é o número que diz se a previsão está boa.',
+            acao: `<button class="btn" onclick="${rolarPara('gFornecedor')}">Lançar fatura</button>`,
+        },
+    ];
+
+    const g = document.getElementById('guia');
+    g.style.display = 'block';
+    if (iAtual === -1) {
+        g.classList.add('pronto');
+        document.getElementById('guiaTitulo').textContent = 'Tudo cadastrado';
+        document.getElementById('guiaTexto').textContent =
+            'A previsão do invoice e o previsto vs real estão valendo. Suba um export novo sempre que quiser atualizar — período repetido não duplica venda.';
+        document.getElementById('guiaAcoes').innerHTML = '';
+    } else {
+        g.classList.remove('pronto');
+        document.getElementById('guiaTitulo').textContent = `Próximo passo: ${passos[iAtual].titulo}`;
+        document.getElementById('guiaTexto').textContent = passos[iAtual].texto;
+        document.getElementById('guiaAcoes').innerHTML = passos[iAtual].acao;
+    }
+}
+
+/**
+ * Palpite de a qual produto a oferta pertence, comparando o nome dela com o nome que o produto
+ * tem NA FATURA. Só palpite: quem decide é quem confere, no seletor de cada linha. Cadastrar em
+ * lote no produto errado colocaria as ofertas do upsell dentro do produto principal, e o custo
+ * por unidade sairia errado nos dois sem nada na tela denunciar.
+ */
+function palpiteProduto(sug) {
+    const chave = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const n = chave(sug.nome);
+    // Do nome mais longo para o mais curto: "divinepuritydrops" tem que ganhar de "divinepurity".
+    const candidatos = custosProduto
+        .map(c => ({ kit_id: c.kit_id, k: chave(c.nome_na_fatura) }))
+        .filter(c => c.k && n.includes(c.k))
+        .sort((a, b) => b.k.length - a.k.length);
+    if (candidatos.length) return candidatos[0].kit_id;
+    const porNome = produtosDoCliente
+        .map(p => ({ id: p.id, k: chave(p.nome) }))
+        .filter(p => p.k && n.includes(p.k))
+        .sort((a, b) => b.k.length - a.k.length);
+    return porNome.length ? porNome[0].id : kitId;
+}
+
+/** Heurística 7: as 15 ofertas de uma vez, com o dado que o arquivo já tem. */
+function renderSugestoes() {
+    const novas = sugestoes.filter(x => !x.ja_existe);
+    const painel = document.getElementById('painelSugestoes');
+    if (novas.length === 0) { painel.style.display = 'none'; return; }
+    painel.style.display = 'block';
+    document.getElementById('listaSugestoes').innerHTML = sugestoes.map((x, i) => `
+        <div class="sugestao-linha ${x.ja_existe ? 'ja' : ''}">
+            <input type="checkbox" data-i="${i}" ${x.ja_existe || x.unidades == null ? 'disabled' : 'checked'}>
+            <span class="sn">${esc(x.nome)}
+                <small>${inteiro(x.vendas)} venda(s) · id ${esc(x.produto_id)} · ${x.unidades == null
+                    ? '<span style="color:var(--warning)">sem contagem de unidades no nome — cadastre manualmente</span>'
+                    : inteiro(x.unidades) + ' unidade(s) por venda'}${x.ja_existe ? ' · já cadastrada' : ''}</small></span>
+            <select data-produto="${i}" ${x.ja_existe ? 'disabled' : ''} style="font-size:0.72rem; padding:0.25rem 0.4rem">
+                ${produtosDoCliente.map(pr => `<option value="${pr.id}" ${pr.id === palpiteProduto(x) ? 'selected' : ''}>${esc(pr.nome)}</option>`).join('')}
+            </select>
+            <span class="num">${fmt0(x.preco_referencia)}</span>
+        </div>`).join('');
+}
+
+document.getElementById('btnFecharSugestoes')?.addEventListener('click', () => {
+    document.getElementById('painelSugestoes').style.display = 'none';
+});
+
+document.getElementById('btnCadastrarLote')?.addEventListener('click', async () => {
+    const marcados = [...document.querySelectorAll('#listaSugestoes input[type=checkbox]:checked')]
+        .map(c => ({ i: parseInt(c.dataset.i, 10), x: sugestoes[parseInt(c.dataset.i, 10)] }));
+    if (marcados.length === 0) { mostrarErro('Nenhuma oferta selecionada.'); return; }
+    const btn = document.getElementById('btnCadastrarLote');
+    btn.disabled = true; btn.textContent = 'Cadastrando…';
+    try {
+        const taxa = parseFloat(document.getElementById('fTaxa').value) || 0;
+        const r = await api(`/admin/produtor/clientes/${clienteId}/ofertas-em-lote`, {
+            method: 'POST',
+            body: JSON.stringify({
+                ofertas: marcados.map(({ x, i }) => ({
+                    nome: x.nome, unidades: x.unidades, produto_id: x.produto_id,
+                    kit_id: parseInt(document.querySelector(`[data-produto="${i}"]`).value, 10),
+                    preco: x.preco_referencia, taxa_gateway_pct: taxa,
+                })),
+            }),
+        });
+        // O que NÃO entrou aparece com o motivo: cadastro em lote que só diz "pronto" esconde
+        // justamente a oferta que ficou de fora.
+        if (r.ignoradas?.length) {
+            mostrarErro(`${r.ignoradas.length} oferta(s) não entraram: ` +
+                r.ignoradas.map(i => `${i.nome} (${i.motivo})`).join('; '));
+        }
+        await carregarResumo();
+    } catch (e) { mostrarErro(e.message); }
+    finally { btn.disabled = false; btn.textContent = 'Cadastrar selecionadas'; }
+});
+
 function renderPrevisao() {
     document.getElementById('escopoPrevisao').textContent = rotuloPeriodo();
     const p = previsao;
@@ -793,11 +1028,29 @@ function editarCusto(kid) {
     document.getElementById('cNomeFatura').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
+let ressalvasAbertas = false;
 function renderRessalvas() {
-    document.getElementById('ressalvas').innerHTML = (resumo.ressalvas || []).map(r =>
-        `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(r)}</span></div>`
-    ).join('');
+    // Heurística 8: cinco faixas empilhadas antes de qualquer número é ruído, e ruído faz a
+    // pessoa parar de ler os avisos — inclusive o que importa. Mostra a primeira e esconde o
+    // resto atrás de um toggle, sem apagar nada.
+    const lista = resumo.ressalvas || [];
+    const btn = document.getElementById('toggleRessalvas');
+    const visiveis = ressalvasAbertas ? lista : lista.slice(0, 1);
+    document.getElementById('ressalvas').innerHTML = visiveis.map(r =>
+        `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(r)}</span></div>`).join('');
+    if (lista.length > 1) {
+        btn.style.display = 'inline-flex';
+        btn.innerHTML = ressalvasAbertas
+            ? '<i class="fas fa-chevron-up"></i> Esconder observações'
+            : `<i class="fas fa-chevron-down"></i> Ver mais ${lista.length - 1} observação(ões) sobre estes números`;
+    } else {
+        btn.style.display = 'none';
+    }
 }
+document.getElementById('toggleRessalvas').addEventListener('click', () => {
+    ressalvasAbertas = !ressalvasAbertas;
+    renderRessalvas();
+});
 
 function renderKpis() {
     const f = resumo.faturamento, res = resumo.resultado;
@@ -965,6 +1218,7 @@ function renderOfertas() {
 
 async function renderFaturas() {
     const faturas = await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/faturas`);
+    faturasDoKit = faturas;
     document.getElementById('corpoFaturas').innerHTML = faturas.length === 0
         ? `<tr><td colspan="7" class="vazio">Nenhuma fatura lançada. Sem ela, o custo da tela é previsão.</td></tr>`
         : faturas.map(f => `<tr>
@@ -1170,17 +1424,31 @@ document.getElementById('btnImportar').addEventListener('click', async () => {
     }
 });
 
+/** Heurística 3: subir o arquivo errado precisa ter volta, senão a saída é mexer no banco. */
+async function desfazerImport(id, arquivo, gravadas) {
+    if (!confirm(`Desfazer a importação de "${arquivo}"?\n\n${gravadas} venda(s) serão removidas. ` +
+                 `As que já tinham vindo em outra importação continuam — elas pertencem à primeira.`)) return;
+    try {
+        const r = await api(`/admin/produtor/clientes/${clienteId}/importacoes/${id}`, { method: 'DELETE' });
+        document.getElementById('resultadoImport').innerHTML =
+            `<div class="aviso"><i class="fas fa-rotate-left"></i><span>Importação desfeita: ${inteiro(r.vendas_removidas)} venda(s) removidas.</span></div>`;
+        await carregarResumo();
+        await carregarHistoricoImport();
+    } catch (e) { mostrarErro(e.message); }
+}
+
 async function carregarHistoricoImport() {
     try {
         const lista = await api(`/admin/produtor/clientes/${clienteId}/importacoes`);
         document.getElementById('historicoImport').innerHTML = lista.length === 0 ? '' : `
             <div class="scroll"><table>
-                <thead><tr><th>Arquivo</th><th>Período</th><th>Gravadas</th><th>Repetidas</th></tr></thead>
+                <thead><tr><th>Arquivo</th><th>Período</th><th>Gravadas</th><th>Repetidas</th><th></th></tr></thead>
                 <tbody>${lista.map(i => `<tr>
                     <td class="nome-linha">${esc(i.arquivo)}</td>
                     <td>${dataBR(i.periodo_inicio)} – ${dataBR(i.periodo_fim)}</td>
                     <td class="num">${inteiro(i.linhas_gravadas)}</td>
                     <td class="num">${inteiro(i.linhas_repetidas)}</td>
+                    <td><button class="btn mini ghost" onclick="desfazerImport(${i.id}, '${esc(i.arquivo).replace(/'/g, "&#39;")}', ${i.linhas_gravadas})">Desfazer</button></td>
                 </tr>`).join('')}</tbody>
             </table></div>`;
     } catch (e) { /* histórico é acessório: não derruba a tela */ }
