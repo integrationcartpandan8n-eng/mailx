@@ -281,8 +281,18 @@ async function vendasImportadasPorDia(
   // Pedidos distintos por DIA, numa consulta própria. Contar dentro do agrupamento por produto
   // somaria o mesmo pedido uma vez para cada produto que ele leva — e é justamente o pedido com
   // upsell, o caso que a fatura mostrou (106 pedidos onde as transações davam 141).
+  //
+  // O upsell da Digistore vem com Order ID PRÓPRIO, derivado do principal: a compra QEQS3PZS gera
+  // a QEQS3PZS1. Confirmado no export real — os ids têm 8 ou 9 caracteres, e todo id de 9 termina
+  // em dígito e tem um de 8 correspondente. O fulfillment despacha os dois numa caixa só e cobra
+  // um pedido, então contar os ids crus cobraria taxa e embalagem em dobro: no arquivo de vocês
+  // são 889 transações para 710 despachos, 141 pedidos com upsell junto.
+  //
+  // O corte só acontece quando sobram 8+ caracteres antes dos dígitos finais, para não mutilar um
+  // id curto que legitimamente termine em número.
   const pedidosRows = await query(`
-    SELECT data::text AS dia, COUNT(DISTINCT COALESCE(pedido_id, transacao_id)) AS pedidos
+    SELECT data::text AS dia,
+           COUNT(DISTINCT COALESCE(regexp_replace(pedido_id, '^(.{8,})\\d+$', '\\1'), transacao_id)) AS pedidos
       FROM produtor_vendas v
      WHERE v.client_id = $1 AND v.tipo = 'pagamento' ${filtro}
      GROUP BY 1
