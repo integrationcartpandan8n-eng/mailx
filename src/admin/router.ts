@@ -1961,14 +1961,33 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // os produtos (achado da auditoria: número diferente na mesma tela sem explicação vira dúvida).
   const smsSegParams: (string | number)[] = [clientId];
   const smsSegPeriod = periodSql(period, smsSegParams);
+  // ESCOPO PELA AUTOMAÇÃO DE ORIGEM, não pelo nome do produto.
+  //
+  // Antes: a venda entrava na conta se o PRODUTO tivesse lista da SlickText vinculada. Isso funciona
+  // pra produto de entrada e quebra pra upsell, que nunca vai ter lista própria: ninguém abandona um
+  // carrinho de NightCalm — a pessoa entra pelo fluxo do NeuroMind, recebe a oferta do upsell ali
+  // dentro, e o lead dela está na lista do NeuroMind. Exigir lista do NightCalm era exigir uma coisa
+  // que não existe e não deveria existir. No cliente de referência isso jogava 64 vendas e 46
+  // recuperações fora da tabela em 30 dias, todas de upsell.
+  //
+  // Agora: a venda entra se a MENSAGEM que a gerou está vinculada a uma automação (existe em
+  // sms_campaign_map). É o que alinha numerador e denominador de verdade — a venda veio de um fluxo
+  // cujas listas estão sendo contadas nos leads. Upsell entra pelo fluxo que o vendeu, que é onde o
+  // lead realmente está.
+  //
+  // O que continua fora, e a nota da tela lista: venda de SMS sem mensagem vinculada. Aí não se sabe
+  // de qual automação veio, então não há denominador a que ela pertença.
+  const ESCOPO_POR_AUTOMACAO = `EXISTS (
+    SELECT 1 FROM sms_campaign_map m
+    WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign
+  )`;
   const smsSeg = await queryOne<{
     rec_escopo: string; rec_total: string; compra_escopo: string; compra_total: string;
   }>(`
     SELECT
-      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
-        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL)) AS rec_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_compra_id IS NOT NULL)) AS compra_escopo,
+      COUNT(*) FILTER (WHERE ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
       COUNT(*) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
@@ -1988,45 +2007,40 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const foraParams: (string | number)[] = [clientId];
   const foraPeriod = periodSql(period, foraParams);
   const foraDetalhe = await query<{
-    produto: string | null; rec_fora: string; compra_fora: string; motivo: string;
+    produto: string | null; utm: string | null; rec_fora: string; compra_fora: string; motivo: string;
   }>(`
     WITH vendas AS (
-      SELECT product_name, (${SQL_IS_RECOVERY}) AS is_rec
+      SELECT product_name, utm_campaign, (${SQL_IS_RECOVERY}) AS is_rec,
+             EXISTS (SELECT 1 FROM sms_campaign_map m
+                     WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign) AS vinculada
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
         ${foraPeriod ? `AND ${foraPeriod}` : ''}
     )
     SELECT
       v.product_name AS produto,
-      COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
-        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-          AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name
-      )) AS rec_fora,
-      COUNT(*) FILTER (WHERE NOT EXISTS (
-        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-          AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name
-      )) AS compra_fora,
+      v.utm_campaign AS utm,
+      COUNT(*) FILTER (WHERE v.is_rec) AS rec_fora,
+      COUNT(*) AS compra_fora,
+      -- Agora que o escopo é pela automação, o motivo de ficar fora é sempre o mesmo: não há
+      -- mensagem vinculada. O que muda é o que fazer, e isso depende de existir utm_campaign.
       CASE
-        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name)
-          THEN 'produto não cadastrado no dashboard'
-        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name AND k.enabled = true)
-          THEN 'produto cadastrado mas desativado'
-        ELSE 'produto ativado, mas sem lista da SlickText vinculada'
+        WHEN v.utm_campaign IS NULL OR TRIM(v.utm_campaign) = ''
+          THEN 'venda sem utm_campaign — o link não identifica a mensagem'
+        ELSE 'mensagem não vinculada a nenhuma automação — rode o Auto-vincular'
       END AS motivo
     FROM vendas v
-    GROUP BY v.product_name
-    HAVING COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
-             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-               AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name)) > 0
-        OR COUNT(*) FILTER (WHERE NOT EXISTS (
-             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-               AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name)) > 0
-    ORDER BY 3 DESC, 2 DESC
+    WHERE NOT v.vinculada
+    GROUP BY v.product_name, v.utm_campaign
+    ORDER BY 4 DESC, 3 DESC
     LIMIT 12
   `, foraParams).catch(() => []);
 
+  // Agrupado por produto E mensagem: com escopo por automação, saber a MENSAGEM é o que permite
+  // agir (é o que se vincula), e o produto é o que identifica a venda pra quem lê.
   const smsSegForaDetalhe = foraDetalhe.map(f => ({
     produto: f.produto || '(sem nome de produto no webhook)',
+    mensagem: f.utm || null,
     recuperacoes_fora: parseInt(f.rec_fora),
     vendas_fora: parseInt(f.compra_fora),
     motivo: f.motivo,

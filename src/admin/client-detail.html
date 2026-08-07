@@ -3300,7 +3300,7 @@
                     el.innerHTML = `Leads: entraram entre ${fmtData(periodo.de)} e ${fmtData(periodo.ate)} <span class="kpi-tip" tabindex="0" data-tip="Faltou o retrato de um dos dias exatos do filtro, então foi usado o retrato mais próximo dentro de 3 dias. Isso deixa a janela dos leads MAIOR que a das vendas, e a taxa fica subestimada: mais leads no denominador para as mesmas vendas. Escolha um período cujas pontas tenham retrato para a taxa ficar exata.">ⓘ</span> · <span style="color:var(--warning)">janela maior que o filtro · taxa subestimada</span>`;
                     return;
                 }
-                el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. Ambos os lados contam só os produtos com lista vinculada, pra comparar o mesmo conjunto.">ⓘ</span> · Vendas: do período · taxa exata`;
+                el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. As vendas contam as que vieram de uma automação vinculada, que é onde o lead da pessoa está — inclusive upsell, que não tem lista própria.">ⓘ</span> · Vendas: do período · taxa exata`;
                 return;
             }
             if (seg.leads_source === 'unavailable') {
@@ -3314,7 +3314,7 @@
             const retratosTxt = r
                 ? ` · retrato diário das listas desde ${fmtData(r.primeiro_retrato)} (${r.dias_com_retrato} dia${r.dias_com_retrato === 1 ? '' : 's'})`
                 : '';
-            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
+            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. As vendas contam as que vieram de uma automação vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
         }
 
         function renderConversaoSegmentoTable(tbodyId, cs) {
@@ -3390,7 +3390,12 @@
                         const qtd = [];
                         if (f.vendas_fora > 0) qtd.push(`${f.vendas_fora} venda${f.vendas_fora > 1 ? 's' : ''}`);
                         if (f.recuperacoes_fora > 0) qtd.push(`${f.recuperacoes_fora} ${f.recuperacoes_fora > 1 ? 'recuperações' : 'recuperação'}`);
-                        return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>
+                        // A MENSAGEM entra ao lado do produto porque, com escopo por automação, é
+                        // a mensagem que se vincula — é o que a pessoa precisa procurar pra resolver.
+                        const msg = f.mensagem
+                            ? ` <span style="font-family:monospace; font-size:0.68rem; opacity:0.8">${escapeHtml(f.mensagem)}</span>`
+                            : '';
+                        return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>${msg}
                             — ${qtd.join(' · ')} <span style="opacity:0.75">(${escapeHtml(f.motivo)})</span></div>`;
                       }).join('') + `</div>`
                     : '';
