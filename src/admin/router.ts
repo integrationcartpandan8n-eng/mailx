@@ -2880,6 +2880,93 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/diagnostico/origem-dos-webhooks - DE QUAL conta Digistore vêm os
+// webhooks, e quando cada uma parou de mandar.
+//
+// Pergunta que apareceu na operação: "qual Digistore, a nossa ou a do outro produtor?". Tinha
+// resposta exata no banco desde sempre — o payload cru do IPN fica guardado em webhook_logs.payload,
+// e o Digistore manda vendor/publisher/product em cada chamada. Sem isso a resposta seria
+// especulação sobre a conta de alguém.
+//
+// Serve para duas coisas ao mesmo tempo: dizer de quem é a conta, e mostrar QUANDO cada origem
+// recebeu o último webhook. Uma origem cujo último evento é de dias atrás enquanto outra continua
+// chegando é entrega interrompida naquela conta específica, não venda que parou.
+adminRouter.get('/clientes/:id/diagnostico/origem-dos-webhooks', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+
+  // As chaves reais de UM payload, sem assumir nome de campo: o IPN da Digistore muda de formato
+  // entre versões, e chutar nome de campo foi o que já produziu diagnóstico vazio antes.
+  const amostra = await queryOne<{ chaves: string[]; quando: string }>(
+    `SELECT ARRAY(SELECT jsonb_object_keys(payload)) AS chaves, created_at::text AS quando
+     FROM webhook_logs
+     WHERE client_id = $1 AND payload IS NOT NULL AND source = 'digistore24'
+     ORDER BY created_at DESC LIMIT 1`,
+    [clientId]
+  ).catch(() => null);
+
+  // Agrupado pelos identificadores que a Digistore manda. COALESCE pra chave ausente virar '(não
+  // veio no payload)' em vez de sumir a linha inteira do agrupamento.
+  const porOrigem = await query<{
+    vendor: string; publisher: string; produto: string; produto_nome: string;
+    eventos: string; primeiro: string; ultimo: string; dias_sem_receber: string;
+  }>(
+    `SELECT
+       COALESCE(payload->>'vendor_id', payload->>'vendor', '(não veio no payload)') AS vendor,
+       COALESCE(payload->>'publisher_id', payload->>'publisher', '—') AS publisher,
+       COALESCE(payload->>'product_id', '—') AS produto,
+       COALESCE(payload->>'product_name', '—') AS produto_nome,
+       COUNT(*) AS eventos,
+       MIN(created_at)::date::text AS primeiro,
+       MAX(created_at)::text AS ultimo,
+       EXTRACT(DAY FROM NOW() - MAX(created_at))::int::text AS dias_sem_receber
+     FROM webhook_logs
+     WHERE client_id = $1 AND source = 'digistore24' AND payload IS NOT NULL
+     GROUP BY 1, 2, 3, 4
+     ORDER BY MAX(created_at) DESC`,
+    [clientId]
+  ).catch(() => []);
+
+  // Último webhook por tipo de evento: uma conta pode continuar mandando reembolso e ter parado de
+  // mandar pagamento, e o total geral esconderia isso.
+  const porEvento = await query<{ event_type: string; eventos: string; ultimo: string }>(
+    `SELECT event_type, COUNT(*) AS eventos, MAX(created_at)::text AS ultimo
+     FROM webhook_logs WHERE client_id = $1
+     GROUP BY event_type ORDER BY MAX(created_at) DESC`,
+    [clientId]
+  ).catch(() => []);
+
+  const lojas = await query<{ shop_slug: string; platform: string; display_name: string | null }>(
+    `SELECT shop_slug, platform, display_name FROM store_integrations WHERE client_id = $1`,
+    [clientId]
+  ).catch(() => []);
+
+  res.json({
+    como_ler: [
+      'origens[] é agrupado pelos identificadores que a própria Digistore manda no IPN — é a resposta de "qual conta".',
+      'dias_sem_receber por origem: origem parada enquanto outra continua chegando é entrega interrompida NAQUELA conta, não venda que parou.',
+      'chaves_de_um_payload mostra os campos que o IPN realmente traz nesta integração, para conferir se vendor/publisher existem mesmo.',
+    ],
+    lojas_cadastradas: lojas,
+    chaves_de_um_payload: amostra?.chaves ?? null,
+    ultimo_payload_em: amostra?.quando ?? null,
+    origens: porOrigem.map(o => ({
+      vendor: o.vendor,
+      publisher: o.publisher,
+      product_id: o.produto,
+      product_name: o.produto_nome,
+      eventos: parseInt(o.eventos),
+      primeiro_evento: o.primeiro,
+      ultimo_evento: o.ultimo,
+      dias_sem_receber: parseInt(o.dias_sem_receber),
+    })),
+    por_tipo_de_evento: porEvento.map(e => ({
+      event_type: e.event_type,
+      eventos: parseInt(e.eventos),
+      ultimo: e.ultimo,
+    })),
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/sem-utm - Investiga as vendas que chegam SEM UTM nenhuma
 // (o grosso do não atribuído). Três perguntas, respondidas do payload cru salvo em JSONB:
 //   1. são upsell/downsell dentro do funil? (produto começando com UP/DS/DW) — nesse caso a
