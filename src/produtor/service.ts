@@ -85,6 +85,11 @@ interface DiaRow {
   receita_afiliado: number;
   reembolsos: number;
   valor_reembolso: number;
+  /**
+   * O que sobrou depois de imposto de venda e da parte da Digistore ("Your earnings").
+   * null quando a fonte não traz — e aí o lucro cai para o bruto, ROTULADO como otimista.
+   */
+  receita_recebida: number | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,6 +272,9 @@ async function agregarVendasPorDia(
   return rows.map((r: any) => ({
     oferta_id: r.oferta_id == null ? null : Number(r.oferta_id),
     dia: String(r.dia).slice(0, 10),
+    // O webhook só carrega o bruto (amount_brutto). Sem o recebido, o lucro usa o bruto e a tela
+    // diz que está otimista — em vez de fingir precisão que a fonte não tem.
+    receita_recebida: null,
     vendas: parseInt(r.vendas, 10) || 0,
     receita: num(r.receita),
     vendas_afiliado: parseInt(r.vendas_afiliado, 10) || 0,
@@ -327,6 +335,7 @@ async function agregarVendasImportadas(clientId: number, kitId: number): Promise
       data::text AS dia,
       COALESCE(SUM(quantidade) FILTER (WHERE tipo = 'pagamento'), 0) AS vendas,
       COALESCE(SUM(valor_bruto) FILTER (WHERE tipo = 'pagamento'), 0) AS receita,
+      SUM(valor_recebido) FILTER (WHERE tipo = 'pagamento') AS receita_recebida,
       COALESCE(SUM(quantidade) FILTER (
         WHERE tipo = 'pagamento' AND NULLIF(TRIM(COALESCE(afiliado,'')),'') IS NOT NULL), 0) AS vendas_afiliado,
       COALESCE(SUM(valor_bruto) FILTER (
@@ -343,6 +352,7 @@ async function agregarVendasImportadas(clientId: number, kitId: number): Promise
     dia: String(r.dia).slice(0, 10),
     vendas: parseInt(r.vendas, 10) || 0,
     receita: num(r.receita),
+    receita_recebida: r.receita_recebida == null ? null : num(r.receita_recebida),
     vendas_afiliado: parseInt(r.vendas_afiliado, 10) || 0,
     receita_afiliado: num(r.receita_afiliado),
     reembolsos: parseInt(r.reembolsos, 10) || 0,
@@ -415,6 +425,8 @@ export interface ResumoProdutor {
     sem_oferta: number;
     vendas_sem_oferta: number;
     cobertura_pct: number | null;
+    recebido: number | null;
+    taxa_medida: boolean;
   };
 
   ofertas: LinhaOferta[];
@@ -478,6 +490,7 @@ export interface ResumoProdutor {
     comissao_afiliado_medida: boolean;
     outros_custos: number;
     lucro: number;
+    base_do_lucro: 'recebido' | 'bruto';
     margem_pct: number | null;
   };
 
@@ -538,12 +551,14 @@ export async function calcularResumo(
 
   const acumulaPorOferta = (linhas: DiaRow[]) => {
     const acc = new Map<number | null, {
-      vendas: number; receita: number; vendas_afiliado: number; receita_afiliado: number;
+      vendas: number; receita: number; recebida: number | null;
+      vendas_afiliado: number; receita_afiliado: number;
     }>();
     for (const l of linhas) {
-      const e = acc.get(l.oferta_id) ?? { vendas: 0, receita: 0, vendas_afiliado: 0, receita_afiliado: 0 };
+      const e = acc.get(l.oferta_id) ?? { vendas: 0, receita: 0, recebida: null, vendas_afiliado: 0, receita_afiliado: 0 };
       e.vendas += l.vendas;
       e.receita += l.receita;
+      if (l.receita_recebida != null) e.recebida = (e.recebida ?? 0) + l.receita_recebida;
       e.vendas_afiliado += l.vendas_afiliado;
       e.receita_afiliado += l.receita_afiliado;
       acc.set(l.oferta_id, e);
@@ -560,14 +575,19 @@ export async function calcularResumo(
   let previstoTaxa = 0;
   let previstoComissao = 0;
   let receitaCoberta = 0;
+  let receitaRecebida: number | null = null;
   let vendasCobertas = 0;
+  let taxaMedida = false;
 
   for (const o of ofertas) {
-    const a = agregado.get(o.id) ?? { vendas: 0, receita: 0, vendas_afiliado: 0, receita_afiliado: 0 };
+    const a = agregado.get(o.id) ?? { vendas: 0, receita: 0, recebida: null, vendas_afiliado: 0, receita_afiliado: 0 };
     const cv = custoPorVenda(o);
     const custoProduto = cv.produto * a.vendas;
     const frete = cv.servicos * a.vendas;
-    const taxa = a.receita * (o.taxa_gateway_pct / 100);
+    // Taxa MEDIDA quando o arquivo traz o recebido: é o bruto menos o que de fato caiu na conta,
+    // transação por transação. O percentual cadastrado vira só o plano B — estimar 9,5% quando o
+    // valor exato está no arquivo foi o mesmo padrão do crédito da SlickText, que estava 3x menor.
+    const taxa = a.recebida != null ? a.receita - a.recebida : a.receita * (o.taxa_gateway_pct / 100);
     // Comissão só sobre a receita das vendas COM afiliado. Sobre o faturamento inteiro, cobraria
     // comissão de venda direta — e como afiliado tende a ser a maior fatia, o erro não pareceria
     // erro: só um lucro menor e plausível.
@@ -579,6 +599,7 @@ export async function calcularResumo(
     previstoTaxa += taxa;
     previstoComissao += comissao;
     receitaCoberta += a.receita;
+    if (a.recebida != null) { receitaRecebida = (receitaRecebida ?? 0) + a.recebida; taxaMedida = true; }
     vendasCobertas += a.vendas;
 
     linhas.push({
@@ -600,7 +621,7 @@ export async function calcularResumo(
   }
 
   // ── Vendas que nenhuma oferta reconheceu ──
-  const semOferta = agregado.get(null) ?? { vendas: 0, receita: 0, vendas_afiliado: 0, receita_afiliado: 0 };
+  const semOferta = agregado.get(null) ?? { vendas: 0, receita: 0, recebida: null, vendas_afiliado: 0, receita_afiliado: 0 };
   if (semOferta.vendas > 0) {
     linhas.push({
       oferta_id: null,
@@ -802,9 +823,21 @@ export async function calcularResumo(
   }
 
   const outrosCustos = realOutros ?? 0;
-  const lucro = receitaCoberta
+
+  // A base do lucro é o que ENTROU, não o que o comprador pagou. O bruto inclui imposto de venda
+  // (que nunca foi do produtor) e a parte da Digistore. No export real de 939 vendas isso é 17,1%
+  // do bruto — usar o bruto inflava o lucro em quase um terço.
+  const baseLucro = receitaRecebida ?? receitaCoberta;
+  if (receitaRecebida == null) {
+    ressalvas.push(
+      'A receita usada no lucro é o valor BRUTO, que inclui o imposto de venda e a parte do ' +
+      'gateway — o lucro está OTIMISTA. O valor efetivamente recebido vem na coluna "Your ' +
+      'earnings" do export da Digistore; importe o arquivo para o número ficar correto.'
+    );
+  }
+  const lucro = baseLucro
     - custoFulfillmentUsado
-    - taxaUsada
+    - (receitaRecebida != null ? 0 : taxaUsada)
     - comissaoUsada
     - outrosCustos
     - reembolsoValor;
@@ -817,6 +850,9 @@ export async function calcularResumo(
 
     faturamento: {
       total: receitaTotal,
+      /** O que sobrou depois do imposto de venda e do gateway. null = a fonte não informa. */
+      recebido: receitaRecebida,
+      taxa_medida: taxaMedida,
       vendas: vendasTotal,
       coberto_por_oferta: receitaCoberta,
       vendas_cobertas: vendasCobertas,
@@ -865,10 +901,11 @@ export async function calcularResumo(
       comissao_afiliado_medida: comissaoMedida,
       outros_custos: outrosCustos,
       lucro,
+      base_do_lucro: receitaRecebida != null ? 'recebido' : 'bruto',
       // Margem sobre a receita COBERTA, não sobre o faturamento do produto: dividir um lucro
       // parcial pelo faturamento inteiro produziria uma margem menor que a real, e ninguém
       // conseguiria explicar de onde veio a diferença.
-      margem_pct: receitaCoberta > 0 ? lucro / receitaCoberta : null,
+      margem_pct: baseLucro > 0 ? lucro / baseLucro : null,
     },
 
     ressalvas,

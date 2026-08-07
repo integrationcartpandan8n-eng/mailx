@@ -552,12 +552,14 @@ produtorAdminRouter.post(
     for (const v of r.vendas) {
       const ins = await query(
         `INSERT INTO produtor_vendas (client_id, importacao_id, transacao_id, pedido_id, data,
-           tipo, tipo_bruto, produto_id, produto_nome, quantidade, valor_bruto, moeda, pais, afiliado)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           tipo, tipo_bruto, produto_id, produto_nome, quantidade, valor_bruto, valor_liquido,
+           valor_recebido, moeda, pais, afiliado)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (client_id, transacao_id, COALESCE(produto_id, '')) DO NOTHING
          RETURNING id`,
         [clientId, importacaoId, v.transacao_id, v.pedido_id, v.data, v.tipo, v.tipo_bruto,
-         v.produto_id, v.produto_nome, v.quantidade, v.valor_bruto, v.moeda, v.pais, v.afiliado]
+         v.produto_id, v.produto_nome, v.quantidade, v.valor_bruto, v.valor_liquido,
+         v.valor_recebido, v.moeda, v.pais, v.afiliado]
       );
       if (ins.length > 0) gravadas++;
     }

@@ -271,6 +271,8 @@
         </div>
     </div>
 
+    <div id="notaReceita" style="display:none; font-size:0.74rem; color:var(--text-muted); margin:-0.6rem 0 1.25rem; line-height:1.6"></div>
+
     <!-- ═══ Previsão do invoice — o pedido do chefe ═══ -->
     <div class="card">
         <div class="card-header">
@@ -1059,19 +1061,23 @@ function renderKpis() {
 
     document.getElementById('kpis').innerHTML = `
         <div class="kpi">
-            <span class="k">Faturamento</span>
-            <span class="v num">${fmt0(f.total)}</span>
-            <span class="d">${inteiro(f.vendas)} venda(s) · ticket ${fmt0(ticket)}</span>
+            <span class="k">Recebido</span>
+            <span class="v num">${f.recebido == null ? fmt0(f.total) : fmt0(f.recebido)}</span>
+            <span class="d">${f.recebido == null
+                ? `<b style="color:var(--warning)">é o BRUTO</b> — inclui imposto e a parte do gateway`
+                : `de ${fmt0(f.total)} brutos · ${inteiro(f.vendas)} venda(s)`}</span>
+        </div>
+        <div class="kpi">
+            <span class="k">Taxa do gateway</span>
+            <span class="v num custo">${f.recebido == null ? fmt0(res.taxa_gateway_usada) : fmt0(f.total - f.recebido)}</span>
+            <span class="d">${f.taxa_medida
+                ? `${pct((f.total - f.recebido) / f.total)} do bruto — <b>medido por transação</b>`
+                : 'estimado pelo percentual da oferta'}</span>
         </div>
         <div class="kpi">
             <span class="k">Custo do produto</span>
             <span class="v num custo">${fmt0(res.custo_fulfillment_usado)}</span>
             <span class="d">${origem}</span>
-        </div>
-        <div class="kpi">
-            <span class="k">Taxa do gateway</span>
-            <span class="v num custo">${fmt0(res.taxa_gateway_usada)}</span>
-            <span class="d">sobre o faturamento coberto</span>
         </div>
         <div class="kpi">
             <span class="k">Reembolso</span>
@@ -1081,9 +1087,18 @@ function renderKpis() {
         <div class="kpi destaque">
             <span class="k">Lucro</span>
             <span class="v num">${fmt0(res.lucro)}</span>
-            <span class="d">${pct(res.margem_pct)} sobre a receita coberta</span>
+            <span class="d">${pct(res.margem_pct)} sobre o ${res.base_do_lucro === 'recebido' ? 'recebido' : 'BRUTO (otimista)'}</span>
         </div>
     `;
+    // "Faturamento" com três definições possíveis é o rótulo que faz duas pessoas discutirem
+    // números diferentes achando que falam do mesmo. A tela nomeia os três.
+    const nota = document.getElementById('notaReceita');
+    if (f.recebido != null) {
+        nota.style.display = 'block';
+        nota.innerHTML = `<b>Três valores, três coisas:</b> o comprador pagou <b>${fmt0(f.total)}</b> (bruto, com imposto de venda);
+            depois da Digistore ficar com a parte dela, entraram <b>${fmt0(f.recebido)}</b>. O lucro é calculado sobre o
+            <b>recebido</b> — é o único que virou dinheiro na conta.`;
+    } else { nota.style.display = 'none'; }
     document.getElementById('escopoPrevReal').textContent = rotuloPeriodo();
     document.getElementById('escopoOfertas').textContent = rotuloPeriodo();
 }

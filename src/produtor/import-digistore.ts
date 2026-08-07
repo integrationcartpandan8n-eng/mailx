@@ -25,6 +25,10 @@ export interface VendaImportada {
   produto_nome: string | null;
   quantidade: number;
   valor_bruto: number | null;
+  /** Bruto sem o imposto de venda. */
+  valor_liquido: number | null;
+  /** O que sobra depois da Digistore — a base honesta do lucro. */
+  valor_recebido: number | null;
   moeda: string | null;
   pais: string | null;
   afiliado: string | null;
@@ -87,6 +91,8 @@ const COLUNAS: Record<string, string[]> = {
   tipo: ['transactiontype', 'type', 'tipo'],
   moeda: ['currency', 'moeda'],
   bruto: ['grossamount', 'gross', 'valorbruto', 'amount'],
+  liquido: ['netamount', 'net', 'valorliquido'],
+  recebido: ['yourearnings', 'earnings', 'seusganhos'],
   produtoId: ['prdid', 'productid', 'produtoid'],
   produtoNome: ['productname', 'produto', 'nomeproduto'],
   quantidade: ['quantity', 'qty', 'quantidade'],
@@ -164,6 +170,12 @@ export function parseExportDigistore(conteudo: string): ResultadoParse {
       );
     }
   }
+  if (indice.recebido < 0) {
+    avisos.push(
+      'Sem a coluna "Your earnings": o lucro vai usar o valor BRUTO como receita, que inclui ' +
+      'imposto de venda e a parte da Digistore. Nesse caso o lucro sai otimista e a tela avisa.'
+    );
+  }
   if (indice.quantidade < 0) {
     avisos.push('Sem coluna de quantidade: cada linha vai contar como 1 unidade, que subestima quem comprou mais de uma.');
   }
@@ -197,6 +209,8 @@ export function parseExportDigistore(conteudo: string): ResultadoParse {
       tipo: classificarTipo(tipoBruto),
       tipo_bruto: tipoBruto || '(vazio)',
       valor_bruto: parseNumero(val('bruto')),
+      valor_liquido: parseNumero(val('liquido')),
+      valor_recebido: parseNumero(val('recebido')),
       moeda: (val('moeda') || null)?.slice(0, 3) ?? null,
       pais: val('pais') || null,
       afiliado: val('afiliado') || null,

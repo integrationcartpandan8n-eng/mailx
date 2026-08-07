@@ -165,7 +165,15 @@ export const PRODUTOR_SCHEMA_SQL = `
     produto_id VARCHAR(80),
     produto_nome VARCHAR(255),
     quantidade INTEGER NOT NULL DEFAULT 1,
+    -- Os TRES valores que o export traz, porque eles sao coisas diferentes e a conta usa o
+    -- terceiro. Bruto e o que o comprador pagou (inclui imposto de venda, que nunca foi do
+    -- produtor). Liquido e sem o imposto. Recebido ("Your earnings") e o que sobra depois de a
+    -- Digistore ficar com a parte dela — no export real de 939 vendas, 12,5% do bruto.
+    -- Guardar so o bruto obrigava a ESTIMAR a taxa do gateway por percentual, quando o valor
+    -- exato vem por transacao no arquivo.
     valor_bruto NUMERIC(12,2),
+    valor_liquido NUMERIC(12,2),
+    valor_recebido NUMERIC(12,2),
     moeda VARCHAR(3),
     pais VARCHAR(80),
     afiliado VARCHAR(255),
