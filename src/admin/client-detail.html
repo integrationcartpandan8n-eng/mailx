@@ -2174,19 +2174,27 @@
                     : platform === 'digistore24' ? 'digistore24'
                     : 'manual';
 
+                // "⏳ Criando..." era mostrado pra QUALQUER produto ativado sem etiqueta, sem nada
+                // estar sendo criado. Produto ativado cuja família não tem etiqueta no
+                // ActiveCampaign ficava nesse estado para sempre — um indicador de progresso que
+                // nunca progride é pior que nenhum, porque quem olha fica esperando.
                 const tagsOk = k.ac_tag_compra_id && k.ac_tag_abandono_id;
                 const tagsHtml = tagsOk
                     ? `<span class="tag green">✓ Configuradas</span>`
                     : k.enabled
-                        ? `<span class="tag" style="color:var(--warning);background:var(--warning-bg)">⏳ Criando...</span>`
+                        ? `<span class="tag" style="color:var(--warning);background:var(--warning-bg)">Sem etiqueta <span class="kpi-tip" tabindex="0" data-tip="O produto está ativo mas não tem etiqueta de Compra Aprovada / Abandono no ActiveCampaign. As etiquetas são casadas por família (ex: [Neuro Mind]) ao abrir a aba SMS. Se continua assim, é porque não existe etiqueta dessa família em nenhuma conta do AC — alguém precisa criá-la lá.">ⓘ</span></span>`
                         : `<span class="tag gray">Pendente</span>`;
 
                 const externalIdHtml = k.external_id
                     ? `<span style="font-family:monospace; font-size:0.72rem; color:var(--text-dim)">${escapeHtml(k.external_id)}</span>`
                     : `<span style="color:var(--text-muted)">—</span>`;
 
+                // Em modo somente-leitura a coluna mostrava um "—" pelado. Quem precisava ativar um
+                // produto concluia que o controle estava faltando ou quebrado, quando na verdade ele
+                // esta escondido de proposito. Agora diz o estado atual e por que nao da pra mudar.
                 const enabledCell = window.__metricsOnly
-                    ? `<span style="color:var(--text-dim)">—</span>`
+                    ? `<span class="tag ${k.enabled ? 'green' : 'gray'}">${k.enabled ? 'Ativo' : 'Inativo'}</span>
+                       <span class="kpi-tip" tabindex="0" data-tip="O dashboard está em modo somente-leitura (METRICS_ONLY), então não é possível ativar ou desativar produto pela tela. É proposital: nesse modo o painel não escreve em conta de cliente. Para liberar, o servidor precisa subir com METRICS_ONLY=false.">ⓘ</span>`
                     : `<label class="toggle"><input type="checkbox" ${k.enabled ? 'checked' : ''} onchange="toggleKit(${k.id}, this)"><span class="toggle-slider"></span></label>`;
 
                 return `
