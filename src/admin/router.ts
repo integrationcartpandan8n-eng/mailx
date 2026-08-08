@@ -8,6 +8,7 @@ import { CartPandaClient } from '../services/cartpanda';
 import { SlickTextClient } from '../services/slicktext';
 import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
+import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
 import { env, METRICS_ONLY } from '../config/env';
 import {
   SESSION_COOKIE,
@@ -4868,3 +4869,91 @@ adminRouter.post('/clientes/:id/repair-webhooks', asyncHandler(async (req: Reque
   res.json({ ok: true, orphans: orphans.length, matched, products_discovered: productsDiscovered });
 }));
 
+
+// GET /admin/clientes/:id/diagnostico/probe-digistore-api?order=XXXXXXXX
+//
+// A PERGUNTA: a API da Digistore devolve o utm_campaign do pedido?
+//
+// Por que importa: em 03/08/2026 21:34 o banco caiu, os webhooks passaram a tomar erro e a
+// Digistore DESATIVOU as duas conexões de IPN sozinha. Ficaram 4 dias sem gravar nada — 1.023
+// pagamentos e 384 reembolsos. O CSV do painel recupera dinheiro, produto e comprador, mas a
+// coluna "Tracking key" vem VAZIA nas 34.696 linhas do arquivo inteiro, então o CSV não recupera
+// atribuição: sem utm_campaign não se sabe de qual mensagem de automação a venda veio.
+//
+// O que a sonda faz: chama VÁRIAS funções candidatas da API com um pedido real e, em cada
+// resposta, lista os nomes de campo que existem e destaca os que casam com utm/tracking/custom.
+// Ela não procura um campo que eu imaginei — ela mostra os que existem. Essa distinção é o
+// aprendizado de uma sonda anterior que reportou "não achado" porque eu chutei o nome do campo
+// (short_url) em vez de listar as chaves; o dado estava lá, com outro nome (_link_ids).
+//
+// Requer DS24_API_KEY no .env do servidor (não vai pro repositório).
+adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(async (req: Request, res: Response) => {
+  const order = String(req.query.order ?? '').trim();
+
+  if (!ds24KeyConfigurada()) {
+    res.json({
+      pergunta: 'A API da Digistore devolve o utm_campaign do pedido?',
+      erro: 'DS24_API_KEY não configurada',
+      como_configurar: 'Adicionar DS24_API_KEY=<chave> no /var/www/mailx/.env e rodar pm2 restart mailx-api. A chave NÃO entra no repositório.',
+    });
+    return;
+  }
+
+  if (!order) {
+    res.json({
+      erro: 'Falta o parâmetro ?order=',
+      como_usar: 'Pegar um Order ID do CSV dentro da janela perdida (ex: 3LMXMRTJ) e chamar ?order=3LMXMRTJ',
+    });
+    return;
+  }
+
+  // Cada candidata é testada em duas formas de passar o pedido, porque a API mistura os dois
+  // estilos entre funções e não dá pra saber qual sem tentar: argumento na URL e query string.
+  const candidatas: Array<{ nome: string; fn: string; params?: Record<string, any>; pathArg?: string }> = [
+    { nome: 'getPurchase (id na URL)', fn: 'getPurchase', pathArg: order },
+    { nome: 'getPurchase (purchase_id na query)', fn: 'getPurchase', params: { purchase_id: order } },
+    { nome: 'listPurchases (purchase_id)', fn: 'listPurchases', params: { purchase_id: order } },
+    { nome: 'listPurchases (order_id)', fn: 'listPurchases', params: { order_id: order } },
+    { nome: 'listTransactions (purchase_id)', fn: 'listTransactions', params: { purchase_id: order } },
+    { nome: 'getOrder (id na URL)', fn: 'getOrder', pathArg: order },
+    { nome: 'listOrders (order_id)', fn: 'listOrders', params: { order_id: order } },
+    { nome: 'getPurchaseDetails (id na URL)', fn: 'getPurchaseDetails', pathArg: order },
+  ];
+
+  const resultados: any[] = [];
+
+  for (const c of candidatas) {
+    const r = await ds24Call(c.fn, c.params, c.pathArg);
+
+    // O corpo útil pode estar em data, em data.data ou na raiz — a sonda olha os três e diz
+    // qual usou, pra não afirmar "vazio" quando o dado está um nível abaixo.
+    const alvo = r.data?.data ?? r.data;
+    const chavesInteressantes = r.ok ? acharChavesInteressantes(alvo) : {};
+
+    resultados.push({
+      candidata: c.nome,
+      http: r.http,
+      ok: r.ok,
+      erro: r.erro ?? null,
+      chaves_no_topo: alvo && typeof alvo === 'object' ? Object.keys(alvo).slice(0, 80) : null,
+      campos_de_atribuicao_encontrados: Object.keys(chavesInteressantes).length ? chavesInteressantes : null,
+    });
+  }
+
+  const comAtribuicao = resultados.filter((r) => r.campos_de_atribuicao_encontrados);
+  const funcionaram = resultados.filter((r) => r.ok);
+
+  res.json({
+    pergunta: 'A API da Digistore devolve o utm_campaign do pedido?',
+    pedido_testado: order,
+    veredito: comAtribuicao.length
+      ? `SIM — ${comAtribuicao.length} de ${candidatas.length} candidatas devolveram campo de atribuição. Dá pra reconstruir a janela perdida COM utm real, sem inferir nada.`
+      : funcionaram.length
+        ? `PARCIAL — ${funcionaram.length} candidatas responderam, mas NENHUMA trouxe campo de utm/tracking/custom. Confira "chaves_no_topo" antes de concluir: se aparecer algum nome estranho que possa carregar o dado, vale sondar ele por nome.`
+        : 'NENHUMA candidata respondeu. Pode ser nome de função errado (a API tem catálogo próprio) ou chave sem permissão — olhe o campo erro de cada linha.',
+    proximo_passo: comAtribuicao.length
+      ? 'Colar este JSON no chat: com o nome do campo em mãos, eu escrevo o backfill que puxa os 1.407 eventos da janela pela API e grava com atribuição real.'
+      : 'Colar este JSON no chat mesmo assim — o que as candidatas responderam decide se sobra caminho pela API ou se a gente cai no CSV sem atribuição por mensagem.',
+    resultados,
+  });
+}));
