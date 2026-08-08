@@ -3550,8 +3550,11 @@
             const foraComp = cs.compradores.vendas_fora_escopo || 0;
             if (foraAb > 0 || foraComp > 0) {
                 const partes = [];
-                if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s)`);
-                if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões)`);
+                // "venda" e "recuperação" sem qualificar dava a entender que eram coisas
+                // diferentes de vendas — e como os números se sobrepunham (52 dentro das 70), quem
+                // lia somava 122. Agora são disjuntos E rotulados pelo fluxo de origem.
+                if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s) de fluxo de comprador`);
+                if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões) de carrinho`);
                 // Nomeia os produtos e o MOTIVO de cada um. Antes a nota dizia só a quantidade e
                 // atribuía a causa a "produto sem lista/tag vinculada" — que é uma das três causas
                 // possíveis, não a única. Dizer a causa errada manda a pessoa arrumar o que não está
@@ -4943,9 +4946,23 @@
         // tabela mostrando só o Thermo transformaria o cabeçalho numa afirmação falsa a cada clique —
         // e o total geral continua visível, no chip "Todos os produtos", que mostra a receita
         // completa. Assim nada se perde e nada se contradiz.
+        // Família do produto: o mesmo produto chega com nomes diferentes no utm_campaign conforme
+        // quem criou o link. "NeuromindPro" e "NeuromindProN8N" são o MESMO NeuroMind — confirmado
+        // com o Nicollas — e viravam dois grupos, cada um com um pedaço da receita e nenhum com o
+        // total, que é a dificuldade de agrupamento que ele relatou.
+        //
+        // A regra tira sufixo de ORIGEM (quem disparou), não de produto: o que identifica o produto
+        // é o nome, e "veio pelo n8n" é característica do disparo. Conservador de propósito — só o
+        // sufixo no fim, porque remover no meio quebraria nome legítimo que contenha a sigla.
+        function familiaProduto(nome) {
+            if (!nome) return '—';
+            const limpo = String(nome).replace(/[\s._-]*n8n$/i, '').trim();
+            return limpo || String(nome);
+        }
+
         function rowsFiltradas(rows) {
             const f = window.__smsFiltroProduto;
-            return f ? rows.filter(r => (r.produto || '—') === f) : rows;
+            return f ? rows.filter(r => familiaProduto(r.produto) === f) : rows;
         }
 
         function renderFiltroProduto(data, sym) {
@@ -4954,10 +4971,11 @@
 
             const porProduto = new Map();
             for (const r of data.rows) {
-                const k = r.produto || '—';
-                const cur = porProduto.get(k) || { receita: 0, msgs: 0 };
+                const k = familiaProduto(r.produto);
+                const cur = porProduto.get(k) || { receita: 0, msgs: 0, variantes: new Set() };
                 cur.receita += r.receita_liquida;
                 cur.msgs++;
+                if (r.produto && r.produto !== k) cur.variantes.add(r.produto);
                 porProduto.set(k, cur);
             }
             // Um produto só: o filtro não escolheria nada e viraria enfeite.
@@ -5115,7 +5133,7 @@
             const byProduct = new Map();
 
             for (const row of data.rows) {
-                const key = row.produto || '—';
+                const key = familiaProduto(row.produto);
                 if (!byProduct.has(key)) byProduct.set(key, []);
                 byProduct.get(key).push(row);
             }
@@ -5125,6 +5143,10 @@
                     produto,
                     rows: rows.sort((a, b) => b.receita_liquida - a.receita_liquida),
                     subtotal: rows.reduce((sum, r) => sum + r.receita_liquida, 0),
+                    // Quais nomes crus caíram nesta família. Vai para a tela quando houver mais de
+                    // um: agrupamento que junta sem dizer o que juntou faz quem conhece os nomes
+                    // achar que sumiu produto.
+                    variantes: [...new Set(rows.map(r => r.produto).filter(n => n && n !== produto))],
                 }))
                 .sort((a, b) => b.subtotal - a.subtotal);
 
@@ -5162,7 +5184,15 @@
                 return `
                     <div class="group-block">
                         <div class="group-head">
-                            <span class="group-name">${group.produto}${avisoUtm}</span>
+                            <span class="group-name">${group.produto}${avisoUtm}${
+                                // Agrupamento explícito: diz QUAIS nomes crus entraram nesta
+                                // família. Sem isso, quem conhece "NeuromindProN8N" abre a tela,
+                                // não acha o nome, e conclui que a mensagem sumiu — em vez de
+                                // entender que ela está somada aqui.
+                                group.variantes.length > 0
+                                    ? ` <span class="kpi-tip" tabindex="0" data-tip="Agrupa também: ${escapeHtml(group.variantes.join(', '))}. É o mesmo produto com nome diferente no utm_campaign, conforme quem criou o link — o sufixo de origem (ex: N8N) diz quem disparou, não qual produto é.">agrupado</span>`
+                                    : ''
+                            }</span>
                             <span class="group-total">${fmtSmsMoney(sym, group.subtotal)}<small>${fmtSmsPct(group.subtotal, total)} do total SMS</small></span>
                         </div>
                         <div class="group-rows">${rowsHtml}</div>
