@@ -78,23 +78,42 @@ export async function ds24Call(
 /** Onde o utm_campaign moraria, se existir. */
 export const PADRAO_CHAVE_INTERESSANTE = /utm|tracking|custom|campaign|source|medium|sub_?id|tid/i;
 
+/** Campo existe mas não carrega nada: string vazia, null, undefined, array/objeto vazio. */
+export function valorVazio(v: any): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === 'object') return Object.keys(v).length === 0;
+  return false;
+}
+
 /**
  * Varre um objeto (até `profundidade` níveis) e devolve caminho→valor de tudo que casa com o
  * padrão acima. Sem isso a sonda obrigaria a ler no olho um JSON de dezenas de campos — e foi
  * assim que uma sonda anterior deu falso negativo: procurou um campo pelo nome que eu imaginei
  * (short_url) em vez de listar os nomes existentes. O dado estava lá, chamado _link_ids.
+ *
+ * `apenasComValor` separa as duas perguntas que a primeira versão desta sonda misturou:
+ * "o campo EXISTE?" e "o campo TEM CONTEÚDO?". Ela respondeu a primeira e reportou como se fosse
+ * a segunda — declarou "SIM, achei atribuição" com campaignkey, custom e tracking_param todos "".
+ * Nome de campo não é dado; só valor é.
  */
-export function acharChavesInteressantes(obj: any, profundidade = 4, prefixo = ''): Record<string, any> {
+export function acharChavesInteressantes(
+  obj: any,
+  profundidade = 4,
+  prefixo = '',
+  apenasComValor = false
+): Record<string, any> {
   const achado: Record<string, any> = {};
   if (!obj || typeof obj !== 'object' || profundidade < 0) return achado;
 
   for (const [k, v] of Object.entries(obj)) {
     const caminho = prefixo ? `${prefixo}.${k}` : k;
-    if (PADRAO_CHAVE_INTERESSANTE.test(k)) {
+    if (PADRAO_CHAVE_INTERESSANTE.test(k) && !(apenasComValor && valorVazio(v))) {
       achado[caminho] = v && typeof v === 'object' ? v : (v ?? null);
     }
     if (v && typeof v === 'object') {
-      Object.assign(achado, acharChavesInteressantes(v, profundidade - 1, caminho));
+      Object.assign(achado, acharChavesInteressantes(v, profundidade - 1, caminho, apenasComValor));
     }
   }
   return achado;
