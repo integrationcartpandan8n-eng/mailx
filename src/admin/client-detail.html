@@ -1067,6 +1067,28 @@
         .card-header.collapsible.open .chevron { transform: rotate(180deg); }
 
         /* Tooltip de explicação nos KPIs — ícone (ⓘ) ao lado do label */
+        /* Aviso de saúde da coleta. Deliberadamente grande e no topo: é a informação que muda
+           como todo o resto da tela deve ser lido, e não pode competir por atenção com um card. */
+        .alerta-coleta {
+            display: flex; gap: 0.85rem; align-items: flex-start;
+            padding: 1rem 1.15rem; margin-bottom: 1rem;
+            border-radius: 10px; border: 1px solid; line-height: 1.5; font-size: 0.9rem;
+        }
+        .alerta-coleta i { font-size: 1.15rem; margin-top: 0.1rem; flex-shrink: 0; }
+        .alerta-coleta__acao {
+            margin-top: 0.45rem; font-size: 0.83rem; opacity: 0.9;
+        }
+        .alerta-coleta--parado {
+            background: rgba(255, 77, 106, 0.1); border-color: rgba(255, 77, 106, 0.45); color: var(--danger);
+        }
+        .alerta-coleta--buraco {
+            background: rgba(255, 176, 32, 0.1); border-color: rgba(255, 176, 32, 0.45); color: var(--warning);
+        }
+        .alerta-coleta--duvida {
+            background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.4); color: var(--text-muted);
+        }
+        .alerta-coleta strong { color: inherit; }
+
         .kpi-tip {
             display: inline-block;
             position: relative;
@@ -1680,6 +1702,10 @@
                  continua com os mesmos cards abaixo, e quem abre pela primeira vez entende sem
                  precisar ler card nenhum. A fonte de cada número aparece ESCRITA, não em tooltip —
                  quem não conhece o sistema não passa o mouse procurando procedência. -->
+            <!-- Saúde da coleta. Fica ACIMA de qualquer número porque muda como todos eles devem
+                 ser lidos: se a coleta esteve parada no período, os totais abaixo estão
+                 subestimados e uma queda na tela pode não ter acontecido na vida real. -->
+            <div id="smsSaudeColeta"></div>
             <div id="smsResumoNegocio"></div>
             <div class="card">
                 <div class="card-header">
@@ -3878,6 +3904,78 @@
         }
 
         // ── Load SMS Stats from SlickText API ──
+        // Saúde da coleta — responde "os números abaixo estão completos?" antes de mostrar número.
+        //
+        // Existe por causa de 03/08/2026: a Digistore desativou sozinha as conexões de IPN depois de
+        // o endpoint devolver erro, e ficamos 4 dias sem gravar venda nenhuma. Na tela isso aparecia
+        // como queda de vendas — falha de coleta lida como resultado de operação. Um aviso teria
+        // custado 30 segundos de conserto em vez de 4 dias.
+        async function loadSaudeDaColeta(from, to, timeOpts = {}) {
+            const box = document.getElementById('smsSaudeColeta');
+            if (!box) return;
+            try {
+                const params = new URLSearchParams();
+                if (from && to && !timeOpts.today) { params.set('start', from); params.set('end', to); }
+                const res = await fetch(`${API}/clientes/${clientId}/saude-da-coleta?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                box.innerHTML = renderSaudeColeta(d);
+            } catch (err) {
+                // Falha aqui não pode apagar a tela nem, pior, sugerir que está tudo certo:
+                // o painel deixa de saber se a coleta está de pé, e diz isso.
+                box.innerHTML = `<div class="alerta-coleta alerta-coleta--duvida">
+                    <i class="fas fa-circle-question"></i>
+                    <div><strong>Não foi possível verificar a saúde da coleta.</strong>
+                    Os números abaixo podem estar incompletos sem aviso. (${err.message})</div>
+                </div>`;
+            }
+        }
+
+        function fmtDataHora(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
+            if (isNaN(d)) return iso;
+            return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function renderSaudeColeta(d) {
+            const partes = [];
+            const c = d.coleta_agora || {};
+
+            if (c.em_silencio) {
+                const h = c.horas_em_silencio;
+                const espera = h >= 24 ? `${Math.floor(h / 24)} dia(s)` : `${h} horas`;
+                partes.push(`<div class="alerta-coleta alerta-coleta--parado">
+                    <i class="fas fa-triangle-exclamation"></i>
+                    <div>
+                        <strong>A coleta parece parada: nenhuma venda há ${espera}.</strong>
+                        Último webhook recebido em ${fmtDataHora(c.ultimo_webhook)}.
+                        ${c.intervalo_normal_minutos ? `Normalmente entra uma venda a cada ${c.intervalo_normal_minutos} min.` : ''}
+                        <div class="alerta-coleta__acao">Checar no painel da Digistore, em Settings &rarr; Integrations (IPN),
+                        se as conexões continuam <strong>ativas</strong> — já aconteceu de serem desativadas sozinhas
+                        depois de o endpoint devolver erro.</div>
+                    </div>
+                </div>`);
+            }
+
+            (d.janelas_sem_coleta || []).forEach(j => {
+                const fim = j.em_aberto ? 'agora (ainda aberta)' : fmtDataHora(j.fim);
+                const perdas = j.vendas_perdidas_estimadas
+                    ? ` Estimativa do que ficou de fora, medida no painel da Digistore: <strong>${j.vendas_perdidas_estimadas.toLocaleString('pt-BR')} vendas</strong>${j.valor_perdido_estimado ? ` (${j.valor_perdido_estimado.toLocaleString('pt-BR', {style:'currency', currency:'USD'})} de bruto)` : ''}.`
+                    : '';
+                partes.push(`<div class="alerta-coleta alerta-coleta--buraco">
+                    <i class="fas fa-circle-exclamation"></i>
+                    <div>
+                        <strong>Este período tem ${fmtDataHora(j.inicio)} → ${fim} sem coleta.</strong>
+                        Os números abaixo estão <strong>subestimados</strong> nesse intervalo — vendas aconteceram e não foram gravadas.
+                        <div class="alerta-coleta__acao">Motivo: ${j.motivo}${perdas}</div>
+                    </div>
+                </div>`);
+            });
+
+            return partes.join('');
+        }
+
         async function loadSmsStats(from, to, timeOpts = {}) {
             try {
                 const params = new URLSearchParams();
@@ -3888,6 +3986,9 @@
                     params.set('to', to);
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
+                // Sem await: o aviso de coleta não pode atrasar os números, e os números não podem
+                // depender dele para aparecer.
+                loadSaudeDaColeta(from, to, timeOpts);
                 const res = await fetch(`${API}/clientes/${clientId}/sms-stats?${params}`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();

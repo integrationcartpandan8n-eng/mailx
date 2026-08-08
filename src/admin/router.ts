@@ -9,6 +9,8 @@ import { SlickTextClient } from '../services/slicktext';
 import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
+import { estadoDoCliente } from '../jobs/webhook-watchdog';
+import { canaisConfigurados } from '../services/notificador';
 import { env, METRICS_ONLY } from '../config/env';
 import {
   SESSION_COOKIE,
@@ -4960,5 +4962,84 @@ adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(as
     aviso_de_leitura:
       'campos_de_atribuicao_que_existem lista NOMES; campos_de_atribuicao_COM_VALOR lista os que têm conteúdo. Só o segundo prova algo.',
     resultados,
+  });
+}));
+
+// GET /admin/clientes/:id/saude-da-coleta?start=&end=
+//
+// Responde duas perguntas que o painel não sabia responder e que custaram 4 dias em agosto/2026:
+//
+//   1. A coleta está funcionando AGORA? (último webhook, cadência normal, silêncio anormal)
+//   2. O período que estou olhando tem buraco conhecido de coleta?
+//
+// A segunda é a que evita ler falha de coleta como queda de venda. Em 03/08 21:34 a Digistore
+// desativou sozinha as conexões de IPN e ficamos 4 dias sem gravar 1.023 pagamentos. Decidido não
+// importar (o CSV do painel não traz UTM; recuperaria total sem atribuição). Mas o buraco tem que
+// aparecer na tela: total incompleto sem aviso vira conclusão errada sobre o canal.
+adminRouter.get('/clientes/:id/saude-da-coleta', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string, 10);
+  const cliente = await queryOne<{ id: number; name: string }>(
+    `SELECT id, name FROM clients WHERE id = $1`, [clientId]
+  );
+  if (!cliente) {
+    res.status(404).json({ error: 'Cliente não encontrado' });
+    return;
+  }
+
+  const start = String(req.query.start ?? '').trim();
+  const end = String(req.query.end ?? '').trim();
+
+  const estado = await estadoDoCliente(cliente.id, cliente.name);
+
+  // Sobreposição de intervalos, com fim nulo significando "ainda aberta". Comparar só o início
+  // deixaria passar a janela que começou antes do período e invadiu metade dele — que é
+  // exatamente o formato desta que aconteceu.
+  const janelas = start && end
+    ? await query<any>(
+        `SELECT id, fonte, inicio::text, fim::text, motivo,
+                vendas_perdidas_estimadas, valor_perdido_estimado
+         FROM janelas_sem_coleta
+         WHERE client_id = $1
+           AND inicio <= ($3::date + INTERVAL '1 day')
+           AND (fim IS NULL OR fim >= $2::date)
+         ORDER BY inicio`,
+        [clientId, start, end]
+      )
+    : await query<any>(
+        `SELECT id, fonte, inicio::text, fim::text, motivo,
+                vendas_perdidas_estimadas, valor_perdido_estimado
+         FROM janelas_sem_coleta WHERE client_id = $1 ORDER BY inicio DESC LIMIT 10`,
+        [clientId]
+      );
+
+  res.json({
+    coleta_agora: {
+      ultimo_webhook: estado.ultimoWebhook,
+      horas_em_silencio: estado.horasEmSilencio != null ? Number(estado.horasEmSilencio.toFixed(1)) : null,
+      limite_horas: estado.limiteHoras,
+      intervalo_normal_minutos: estado.intervaloMedioMinutos != null
+        ? Math.round(estado.intervaloMedioMinutos) : null,
+      em_silencio: estado.emSilencio,
+      // O limite é derivado da cadência do próprio cliente (mediana dos últimos 14 dias × 8,
+      // entre 3h e 30h), não de um número fixo — cliente que vende de 10 em 10 minutos e cliente
+      // que vende 3 vezes por dia não podem ter o mesmo alarme.
+      como_o_limite_e_calculado: estado.intervaloMedioMinutos != null
+        ? `mediana de ${Math.round(estado.intervaloMedioMinutos)} min entre vendas nos últimos 14 dias × 8, limitado a [3h, 30h]`
+        : 'sem histórico suficiente de vendas — usando o teto de 30h',
+    },
+    janelas_sem_coleta: janelas.map((j: any) => ({
+      ...j,
+      valor_perdido_estimado: j.valor_perdido_estimado != null ? parseFloat(j.valor_perdido_estimado) : null,
+      em_aberto: j.fim === null,
+    })),
+    periodo_tem_buraco: janelas.length > 0 && !!start && !!end,
+    notificacao: {
+      canais_configurados: canaisConfigurados(),
+      // Sem canal o vigia continua rodando e registrando em log; só o empurrão pro celular é que
+      // não sai. Dizer isso evita alguém supor que está protegido quando não está.
+      aviso: canaisConfigurados().length === 0
+        ? 'Nenhum canal configurado: o silêncio é detectado e vai pro log, mas ninguém é avisado no celular.'
+        : null,
+    },
   });
 }));
