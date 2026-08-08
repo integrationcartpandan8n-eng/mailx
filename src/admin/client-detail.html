@@ -1280,6 +1280,11 @@
             <button class="tab-btn" onclick="switchTab('sms')" id="tab-sms" style="flex:1; padding:0.7rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
                 <i class="fas fa-sms"></i> SMS
             </button>
+            <!-- Por último e mais estreita de propósito: é a aba menos visitada no dia a dia.
+                 Quem mede abre a tela dezenas de vezes; quem configura, uma vez por cliente. -->
+            <button class="tab-btn" onclick="switchTab('config')" id="tab-config" style="flex:0 0 auto; padding:0.7rem 1.1rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
+                <i class="fas fa-gear"></i> Config
+            </button>
         </div>
 
         <div class="global-period-bar" id="globalPeriodControl">
@@ -1814,6 +1819,14 @@
             </div>
         </div><!-- end tab-content-sms -->
 
+        <!-- ═══ ABA CONFIGURAÇÃO ═══
+             Estes cards ficavam FORA das abas, então apareciam embaixo de Visão Geral, de Email e
+             de SMS ao mesmo tempo. Quem abria a aba SMS para ver desempenho rolava por token de
+             API, URL de webhook e botão de pausar cliente antes de chegar no próximo número.
+             Configuração e medição são duas tarefas com públicos diferentes: o head operacional
+             lê números todo dia e mexe em credencial quase nunca. Nada foi removido — só saiu do
+             caminho de quem só quer olhar métrica. -->
+        <div id="tab-content-config" style="display:none">
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -2100,6 +2113,7 @@
                 </button>
             </div>
         </div>
+        </div><!-- end tab-content-config -->
     </div>
 
     <!-- Modal -->
@@ -3892,6 +3906,13 @@
             document.getElementById('tab-content-geral').style.display = 'none';
             document.getElementById('tab-content-email').style.display = 'none';
             document.getElementById('tab-content-sms').style.display = 'none';
+            document.getElementById('tab-content-config').style.display = 'none';
+
+            // A barra de período some na aba de configuração: ela promete "aplica a todos os
+            // gráficos desta página", e ali não existe gráfico nenhum. Controle visível que não
+            // faz nada é pior que controle ausente — quem mexe fica esperando algo mudar.
+            const barra = document.getElementById('globalPeriodControl');
+            if (barra) barra.style.display = tab === 'config' ? 'none' : '';
 
             // Deactivate all buttons
             document.querySelectorAll('.tab-btn').forEach(btn => {
