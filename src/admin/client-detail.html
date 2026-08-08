@@ -3675,62 +3675,6 @@
         function renderConversaoSegmentoTable(tbodyId, cs) {
             const tbody = document.getElementById(tbodyId);
             if (!tbody || !cs) return;
-            // Célula de leads com o ESCOPO estampado. A taxa de conversão só é comparável quando
-            // se sabe se o denominador é do período ou o total acumulado da lista — e por muito
-            // tempo era o acumulado sem dizer. Agora, quando existem retratos diários das listas
-            // cobrindo o período, os leads são a diferença entre dois retratos (exato) e a célula
-            // diz isso; sem retratos, continua vitalício e a célula diz isso também.
-            // .kpi-tip em vez de title nativo: title só aparece depois de 1-2s de hover, e ninguém
-            // descobre por acidente que existe uma ressalva ali.
-            const leadsCell = (seg) => {
-                // Consolidado não soma leads: a mesma pessoa está na lista do SMS e na tag do
-                // email, e somar conta cada uma duas vezes (dava 77.845 numa base que não tem 77
-                // mil pessoas). Sem jeito de desduplicar — exigiria cruzar telefone com email, e
-                // nenhuma das duas APIs entrega isso. Melhor a célula dizer que não sabe do que
-                // exibir um total que parece certo e afunda a taxa pela metade.
-                if (seg.leads_nao_somavel) {
-                    const pc = seg.leads_por_canal || {};
-                    const detalhe = `SMS: ${(pc.sms ?? 0).toLocaleString('pt-BR')} · Email: ${(pc.email ?? 0).toLocaleString('pt-BR')}`;
-                    return `<span style="color:var(--text-dim)">não somável</span>
-                        <span class="kpi-tip" tabindex="0" data-tip="A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign — quem abandona o carrinho recebe SMS e email do mesmo fluxo. Somar os dois contaria cada pessoa duas vezes e a taxa sairia pela metade da real. Para o número por canal, veja as tabelas Conversão por Segmento (SMS) e (Email) logo abaixo, onde a taxa é válida.">ⓘ</span>
-                        <small style="display:block; color:var(--text-dim); font-size:0.68rem">${detalhe} — pessoas repetidas nos dois</small>`;
-                }
-                const n = (seg.leads ?? 0).toLocaleString('pt-BR');
-                const p = seg.leads_periodo;
-                const escopo = seg.leads_source === 'snapshot_delta'
-                    ? (p && p.janela_bate === false
-                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">entraram entre ${fmtData(p.de)} e ${fmtData(p.ate)} — janela maior que o filtro</small>`
-                        : `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${fmtData(p.de)} → ${fmtData(p.ate)})` : ''}</small>`)
-                    : seg.leads_source === 'slicktext_list'
-                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">total da lista (vitalício)</small>`
-                        : '';
-                const tip = seg.leads_warning
-                    ? ` <span class="kpi-tip" tabindex="0" data-tip="${seg.leads_warning.replace(/"/g, '&quot;')}">ⓘ</span>`
-                    : '';
-                return `${n}${tip}${escopo}`;
-            };
-            const abLeadsCell = leadsCell(cs.carrinho_abandonado);
-            const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
-            const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
-            const abTaxaCell = abTaxaStr === '—'
-                ? `<span style="color:var(--text-dim)">—</span>`
-                : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
-            const compLeadsCell = leadsCell(cs.compradores);
-            const compTaxaStr = calcTaxa(cs.compradores.vendas, cs.compradores.leads);
-            const compTaxaNum = compTaxaStr === '—' ? 0 : parseFloat(compTaxaStr);
-            const compTaxaCell = compTaxaStr === '—'
-                ? `<span style="color:var(--text-dim)">—</span>`
-                : `<span class="tag ${compTaxaNum > 3 ? 'green' : ''}" style="${compTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${compTaxaStr}</span>`;
-            // Terceiro balde. Só aparece quando existe — linha permanente com zero viraria ruído,
-            // e o objetivo dela é ser incômoda enquanto houver link sem marcação.
-            const naoClass = cs.nao_classificado || 0;
-            const linhaNaoClass = naoClass > 0 ? [{
-                seg: '<span style="color:var(--warning)">Não classificado</span>',
-                leadsHtml: `<span style="color:var(--text-dim)">—</span>
-                    <span class="kpi-tip" tabindex="0" data-tip="Não existe lista para este grupo: são vendas cujo utm_campaign não casa nem com carrinho abandonado nem com upsell/compra aprovada. Antes elas caíam silenciosamente em Compradores e inflavam a taxa de lá. Aparecem aqui para o link ser corrigido na SlickText — quando o link for arrumado, a venda migra sozinha para o segmento certo.">ⓘ</span>`,
-                vendas: naoClass,
-                taxaHtml: `<span style="color:var(--text-dim)">—</span>`,
-            }] : [];
 
             // Linhas no mesmo padrão do card de mensagens: rótulo COLADO no número.
             //
