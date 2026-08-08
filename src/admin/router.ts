@@ -4907,17 +4907,17 @@ adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(as
     return;
   }
 
-  // Cada candidata é testada em duas formas de passar o pedido, porque a API mistura os dois
-  // estilos entre funções e não dá pra saber qual sem tentar: argumento na URL e query string.
+  // Catálogo resolvido na primeira rodada (pedido 3LMXMRTJ, 08/08/2026):
+  //   getPurchase?purchase_id=<order>  → FUNCIONA, devolve o pedido com 80+ campos
+  //   getPurchase/<order> na URL       → 400, "1. argument is missing: 'purchase_id'"
+  //   getOrder / listOrders / getPurchaseDetails → "Invalid API function called"
+  //   listPurchases?purchase_id / ?order_id → IGNORAM o filtro e devolvem a lista geral
+  //     paginada (300 registros de outras compras). Responder 200 com o resultado de controle é
+  //     indistinguível de funcionar — mesmo comportamento que a SlickText já apresentou duas
+  //     vezes. Ficam de fora daqui: só poluíam a resposta com centenas de linhas alheias.
   const candidatas: Array<{ nome: string; fn: string; params?: Record<string, any>; pathArg?: string }> = [
-    { nome: 'getPurchase (id na URL)', fn: 'getPurchase', pathArg: order },
     { nome: 'getPurchase (purchase_id na query)', fn: 'getPurchase', params: { purchase_id: order } },
-    { nome: 'listPurchases (purchase_id)', fn: 'listPurchases', params: { purchase_id: order } },
-    { nome: 'listPurchases (order_id)', fn: 'listPurchases', params: { order_id: order } },
     { nome: 'listTransactions (purchase_id)', fn: 'listTransactions', params: { purchase_id: order } },
-    { nome: 'getOrder (id na URL)', fn: 'getOrder', pathArg: order },
-    { nome: 'listOrders (order_id)', fn: 'listOrders', params: { order_id: order } },
-    { nome: 'getPurchaseDetails (id na URL)', fn: 'getPurchaseDetails', pathArg: order },
   ];
 
   const resultados: any[] = [];
@@ -4925,35 +4925,40 @@ adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(as
   for (const c of candidatas) {
     const r = await ds24Call(c.fn, c.params, c.pathArg);
 
-    // O corpo útil pode estar em data, em data.data ou na raiz — a sonda olha os três e diz
-    // qual usou, pra não afirmar "vazio" quando o dado está um nível abaixo.
+    // O corpo útil pode estar em data, em data.data ou na raiz — a sonda olha os três, pra não
+    // afirmar "vazio" quando o dado está um nível abaixo.
     const alvo = r.data?.data ?? r.data;
-    const chavesInteressantes = r.ok ? acharChavesInteressantes(alvo) : {};
+
+    // As duas perguntas, separadas de propósito. A primeira versão desta sonda respondeu só a
+    // primeira e reportou como se fosse a segunda: declarou "SIM, achei atribuição" com
+    // campaignkey, custom e tracking_param todos "". Nome de campo não é dado; só valor é.
+    const camposQueExistem = r.ok ? acharChavesInteressantes(alvo, 4, '', false) : {};
+    const camposComValor = r.ok ? acharChavesInteressantes(alvo, 4, '', true) : {};
 
     resultados.push({
       candidata: c.nome,
       http: r.http,
       ok: r.ok,
       erro: r.erro ?? null,
-      chaves_no_topo: alvo && typeof alvo === 'object' ? Object.keys(alvo).slice(0, 80) : null,
-      campos_de_atribuicao_encontrados: Object.keys(chavesInteressantes).length ? chavesInteressantes : null,
+      chaves_no_topo: alvo && typeof alvo === 'object' ? Object.keys(alvo).slice(0, 100) : null,
+      campos_de_atribuicao_que_existem: Object.keys(camposQueExistem).length ? Object.keys(camposQueExistem) : null,
+      campos_de_atribuicao_COM_VALOR: Object.keys(camposComValor).length ? camposComValor : null,
     });
   }
 
-  const comAtribuicao = resultados.filter((r) => r.campos_de_atribuicao_encontrados);
-  const funcionaram = resultados.filter((r) => r.ok);
+  const comValor = resultados.filter((r) => r.campos_de_atribuicao_COM_VALOR);
+  const responderam = resultados.filter((r) => r.ok);
 
   res.json({
     pergunta: 'A API da Digistore devolve o utm_campaign do pedido?',
     pedido_testado: order,
-    veredito: comAtribuicao.length
-      ? `SIM — ${comAtribuicao.length} de ${candidatas.length} candidatas devolveram campo de atribuição. Dá pra reconstruir a janela perdida COM utm real, sem inferir nada.`
-      : funcionaram.length
-        ? `PARCIAL — ${funcionaram.length} candidatas responderam, mas NENHUMA trouxe campo de utm/tracking/custom. Confira "chaves_no_topo" antes de concluir: se aparecer algum nome estranho que possa carregar o dado, vale sondar ele por nome.`
-        : 'NENHUMA candidata respondeu. Pode ser nome de função errado (a API tem catálogo próprio) ou chave sem permissão — olhe o campo erro de cada linha.',
-    proximo_passo: comAtribuicao.length
-      ? 'Colar este JSON no chat: com o nome do campo em mãos, eu escrevo o backfill que puxa os 1.407 eventos da janela pela API e grava com atribuição real.'
-      : 'Colar este JSON no chat mesmo assim — o que as candidatas responderam decide se sobra caminho pela API ou se a gente cai no CSV sem atribuição por mensagem.',
+    veredito: comValor.length
+      ? `SIM — campo de atribuição veio PREENCHIDO em ${comValor.length} de ${candidatas.length} candidatas. Dá pra reconstruir a janela perdida com utm real, sem inferir nada.`
+      : responderam.length
+        ? `NÃO — ${responderam.length} candidatas responderam e os campos de atribuição existem, mas TODOS vazios. Se este pedido tem utm_campaign gravado no nosso banco, está provado que a Digistore só REPASSA os parâmetros da URL no IPN e não os PERSISTE no pedido: a API não recupera atribuição. Se o pedido não tinha utm, o teste é inconclusivo — repetir com um que tenha.`
+        : 'NENHUMA candidata respondeu — olhe o campo erro de cada linha antes de concluir qualquer coisa.',
+    aviso_de_leitura:
+      'campos_de_atribuicao_que_existem lista NOMES; campos_de_atribuicao_COM_VALOR lista os que têm conteúdo. Só o segundo prova algo.',
     resultados,
   });
 }));
