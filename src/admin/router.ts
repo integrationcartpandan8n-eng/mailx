@@ -26,96 +26,13 @@ import {
 
 const CTX = 'Admin';
 
-// ─────────────────────────────────────────────────────────────
-// Fase B — Atribuição MailX via colunas normalizadas
-// Canal decidido por utm_medium (padrão UTMS_DASH), com fallback
-// legado (source/campaign sem hífen) para registros antigos sem medium.
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Venda atribuída à MailX (qualquer canal).
- *
- * Inclui tracking_code porque ClickBank e Buygoods NÃO ACEITAM UTM — a documentação UTMS_DASH
- * define que a marcação vai no `tid` (ClickBank) e no `subid` (Buygoods), no formato
- * "Mailx_AutoEmail_..." / "MailxSMS_AutoSMS_...". Esse valor é guardado cru em
- * webhook_logs.tracking_code. Sem olhar essa coluna, toda venda MailX vinda desses dois
- * gateways seria registrada e não atribuída a ninguém — o ClickBank ainda não está ativo,
- * então nada foi perdido até agora, mas passaria a ser invisível no dia que ligasse.
- */
-const SQL_IS_MAILX = `(
-  COALESCE(utm_source, '')   ILIKE '%mailx%'
-  OR COALESCE(utm_campaign, '') ILIKE '%mailx%'
-  OR COALESCE(tracking_code, '') ILIKE '%mailx%'
-)`;
-
-/**
- * Canal SMS: medium contém 'sms', OU a origem é mailx-sms.
- *
- * A checagem por utm_source já existia, mas só valia com `utm_medium IS NULL` — e essa condição
- * classificava venda de SMS como EMAIL. Encontrado ao validar o SMS: os links do Horse Peak (N8N)
- * saem com `utm_source=mailx-sms` e `utm_medium=WFI001` / `WFI002-Upsell`, fora do padrão da spec
- * (que manda `auto-sms`). Como 'WFI001' não contém 'sms' e não é nulo, a venda caía em
- * SQL_IS_SMS = falso; e como a origem tem 'mailx', SQL_IS_MAILX = verdadeiro. Resultado:
- * SQL_MAILX_EMAIL = MailX E NÃO SMS ficava verdadeiro, e receita de SMS entrava no faturamento de
- * EMAIL — o pior tipo de erro, porque os dois canais ficam errados de uma vez e a soma continua
- * fechando.
- *
- * Origem `mailx-sms` é prova suficiente de canal, com ou sem medium: nenhum link de email carrega
- * essa origem. O medium fora do padrão continua sendo problema (a tabela por mensagem exige
- * `auto-sms` exato), mas isso aparece na nota de reconciliação do card, não como canal trocado.
- */
-const SQL_IS_SMS = `(
-  COALESCE(utm_medium, '') ILIKE '%sms%'
-  OR REPLACE(COALESCE(utm_source, ''),   '-', '') ILIKE '%mailxsms%'
-  OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
-  -- ClickBank/Buygoods: o canal vem no próprio código de rastreio, que começa com
-  -- "MailxSMS_AutoSMS_" no SMS e "Mailx_AutoEmail_" no email. Tokens específicos em vez de
-  -- procurar 'sms' solto, pra nome de produto com essas letras não classificar errado.
-  OR COALESCE(tracking_code, '') ILIKE '%mailxsms%'
-  OR COALESCE(tracking_code, '') ILIKE '%autosms%'
-)`;
-
-/** MailX via SMS. */
-const SQL_MAILX_SMS = `(${SQL_IS_MAILX} AND ${SQL_IS_SMS})`;
-
-/** MailX via Email = MailX e NÃO SMS. */
-const SQL_MAILX_EMAIL = `(${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS})`;
-
-/** Recuperação de carrinho abandonado (qualquer canal). */
-const SQL_IS_RECOVERY = `(
-  COALESCE(utm_campaign, '') ILIKE '%carrinhoabandonado%'
-  OR COALESCE(utm_source, '') ILIKE '%carrinhoabandonado%'
-  OR COALESCE(tracking_code, '') ILIKE '%carrinhoabandonado%'
-)`;
-
-/** Medium de automação (auto-email / auto-sms). */
-const SQL_MEDIUM_AUTO = `COALESCE(utm_medium, '') ILIKE '%auto%'`;
-
-/** Medium de campanha (campaign-editorial / campaing-promo e variações). */
-const SQL_MEDIUM_CAMPAIGN = `(
-  COALESCE(utm_medium, '') ILIKE '%campai%'
-  OR COALESCE(utm_medium, '') ILIKE '%editorial%'
-  OR COALESCE(utm_medium, '') ILIKE '%promo%'
-)`;
-
-/** Campanha de upsell. */
-/**
- * Upsell — a automação de pós-compra. Duas grafias circulam para o MESMO evento: a
- * documentação UTMS_DASH chama de "Automação Compra Aprovada (Upsell)" e usa
- * "CompraAprovada" na campanha, enquanto os disparos em produção usam "Upsell".
- * As duas contam, nos dois caminhos (utm_campaign e tid/subid) — antes só "Upsell" era
- * reconhecido via UTM, então um cliente que seguisse a documentação à risca teria upsell
- * zerado sem nenhum aviso.
- */
-const SQL_IS_UPSELL = `(
-  COALESCE(utm_campaign, '')    ILIKE '%upsell%'
-  OR COALESCE(utm_campaign, '') ILIKE '%compraaprovada%'
-  OR COALESCE(tracking_code, '') ILIKE '%upsell%'
-  OR COALESCE(tracking_code, '') ILIKE '%compraaprovada%'
-)`;
-
-/** Receita normalizada (Fase A garante NUMERIC ou NULL). */
-const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
+// A definição de canal e de segmento mora em ./atribuicao — uma vez, para os dois caminhos que
+// leem esses números (a resposta da aba e o endpoint de invariantes). Ver o cabeçalho de lá.
+import {
+  SQL_IS_MAILX, SQL_IS_SMS, SQL_MAILX_SMS, SQL_MAILX_EMAIL,
+  SQL_IS_RECOVERY, SQL_MEDIUM_AUTO, SQL_MEDIUM_CAMPAIGN, SQL_IS_UPSELL, SQL_REVENUE,
+  SQL_ESCOPO_POR_AUTOMACAO, familiaDoProduto, apurarSms,
+} from './atribuicao';
 
 const SQL_EXCLUDE_PAUSED_CLIENTS = `client_id NOT IN (SELECT id FROM clients WHERE status = 'paused')`;
 
@@ -2014,16 +1931,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   //
   // O que continua fora, e a nota da tela lista: venda de SMS sem mensagem vinculada. Aí não se sabe
   // de qual automação veio, então não há denominador a que ela pertença.
-  const ESCOPO_POR_AUTOMACAO = `EXISTS (
-    SELECT 1 FROM sms_campaign_map m
-    WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign
-  )`;
   const smsSeg = await queryOne<{
     rec_escopo: string; rec_total: string; compra_escopo: string; compra_total: string;
     nao_classificado: string; total_canal: string;
   }>(`
     SELECT
-      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${SQL_ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
       -- NOT recovery: as duas linhas da tabela são segmentos EXCLUDENTES, não um dentro do outro.
       -- Antes "Compradores" contava TODAS as vendas, inclusive as de carrinho abandonado, e as
@@ -2039,7 +1952,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       -- vai para "não classificado", que aparece na tela e vira lista de trabalho pra arrumar o
       -- link na SlickText. É também o que faz a identidade fechar de verdade:
       --   recuperação + comprador + não classificado = total
-      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL} AND ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL} AND ${SQL_ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL}) AS compra_total,
       COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_classificado,
       COUNT(*) AS total_canal
@@ -2132,22 +2045,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     // listas: o utm traz "NeuromindPro" e o kit se chama "M1 - NeuroMind Pro (2 Bottles)".
     const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    // Sufixo de ORIGEM fora do nome do produto. "NeuromindProN8N" é o mesmo NeuroMind, confirmado
-    // com o Nicollas — n8n diz QUEM disparou, não O QUE foi vendido. Sem isso ele virava linha
-    // própria, ficava "sem lista" (nenhum kit casa com esse nome) e as vendas dele saíam do
-    // denominador de todo mundo: 21 recuperações que não entravam na taxa de produto nenhum.
-    //
-    // A mesma regra existe no front (familiaProduto, em client-detail.html) para os chips e a
-    // tabela de mensagens. Duas cópias da mesma regra é dívida conhecida — o conserto definitivo
-    // é a fonte única por número, ainda pendente.
-    const familia = (t: string) => t.replace(/[\s._-]*n8n$/i, '').trim() || t;
 
     type Agrupado = { produto: string; rec: number; vendas: number; naoClass: number; total: number; listasAb: Set<string>; listasCo: Set<string> };
     const porProduto = new Map<string, Agrupado>();
 
     for (const v of vendasPorUtm) {
       if (!v.utm_campaign) continue;
-      const produto = familia(parseUtmCampaign(v.utm_campaign).produto);
+      const produto = familiaDoProduto(parseUtmCampaign(v.utm_campaign).produto);
       if (!produto) continue;
       const chave = norm(produto);
       if (!chave) continue;
@@ -2792,6 +2696,7 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     mensagem: string;
     tipo_automacao: string;
     produto: string;
+    produto_familia: string;
     produto_bruto: string;
     oferta_colada_no_produto: boolean;
     oferta: string | null;
@@ -2816,6 +2721,10 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
         mensagem: parsed.mensagem,
         tipo_automacao: parsed.tipo_automacao,
         produto: parsed.produto,
+        // Família calculada AQUI, não no navegador. A tela tinha a própria cópia da regra, e a
+        // cópia já cobrou: corrigida no front, esquecida no servidor, o NeuromindProN8N virou
+        // produto próprio e as vendas dele saíram do denominador. Agora existe um dono.
+        produto_familia: familiaDoProduto(parsed.produto),
         // Nome cru e o aviso: a tela agrupa pelo produto limpo e estampa que o link está fora do
         // padrão, pra alguém corrigir na SlickText em vez de o dashboard remendar para sempre.
         produto_bruto: parsed.produto_bruto,
@@ -5237,23 +5146,25 @@ adminRouter.get('/clientes/:id/diagnostico/invariantes', asyncHandler(async (req
   const params: (string | number)[] = [clientId];
   const periodo = periodSql(period, params);
 
-  const r = await queryOne<any>(`
-    SELECT
-      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec,
-      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL})   AS upsell,
-      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_classificado,
-      COUNT(*) AS total
-    FROM webhook_logs
-    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
-      ${periodo ? `AND ${periodo}` : ''}
-  `, params);
+  // MESMA função que a aba SMS usa. Antes este endpoint refazia a conta por conta própria e
+  // conferia 1 das 4 identidades — a ferramenta feita para achar inconsistência estava, ela
+  // mesma, incompleta pelo motivo que ela existe para combater.
+  const a = await apurarSms(query, clientId, periodo, params);
 
   const resultado = conferirInvariantes({
     segmentoSms: {
-      recuperacoes: parseInt(r?.rec ?? '0'),
-      compradores: parseInt(r?.upsell ?? '0'),
-      naoClassificado: parseInt(r?.nao_classificado ?? '0'),
-      totalCanal: parseInt(r?.total ?? '0'),
+      recuperacoes: a.recuperacoes,
+      compradores: a.compradores,
+      naoClassificado: a.naoClassificado,
+      totalCanal: a.total,
+    },
+    escopoSms: {
+      dentroRec: a.dentroRec,
+      dentroCompra: a.dentroCompra,
+      foraRec: a.foraRec,
+      foraCompra: a.foraCompra,
+      naoClassificado: a.naoClassificado,
+      totalCanal: a.total,
     },
   });
 
