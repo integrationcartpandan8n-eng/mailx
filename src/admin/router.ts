@@ -2086,9 +2086,16 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // 83 mil.
   const porProdParams: (string | number)[] = [clientId];
   const porProdPeriod = periodSql(period, porProdParams);
-  const vendasPorUtm = await query<{ utm_campaign: string | null; rec: string; total: string }>(`
+  const vendasPorUtm = await query<{ utm_campaign: string | null; rec: string; upsell: string; nao_class: string; total: string }>(`
     SELECT utm_campaign,
            COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec,
+           -- Os mesmos três estados da tabela principal. Esta query ficou de fora do primeiro
+           -- conserto e continuava usando COUNT(*) como "vendas": a tela mostrava 21 recuperações
+           -- e 27 vendas para o NeuromindPro, onde 27 era o total (21 + 6 de upsell). Corrigir a
+           -- tabela de cima e deixar a de baixo com a semântica antiga é pior que não corrigir
+           -- nenhuma — os dois números convivem na mesma tela e um desmente o outro.
+           COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL}) AS upsell,
+           COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_class,
            COUNT(*) AS total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
@@ -2105,7 +2112,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     // listas: o utm traz "NeuromindPro" e o kit se chama "M1 - NeuroMind Pro (2 Bottles)".
     const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    type Agrupado = { produto: string; rec: number; vendas: number; listasAb: Set<string>; listasCo: Set<string> };
+    type Agrupado = { produto: string; rec: number; vendas: number; naoClass: number; total: number; listasAb: Set<string>; listasCo: Set<string> };
     const porProduto = new Map<string, Agrupado>();
 
     for (const v of vendasPorUtm) {
@@ -2115,9 +2122,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       const chave = norm(produto);
       if (!chave) continue;
 
-      const atual = porProduto.get(chave) ?? { produto, rec: 0, vendas: 0, listasAb: new Set<string>(), listasCo: new Set<string>() };
+      const atual = porProduto.get(chave) ?? { produto, rec: 0, vendas: 0, naoClass: 0, total: 0, listasAb: new Set<string>(), listasCo: new Set<string>() };
       atual.rec += parseInt(v.rec);
-      atual.vendas += parseInt(v.total);
+      // vendas = upsell/compra aprovada, NÃO o total. Ver comentário na query.
+      atual.vendas += parseInt(v.upsell);
+      atual.naoClass += parseInt(v.nao_class);
+      atual.total += parseInt(v.total);
 
       // Todo kit cuja família casa com esse produto contribui suas listas. Set porque vários SKUs da
       // mesma família apontam para a MESMA lista, e somar seria contar a lista de novo.
@@ -2150,6 +2160,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
             vendas: a.vendas,
             taxa: leadsCo > 0 ? parseFloat(((a.vendas / leadsCo) * 100).toFixed(2)) : null,
           },
+          // O terceiro estado também aqui: sem ele, a soma das duas colunas não bate com o total
+          // do produto e não há como saber se falta venda ou se sobra.
+          nao_classificado: a.naoClass,
+          total: a.total,
           // Estampa que a lista é da família, para ninguém procurar uma lista por SKU que não existe.
           listas_usadas: { abandono: a.listasAb.size, compradores: a.listasCo.size },
         };
