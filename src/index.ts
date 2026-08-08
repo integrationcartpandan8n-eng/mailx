@@ -9,6 +9,7 @@ import { onboardingRouter } from './onboarding/router';
 import { adminRouter } from './admin/router';
 import { logger } from './utils/logger';
 import { startListSnapshotJob } from './jobs/list-snapshots';
+import { startWebhookWatchdog } from './jobs/webhook-watchdog';
 
 const CTX = 'Server';
 
@@ -98,6 +99,7 @@ async function main() {
   // Retrato diário das listas: gravação do servidor, não de quem visita a tela. Um dia sem retrato
   // é perdido para sempre — não dá pra saber depois quantos contatos uma lista tinha ontem.
   startListSnapshotJob();
+  startWebhookWatchdog();
 
   app.listen(env.PORT, () => {
     logger.info(CTX, `🚀 MailX server running on port ${env.PORT}`);

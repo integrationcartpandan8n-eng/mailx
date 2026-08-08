@@ -274,6 +274,40 @@ export async function initDatabase(): Promise<void> {
         -- colide com nada em UNIQUE comum e geraria uma linha nova a cada chamada do /stats.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_list_snapshot_unique
           ON list_contact_snapshots (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date);
+
+        -- Períodos em que a coleta esteve parada e NENHUMA venda foi gravada, mesmo tendo
+        -- acontecido venda de verdade. Existe porque em 03/08/2026 o banco caiu, os webhooks
+        -- passaram a devolver erro e a Digistore desativou sozinha as duas conexões de IPN:
+        -- ficaram 4 dias sem gravar 1.023 pagamentos. Decidido não importar (o CSV do painel não
+        -- traz UTM, então recuperaria total sem atribuição, com risco de estragar mais do que
+        -- conserta) -- mas buraco não sinalizado APARECE COMO QUEDA DE VENDAS, e alguém lê uma
+        -- falha de coleta como resultado de operação. A tela precisa dizer que não sabe.
+        CREATE TABLE IF NOT EXISTS janelas_sem_coleta (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          fonte VARCHAR(50) NOT NULL,
+          inicio TIMESTAMP NOT NULL,
+          fim TIMESTAMP,
+          motivo TEXT NOT NULL,
+          vendas_perdidas_estimadas INTEGER,
+          valor_perdido_estimado NUMERIC(12,2),
+          criado_em TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_janelas_sem_coleta_periodo
+          ON janelas_sem_coleta (client_id, inicio, fim);
+
+        -- Trava de repetição do vigia de webhook: sem isso um silêncio de dois dias vira um
+        -- alerta a cada 30 minutos, e alerta que apita demais é alerta que se aprende a ignorar.
+        -- Guardado em tabela, não em memória, porque pm2 restart zeraria a trava.
+        CREATE TABLE IF NOT EXISTS alertas_enviados (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          tipo VARCHAR(50) NOT NULL,
+          chave VARCHAR(255) NOT NULL,
+          enviado_em TIMESTAMP DEFAULT NOW()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_alerta_unico
+          ON alertas_enviados (client_id, tipo, chave);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
