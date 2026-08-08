@@ -5139,15 +5139,18 @@
         // A regra tira sufixo de ORIGEM (quem disparou), não de produto: o que identifica o produto
         // é o nome, e "veio pelo n8n" é característica do disparo. Conservador de propósito — só o
         // sufixo no fim, porque remover no meio quebraria nome legítimo que contenha a sigla.
-        function familiaProduto(nome) {
-            if (!nome) return '—';
-            const limpo = String(nome).replace(/[\s._-]*n8n$/i, '').trim();
-            return limpo || String(nome);
+        // A família vem PRONTA do servidor (produto_familia). O fallback existe só para resposta
+        // antiga em cache do navegador — e é deliberadamente o nome cru, não uma segunda cópia da
+        // regra: duas cópias foi exatamente o que fez o NeuromindProN8N ficar certo numa tela e
+        // errado na outra. Regra de negócio tem um dono, e o dono é src/admin/atribuicao.ts.
+        function familiaProduto(row) {
+            if (row && typeof row === 'object') return row.produto_familia || row.produto || '—';
+            return row || '—';
         }
 
         function rowsFiltradas(rows) {
             const f = window.__smsFiltroProduto;
-            return f ? rows.filter(r => familiaProduto(r.produto) === f) : rows;
+            return f ? rows.filter(r => familiaProduto(r) === f) : rows;
         }
 
         function renderFiltroProduto(data, sym) {
@@ -5156,7 +5159,7 @@
 
             const porProduto = new Map();
             for (const r of data.rows) {
-                const k = familiaProduto(r.produto);
+                const k = familiaProduto(r);
                 const cur = porProduto.get(k) || { receita: 0, msgs: 0, variantes: new Set() };
                 cur.receita += r.receita_liquida;
                 cur.msgs++;
@@ -5328,7 +5331,7 @@
             const byProduct = new Map();
 
             for (const row of data.rows) {
-                const key = familiaProduto(row.produto);
+                const key = familiaProduto(row);
                 if (!byProduct.has(key)) byProduct.set(key, []);
                 byProduct.get(key).push(row);
             }
