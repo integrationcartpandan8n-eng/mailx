@@ -3395,13 +3395,21 @@
                         <td>${t == null ? '<span style="color:var(--text-dim)">—</span>' : `<span class="tag ${cor}" style="${estilo}">${t.toLocaleString('pt-BR')}%</span>`}</td>`;
             };
 
-            const linhas = porProduto.map(p => `
+            const linhas = porProduto.map(p => {
+                // Marcador de venda não classificada NO PRÓPRIO produto: sem ele, a soma das duas
+                // colunas não bate com o total daquele produto e não há como saber se falta venda
+                // ou se sobra. Só aparece quando existe.
+                const nc = p.nao_classificado || 0;
+                const aviso = nc > 0
+                    ? ` <span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="${nc} venda(s) deste produto não casam nem com carrinho abandonado nem com upsell/compra aprovada — o utm_campaign do link não diz de qual fluxo vieram. Elas contam no faturamento do produto, mas não entram em nenhum dos dois segmentos ao lado. Corrigir o link na SlickText resolve.">${nc} s/ classificação</span>`
+                    : '';
+                return `
                 <tr>
-                    <td style="font-weight:650">${escapeHtml(p.produto)}</td>
+                    <td style="font-weight:650">${escapeHtml(p.produto)}${aviso}</td>
                     ${cel(p.carrinho_abandonado)}
                     ${cel(p.compradores)}
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
 
             el.innerHTML = `
                 <div style="border-top:1px solid var(--border); padding:0.85rem 1.25rem 0">
