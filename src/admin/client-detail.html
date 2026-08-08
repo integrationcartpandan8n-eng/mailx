@@ -3527,6 +3527,17 @@
             const compTaxaCell = compTaxaStr === '—'
                 ? `<span style="color:var(--text-dim)">—</span>`
                 : `<span class="tag ${compTaxaNum > 3 ? 'green' : ''}" style="${compTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${compTaxaStr}</span>`;
+            // Terceiro balde. Só aparece quando existe — linha permanente com zero viraria ruído,
+            // e o objetivo dela é ser incômoda enquanto houver link sem marcação.
+            const naoClass = cs.nao_classificado || 0;
+            const linhaNaoClass = naoClass > 0 ? [{
+                seg: '<span style="color:var(--warning)">Não classificado</span>',
+                leadsHtml: `<span style="color:var(--text-dim)">—</span>
+                    <span class="kpi-tip" tabindex="0" data-tip="Não existe lista para este grupo: são vendas cujo utm_campaign não casa nem com carrinho abandonado nem com upsell/compra aprovada. Antes elas caíam silenciosamente em Compradores e inflavam a taxa de lá. Aparecem aqui para o link ser corrigido na SlickText — quando o link for arrumado, a venda migra sozinha para o segmento certo.">ⓘ</span>`,
+                vendas: naoClass,
+                taxaHtml: `<span style="color:var(--text-dim)">—</span>`,
+            }] : [];
+
             tbody.innerHTML = [
                 { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
                 // Mesma função de taxa dos dois lados. Antes o abandono usava calcTaxa e os
@@ -3534,6 +3545,7 @@
                 // mostrava 4.4% numa linha e 40.23% na outra, e duas precisões na mesma coluna fazem
                 // parecer que os números vêm de lugares diferentes (vinham).
                 { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: compTaxaCell },
+                ...linhaNaoClass,
             ].map(r => `
                 <tr>
                     <td style="font-weight:600">${r.seg}</td>
@@ -3881,6 +3893,7 @@
                 renderConversaoSegmentoTable('convSegmentoEmailBody', data.conversao_por_segmento_email);
                 renderConversaoSegmentoTable('convSegmentoSmsBody', data.conversao_por_segmento_sms);
                 renderConversaoPorProduto(data.conversao_por_segmento_sms?.por_produto);
+                renderInvariantesQuebradas(data.invariantes);
                 renderLegendaLeadsSms(data.conversao_por_segmento_sms);
 
                 // Render recent webhooks
@@ -3972,6 +3985,26 @@
             const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
             if (isNaN(d)) return iso;
             return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Invariante quebrada é o painel dizendo que ele mesmo está errado. Vai no topo, com o
+        // mesmo destaque do aviso de coleta parada: não adianta o servidor detectar se a tela
+        // continuar mostrando o número como se nada houvesse.
+        function renderInvariantesQuebradas(inv) {
+            const box = document.getElementById('smsSaudeColeta');
+            if (!box || !inv || !inv.quebradas || inv.quebradas.length === 0) return;
+            const html = inv.quebradas.map(q => `
+                <div class="alerta-coleta alerta-coleta--parado">
+                    <i class="fas fa-scale-unbalanced"></i>
+                    <div>
+                        <strong>Número inconsistente nesta tela.</strong>
+                        ${escapeHtml(q.afirma)} — mas deu ${q.esquerda.toLocaleString('pt-BR')} de um lado
+                        e ${q.direita.toLocaleString('pt-BR')} do outro (diferença de ${q.diferenca.toLocaleString('pt-BR')}).
+                        <div class="alerta-coleta__acao">${escapeHtml(q.consequencia || '')}
+                        Detalhe completo em <span style="font-family:monospace">/admin/clientes/ID/diagnostico/invariantes</span>.</div>
+                    </div>
+                </div>`).join('');
+            box.insertAdjacentHTML('afterbegin', html);
         }
 
         function renderSaudeColeta(d) {

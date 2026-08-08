@@ -10,6 +10,7 @@ import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
 import { estadoDoCliente } from '../jobs/webhook-watchdog';
+import { conferirInvariantes } from './invariantes';
 import { canaisConfigurados } from '../services/notificador';
 import { env, METRICS_ONLY } from '../config/env';
 import {
@@ -1999,6 +2000,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   )`;
   const smsSeg = await queryOne<{
     rec_escopo: string; rec_total: string; compra_escopo: string; compra_total: string;
+    nao_classificado: string; total_canal: string;
   }>(`
     SELECT
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
@@ -2010,12 +2012,23 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       -- resumo do topo da mesma página dizia "2 de recuperação e 1 de upsell", o número certo:
       -- a tela mostrava o certo e o errado ao mesmo tempo. Como leads de compradores e leads de
       -- abandono são listas diferentes, o numerador errado inflava a taxa de Compradores.
-      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
-      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}) AS compra_total
+      -- RECONHECIMENTO POSITIVO, não por eliminação. Antes "Compradores" era "tudo que não é
+      -- recuperação" — um balde de resto. Qualquer venda com utm fora do padrão (WFI001, Lost,
+      -- uma automação nova) caía ali sem ninguém saber, inflando a conversão do segmento.
+      -- Agora só entra quem CASA com upsell/compra aprovada; o que não casa com nenhum dos dois
+      -- vai para "não classificado", que aparece na tela e vira lista de trabalho pra arrumar o
+      -- link na SlickText. É também o que faz a identidade fechar de verdade:
+      --   recuperação + comprador + não classificado = total
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL} AND ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL}) AS compra_total,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_classificado,
+      COUNT(*) AS total_canal
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
       ${smsSegPeriod ? `AND ${smsSegPeriod}` : ''}
   `, smsSegParams);
+  const smsSegNaoClassificado = parseInt(smsSeg?.nao_classificado || '0');
+  const smsSegTotalCanal = parseInt(smsSeg?.total_canal || '0');
   const smsSegRecoveryCount = parseInt(smsSeg?.rec_escopo || '0');
   const smsSegSalesCount = parseInt(smsSeg?.compra_escopo || '0');
   const smsSegRecoveryFora = parseInt(smsSeg?.rec_total || '0') - smsSegRecoveryCount;
@@ -2454,7 +2467,30 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     },
     // Isolado por canal — mesmo cálculo, escopado a cada aba (Email/SMS), pedido do Murilo
     // pra bater com a spec ("toda a separação feita isolada para cada aba").
+    // Conferência das identidades que TÊM que fechar. Roda a cada resposta e vai junto com os
+    // números, não num relatório separado: relatório que ninguém abre não protege ninguém.
+    invariantes: conferirInvariantes({
+      segmentoSms: {
+        recuperacoes: smsSegRecoveryCount + smsSegRecoveryFora,
+        compradores: smsSegSalesCount + smsSegSalesFora,
+        naoClassificado: smsSegNaoClassificado,
+        totalCanal: smsSegTotalCanal,
+      },
+      escopoSms: {
+        dentroRec: smsSegRecoveryCount,
+        dentroCompra: smsSegSalesCount,
+        foraRec: smsSegRecoveryFora,
+        foraCompra: smsSegSalesFora,
+        naoClassificado: smsSegNaoClassificado,
+        totalCanal: smsSegTotalCanal,
+      },
+    }),
     conversao_por_segmento_sms: {
+      // Terceiro estado, exposto de propósito. Venda que não casa nem com carrinho abandonado nem
+      // com upsell/compra aprovada não é "comprador por eliminação" — é venda cujo link não diz de
+      // onde veio, e isso é trabalho a fazer na SlickText, não número a esconder.
+      nao_classificado: smsSegNaoClassificado,
+      total_canal: smsSegTotalCanal,
       carrinho_abandonado: {
         leads: abandonoLeads,
         vendas: smsSegRecoveryCount,
@@ -5139,5 +5175,51 @@ adminRouter.get('/clientes/:id/vendas-fora-do-escopo', asyncHandler(async (req: 
         ? 'venda sem utm_campaign — o link não identifica a mensagem'
         : 'mensagem não vinculada a nenhuma automação — rode o Auto-vincular',
     })),
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/invariantes
+//
+// Todas as identidades que o painel deve satisfazer, com os dois lados de cada uma e se fecha.
+//
+// Serve para auditar a tela inteira em segundos, sem depender de alguém estranhar um número por
+// acaso — que foi como os três bugs de sobreposição de 08/08/2026 apareceram, depois de meses no
+// ar. `fecha: null` significa NÃO VERIFICÁVEL (faltou um dos lados, geralmente porque a SlickText
+// não respondeu), e é diferente de `false`: tratar ausência como falha ensinaria a ignorar o
+// alarme.
+adminRouter.get('/clientes/:id/diagnostico/invariantes', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const params: (string | number)[] = [clientId];
+  const periodo = periodSql(period, params);
+
+  const r = await queryOne<any>(`
+    SELECT
+      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec,
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL})   AS upsell,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_classificado,
+      COUNT(*) AS total
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+      ${periodo ? `AND ${periodo}` : ''}
+  `, params);
+
+  const resultado = conferirInvariantes({
+    segmentoSms: {
+      recuperacoes: parseInt(r?.rec ?? '0'),
+      compradores: parseInt(r?.upsell ?? '0'),
+      naoClassificado: parseInt(r?.nao_classificado ?? '0'),
+      totalCanal: parseInt(r?.total ?? '0'),
+    },
+  });
+
+  res.json({
+    periodo: period.from && period.to ? { de: period.from, ate: period.to } : 'todo o histórico',
+    tudo_fecha: resultado.tudoFecha,
+    veredito: resultado.tudoFecha
+      ? 'Todas as identidades verificáveis fecham neste período.'
+      : `${resultado.quebradas.length} identidade(s) NÃO fecham — há número errado na tela.`,
+    como_ler: 'fecha=true bate; fecha=false há erro; fecha=null não foi possível verificar (faltou um dos lados) — que é diferente de estar errado.',
+    invariantes: resultado.invariantes,
   });
 }));
