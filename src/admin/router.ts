@@ -2112,12 +2112,22 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     // listas: o utm traz "NeuromindPro" e o kit se chama "M1 - NeuroMind Pro (2 Bottles)".
     const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+    // Sufixo de ORIGEM fora do nome do produto. "NeuromindProN8N" é o mesmo NeuroMind, confirmado
+    // com o Nicollas — n8n diz QUEM disparou, não O QUE foi vendido. Sem isso ele virava linha
+    // própria, ficava "sem lista" (nenhum kit casa com esse nome) e as vendas dele saíam do
+    // denominador de todo mundo: 21 recuperações que não entravam na taxa de produto nenhum.
+    //
+    // A mesma regra existe no front (familiaProduto, em client-detail.html) para os chips e a
+    // tabela de mensagens. Duas cópias da mesma regra é dívida conhecida — o conserto definitivo
+    // é a fonte única por número, ainda pendente.
+    const familia = (t: string) => t.replace(/[\s._-]*n8n$/i, '').trim() || t;
+
     type Agrupado = { produto: string; rec: number; vendas: number; naoClass: number; total: number; listasAb: Set<string>; listasCo: Set<string> };
     const porProduto = new Map<string, Agrupado>();
 
     for (const v of vendasPorUtm) {
       if (!v.utm_campaign) continue;
-      const produto = parseUtmCampaign(v.utm_campaign).produto;
+      const produto = familia(parseUtmCampaign(v.utm_campaign).produto);
       if (!produto) continue;
       const chave = norm(produto);
       if (!chave) continue;

@@ -3375,6 +3375,10 @@
         // família toda, então não existe taxa "do M1 2 bottles" separada da "do M3 6 bottles". Quebrar
         // por SKU contaria a mesma lista várias vezes.
         function renderConversaoPorProduto(porProduto) {
+            // Guardado para o clique no chip poder redesenhar sem refazer a requisição: trocar de
+            // produto é troca de VISÃO, não de dado, e ir ao servidor a cada clique daria a
+            // impressão de lentidão em algo que já está na memória.
+            window.__convProdutoDados = porProduto;
             const el = document.getElementById('convSegmentoSmsPorProduto');
             if (!el) return;
             if (!Array.isArray(porProduto) || porProduto.length === 0) { el.innerHTML = ''; return; }
@@ -3395,7 +3399,25 @@
                         <td>${t == null ? '<span style="color:var(--text-dim)">—</span>' : `<span class="tag ${cor}" style="${estilo}">${t.toLocaleString('pt-BR')}%</span>`}</td>`;
             };
 
-            const linhas = porProduto.map(p => {
+            // Seletor Geral / por produto, em vez de despejar total e detalhe empilhados.
+            // Ideia do Nicollas, e ele tem razão: com 3+ produtos a tela vira uma parede de
+            // números, e ninguém compara duas tabelas de uma vez — se olha uma de cada vez.
+            // "Geral" continua sendo o padrão porque é a leitura que responde "como foi o canal".
+            const sel = window.__convProdutoSel || null;
+            const chipsProd = `
+                <div class="prod-chips" id="conv-prod-chips" style="margin-bottom:0.6rem">
+                    <button type="button" class="prod-chip${!sel ? ' active' : ''}" data-conv-prod="">Geral<small>todos os produtos</small></button>
+                    ${porProduto.map(p => `
+                        <button type="button" class="prod-chip${sel === p.produto ? ' active' : ''}" data-conv-prod="${escapeHtml(p.produto)}">
+                            ${escapeHtml(p.produto)}<small>${((p.carrinho_abandonado.vendas || 0) + (p.compradores.vendas || 0)).toLocaleString('pt-BR')} vendas</small>
+                        </button>`).join('')}
+                </div>`;
+
+            // Filtra DEPOIS de montar os chips, senão o chip do produto escondido some junto com a
+            // linha e não há como voltar para ele.
+            const visiveis = sel ? porProduto.filter(p => p.produto === sel) : porProduto;
+
+            const linhas = visiveis.map(p => {
                 // Marcador de venda não classificada NO PRÓPRIO produto: sem ele, a soma das duas
                 // colunas não bate com o total daquele produto e não há como saber se falta venda
                 // ou se sobra. Só aparece quando existe.
@@ -3420,6 +3442,7 @@
                     <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:0.5rem">
                         por família de produto · leads das listas da família · vendas atribuídas às automações dela
                     </div>
+                    ${chipsProd}
                 </div>
                 <div style="padding:0 0 0.5rem">
                     <table class="kit-table">
@@ -5044,6 +5067,16 @@
                 ${chips}
             </div>`;
         }
+
+        // Delegado no documento porque o bloco é reescrito a cada render — listener preso ao
+        // elemento morreria junto com ele na primeira troca de período.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-conv-prod]');
+            if (!btn) return;
+            const v = btn.dataset.convProd || null;
+            window.__convProdutoSel = (window.__convProdutoSel === v) ? null : (v || null);
+            renderConversaoPorProduto(window.__convProdutoDados);
+        });
 
         document.getElementById('sms-filtro-produto')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-produto]');
