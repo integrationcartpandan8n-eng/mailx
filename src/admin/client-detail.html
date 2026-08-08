@@ -513,6 +513,54 @@
 
         .rank-list { padding: 0.5rem 0; }
 
+        /* Card de segmento no mesmo padrão do de mensagens: cada número com o rótulo COLADO nele,
+           em vez de tabela com cabeçalho longe do valor. O print mostrou o problema — "31.980"
+           embaixo de "LEADS ABANDONO" mas deslocado, e quem bate o olho não sabe qual número é o
+           quê. Rótulo junto do valor não desalinha nunca, em qualquer largura de tela. */
+        /* Blocos por produto: mesmo princípio do card de segmento — rótulo colado no número.
+           A tabela anterior tinha sete colunas e, no print de produção, o valor aparecia
+           deslocado do cabeçalho: quem batia o olho não sabia qual número era o quê. */
+        .prod-bloco {
+            border: 1px solid var(--border); border-radius: 10px;
+            padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; background: var(--surface-2);
+        }
+        .prod-nome { font-weight: 700; font-size: 0.88rem; margin-bottom: 0.5rem; }
+        .prod-parte {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 1rem; padding: 0.35rem 0; flex-wrap: wrap;
+        }
+        .prod-parte + .prod-parte { border-top: 1px dashed var(--border); }
+        .pp-rot { font-size: 0.75rem; color: var(--text-dim); }
+        .pp-nums { display: flex; gap: 1.25rem; font-size: 0.78rem; color: var(--text-soft); flex-wrap: wrap; }
+        .pp-nums b { font-size: 0.95rem; color: var(--text); }
+        .pp-nums small { font-size: 0.63rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+        .sem-base { color: var(--text-dim); font-size: 0.8rem; }
+
+        .seg-row {
+            display: grid;
+            grid-template-columns: 1fr 150px 120px 130px;
+            gap: 1rem;
+            align-items: center;
+            padding: 0.8rem 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+        .seg-row:first-of-type { border-top: none; }
+        .seg-nome { font-weight: 700; font-size: 0.92rem; }
+        .seg-escopo { font-size: 0.68rem; color: var(--text-dim); margin-top: 0.15rem; }
+        .seg-num { text-align: right; }
+        .seg-num .v { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.02em; }
+        .seg-num .r {
+            font-size: 0.63rem; color: var(--text-dim); text-transform: uppercase;
+            letter-spacing: 0.05em; margin-top: 0.1rem;
+        }
+        .seg-num.vendas .v { color: var(--success); }
+        .seg-num.taxa .v { color: var(--accent-light); }
+        .seg-num .sem-base { font-size: 0.85rem; font-weight: 600; color: var(--text-dim); }
+        @media (max-width: 62rem) {
+            .seg-row { grid-template-columns: 1fr 90px 90px; }
+            .seg-row .seg-num.leads { display: none; }
+        }
+
         .rank-row {
             display: grid;
             grid-template-columns: 1fr 180px 110px 150px 170px;
@@ -1607,14 +1655,9 @@
                     <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista (a API da SlickText não filtra contatos por lista e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com lista vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com lista</span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas MailX</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoBody"><div class="seg-row"><div>Carregando...</div></div></div>
                 </div>
             </div>
         </div>
@@ -1685,14 +1728,9 @@
                     <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da tag <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL da tag (a API do ActiveCampaign não filtra contatos por tag e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com tag vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com tag</span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas Email</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoEmailBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoEmailBody"><div class="seg-row"><div>Carregando...</div></div></div>
                 </div>
             </div>
 
@@ -1770,14 +1808,9 @@
                     <span id="convSegmentoSmsLegenda" style="font-size:0.65rem; color:var(--text-muted); font-weight:600"></span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas SMS</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoSmsBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoSmsBody"><div class="seg-row"><div>Carregando...</div></div></div>
                 </div>
                 <!-- Mesma divisão aberta por produto (pedido 3.4 do documento). Fica dentro do mesmo
                      card, abaixo do consolidado, pra leitura ser "o total e de onde ele vem" em vez
@@ -3476,6 +3509,13 @@
         }
 
         // ── Load Per-Client Stats ──
+        // Plural com um dono. Já quebrou quatro vezes neste projeto ("recuperaçãoões",
+        // "1 cliques/venda", "Outras 1 mensagens", "Thermo · 1 vendas") — sempre consertado no
+        // ponto, nunca na causa. Texto montado com concatenação erra plural; função não erra.
+        function plural(n, singular, pluralForma) {
+            return Math.abs(Number(n)) === 1 ? singular : pluralForma;
+        }
+
         function calcTaxa(vendas, leads) {
             const v = parseInt(vendas) || 0;
             const l = parseInt(leads) || 0;
@@ -3530,7 +3570,7 @@
                     <button type="button" class="prod-chip${!sel ? ' active' : ''}" data-conv-prod="">Geral<small>todos os produtos</small></button>
                     ${porProduto.map(p => `
                         <button type="button" class="prod-chip${sel === p.produto ? ' active' : ''}" data-conv-prod="${escapeHtml(p.produto)}">
-                            ${escapeHtml(p.produto)}<small>${((p.carrinho_abandonado.vendas || 0) + (p.compradores.vendas || 0)).toLocaleString('pt-BR')} vendas</small>
+                            ${escapeHtml(p.produto)}<small>${(() => { const v = (p.carrinho_abandonado.vendas || 0) + (p.compradores.vendas || 0); return `${v.toLocaleString('pt-BR')} ${plural(v, 'venda', 'vendas')}`; })()}</small>
                         </button>`).join('')}
                 </div>`;
 
@@ -3539,19 +3579,36 @@
             const visiveis = sel ? porProduto.filter(p => p.produto === sel) : porProduto;
 
             const linhas = visiveis.map(p => {
-                // Marcador de venda não classificada NO PRÓPRIO produto: sem ele, a soma das duas
-                // colunas não bate com o total daquele produto e não há como saber se falta venda
-                // ou se sobra. Só aparece quando existe.
                 const nc = p.nao_classificado || 0;
                 const aviso = nc > 0
-                    ? ` <span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="${nc} venda(s) deste produto não casam nem com carrinho abandonado nem com upsell/compra aprovada — o utm_campaign do link não diz de qual fluxo vieram. Elas contam no faturamento do produto, mas não entram em nenhum dos dois segmentos ao lado. Corrigir o link na SlickText resolve.">${nc} s/ classificação</span>`
+                    ? ` <span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="${nc} ${plural(nc, 'venda', 'vendas')} deste produto não casam nem com carrinho abandonado nem com upsell/compra aprovada. Contam no faturamento, mas não entram em nenhum dos dois segmentos. Corrigir o link na SlickText resolve.">${nc} s/ classificação</span>`
                     : '';
+                // Um bloco por segmento, cada número com o rótulo do lado. A tabela anterior tinha
+                // sete colunas e o cabeçalho longe do valor — no print de produção o "31.980"
+                // aparecia deslocado do "LEADS ABANDONO".
+                const parte = (rot, seg) => {
+                    const leads = seg.leads;
+                    const taxa = leads == null
+                        ? '<span class="sem-base">sem lista</span>'
+                        : leads < 30
+                            ? `<span class="sem-base">base pequena</span>`
+                            : `<strong>${calcTaxa(seg.vendas, leads)}</strong>`;
+                    return `
+                        <div class="prod-parte">
+                            <div class="pp-rot">${rot}</div>
+                            <div class="pp-nums">
+                                <span><b>${leads == null ? '—' : leads.toLocaleString('pt-BR')}</b> leads</span>
+                                <span><b style="color:var(--success)">${seg.vendas.toLocaleString('pt-BR')}</b> ${plural(seg.vendas, 'venda', 'vendas')}</span>
+                                <span>${taxa} <small>conversão</small></span>
+                            </div>
+                        </div>`;
+                };
                 return `
-                <tr>
-                    <td style="font-weight:650">${escapeHtml(p.produto)}${aviso}</td>
-                    ${cel(p.carrinho_abandonado)}
-                    ${cel(p.compradores)}
-                </tr>`;
+                    <div class="prod-bloco">
+                        <div class="prod-nome">${escapeHtml(p.produto)}${aviso}</div>
+                        ${parte('Carrinho abandonado', p.carrinho_abandonado)}
+                        ${parte('Compradores', p.compradores)}
+                    </div>`;
             }).join('');
 
             el.innerHTML = `
@@ -3565,22 +3622,7 @@
                     </div>
                     ${chipsProd}
                 </div>
-                <div style="padding:0 0 0.5rem">
-                    <table class="kit-table">
-                        <thead>
-                            <tr>
-                                <th>Produto</th>
-                                <th style="text-align:right">Leads abandono</th>
-                                <th style="text-align:right">Recuperações</th>
-                                <th>Taxa</th>
-                                <th style="text-align:right">Leads compradores</th>
-                                <th style="text-align:right">Vendas</th>
-                                <th>Taxa</th>
-                            </tr>
-                        </thead>
-                        <tbody>${linhas}</tbody>
-                    </table>
-                </div>
+                <div style="padding:0 1.25rem 0.75rem">${linhas}</div>
             `;
         }
 
@@ -3690,22 +3732,60 @@
                 taxaHtml: `<span style="color:var(--text-dim)">—</span>`,
             }] : [];
 
+            // Linhas no mesmo padrão do card de mensagens: rótulo COLADO no número.
+            //
+            // A tabela anterior tinha cabeçalho no topo e valor embaixo, e no print de produção o
+            // "31.980" aparecia deslocado do "LEADS ABANDONO" — quem batia o olho não sabia qual
+            // número era o quê. Rótulo junto do valor não desalinha em largura nenhuma.
+            const linhaSeg = (nome, escopo, leadsHtml, vendas, taxaHtml) => `
+                <div class="seg-row">
+                    <div>
+                        <div class="seg-nome">${nome}</div>
+                        ${escopo ? `<div class="seg-escopo">${escopo}</div>` : ''}
+                    </div>
+                    <div class="seg-num leads">${leadsHtml}</div>
+                    <div class="seg-num vendas"><div class="v">${vendas.toLocaleString('pt-BR')}</div><div class="r">${plural(vendas, 'venda', 'vendas')}</div></div>
+                    <div class="seg-num taxa">${taxaHtml}</div>
+                </div>`;
+
+            const numLeads = (seg) => {
+                if (seg.leads_nao_somavel) {
+                    const pc = seg.leads_por_canal || {};
+                    return `<div class="sem-base">não somável <span class="kpi-tip" tabindex="0" data-tip="A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign — somar contaria cada uma duas vezes. SMS: ${(pc.sms ?? 0).toLocaleString('pt-BR')} · Email: ${(pc.email ?? 0).toLocaleString('pt-BR')}. Veja as tabelas por canal, onde a taxa é válida.">ⓘ</span></div>`;
+                }
+                const escopoTxt = seg.leads_source === 'snapshot_delta' ? 'leads do período' : 'leads (total da lista)';
+                return `<div class="v">${(seg.leads ?? 0).toLocaleString('pt-BR')}</div><div class="r">${escopoTxt}</div>`;
+            };
+
+            // Taxa só quando a base sustenta conclusão. Com 2 leads, uma venda a mais move 50
+            // pontos — exibir "100,0%" faria alguém concluir que o fluxo converte tudo, quando não
+            // há amostra para afirmar nada. Melhor dizer que a base é pequena do que dar um número
+            // que parece medido.
+            const BASE_MINIMA = 30;
+            const numTaxa = (seg) => {
+                const leads = seg.leads;
+                if (leads == null) return `<div class="sem-base">—</div>`;
+                if (leads < BASE_MINIMA) {
+                    return `<div class="sem-base">base pequena <span class="kpi-tip" tabindex="0" data-tip="Só ${leads.toLocaleString('pt-BR')} lead(s) no período: uma venda a mais ou a menos mudaria a taxa em dezenas de pontos. Um número assim não sustenta conclusão nenhuma, então não é exibido como se sustentasse. Escolha um período maior.">ⓘ</span></div>`;
+                }
+                const t = calcTaxa(seg.vendas, leads);
+                return `<div class="v">${t}</div><div class="r">conversão</div>`;
+            };
+
+            const naoClass = cs.nao_classificado || 0;
             tbody.innerHTML = [
-                { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                // Mesma função de taxa dos dois lados. Antes o abandono usava calcTaxa e os
-                // compradores o campo pronto da API, com arredondamentos diferentes — a tabela
-                // mostrava 4.4% numa linha e 40.23% na outra, e duas precisões na mesma coluna fazem
-                // parecer que os números vêm de lugares diferentes (vinham).
-                { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: compTaxaCell },
-                ...linhaNaoClass,
-            ].map(r => `
-                <tr>
-                    <td style="font-weight:600">${r.seg}</td>
-                    <td>${r.leadsHtml}</td>
-                    <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
-                    <td>${r.taxaHtml}</td>
-                </tr>
-            `).join('');
+                linhaSeg('Carrinho Abandonado', null, numLeads(cs.carrinho_abandonado), cs.carrinho_abandonado.vendas, numTaxa(cs.carrinho_abandonado)),
+                linhaSeg('Compradores', null, numLeads(cs.compradores), cs.compradores.vendas, numTaxa(cs.compradores)),
+                ...(naoClass > 0 ? [linhaSeg(
+                    '<span style="color:var(--warning)">Não classificado</span>',
+                    'o utm_campaign do link não diz de qual fluxo veio',
+                    `<div class="sem-base">sem lista <span class="kpi-tip" tabindex="0" data-tip="Não existe lista para este grupo: são vendas que não casam nem com carrinho abandonado nem com upsell/compra aprovada. Antes caíam em Compradores e inflavam a taxa de lá. Corrigir o link na SlickText move a venda para o segmento certo.">ⓘ</span></div>`,
+                    naoClass,
+                    `<div class="sem-base">—</div>`
+                )] : []),
+            ].join('');
+
+
 
             // Nota de reconciliação: os KPIs no topo da aba contam TODOS os produtos, essa
             // tabela só os com lista/tag vinculada. Sem essa linha, o mesmo indicador aparece
