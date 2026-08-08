@@ -698,7 +698,14 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
 
   const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
 
-  const channelExtra = channel === 'email' ? `AND NOT ${SQL_IS_SMS}` : '';
+  // channel escopa as SÉRIES da MailX (automação, campanha, recuperação, upsell) — nunca a série
+  // `total`, que é o faturamento do cliente inteiro e serve de régua no gráfico. Escopar o total
+  // junto faria as duas linhas coincidirem e o gráfico perderia justamente o que ele mostra: o
+  // tamanho da fatia MailX dentro do que o cliente fatura.
+  const channelExtra =
+    channel === 'email' ? `AND NOT ${SQL_IS_SMS}`
+    : channel === 'sms' ? `AND ${SQL_IS_SMS}`
+    : '';
   const params: (string | number)[] = [from, to];
   const dateFilterSql = createdAtRangeSql(params, hasTime, fromTime, toTime);
   let clientFilter = '';
@@ -810,6 +817,15 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     clientFilter = `AND client_id = $${params.length}`;
   }
 
+  // Mesmo escopo por canal dos gráficos de série. Aqui ele vale para TODAS as fatias (aprovado,
+  // reembolso e chargeback): a rosca compara pedaços do mesmo bolo, então misturar aprovado de um
+  // canal com reembolso de todos daria uma taxa de reembolso inventada.
+  const canalRefund = req.query.channel as string | undefined;
+  const escopoCanal =
+    canalRefund === 'email' ? `AND ${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS}`
+    : canalRefund === 'sms' ? `AND ${SQL_MAILX_SMS}`
+    : '';
+
   const row = await queryOne<{ aprovado: string; reembolso: string; chargeback_custo: string }>(`
     SELECT
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS aprovado,
@@ -818,6 +834,7 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     FROM webhook_logs
     WHERE ${dateFilterSql}
       ${clientFilter}
+      ${escopoCanal}
   `, params);
 
   const currency = cid ? await resolveClientCurrency(cid) : 'USD';
@@ -826,6 +843,9 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     aprovado: parseFloat(row?.aprovado || '0'),
     reembolso: parseFloat(row?.reembolso || '0'),
     chargeback_custo: parseFloat(row?.chargeback_custo || '0'),
+    // Escopo declarado no dado, não só no título da tela: quem consome a API direto precisa saber
+    // se está olhando o cliente inteiro ou um canal, senão compara números de universos diferentes.
+    escopo: canalRefund === 'email' ? 'MailX · Email' : canalRefund === 'sms' ? 'MailX · SMS' : 'cliente inteiro (todos os canais)',
     currency,
     from_time: hasTime ? fromTime : null,
     to_time: hasTime ? toTime : null,

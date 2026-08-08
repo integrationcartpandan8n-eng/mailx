@@ -1695,6 +1695,44 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Os mesmos três gráficos da Visão Geral, escopados a este canal. Pedido do Nicollas:
+                 sem isso, a única leitura possível era a do cliente inteiro, e não dava pra saber
+                 se um pico de recuperação veio do SMS ou do email.
+                 A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
+                 mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
+                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso". -->
+            <div class="grid-2">
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
+                        <div style="height:220px; position:relative"><canvas id="chartAutoCampEmail"></canvas></div>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
+                        <div style="height:220px; position:relative"><canvas id="chartRecUpsellEmail"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email — a taxa é DESTE canal, não a do cliente</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartRefundEmail"></canvas></div>
+                </div>
+            </div>
         </div><!-- end tab-content-email -->
 
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
@@ -1815,6 +1853,44 @@
                             <tr><td colspan="4" class="empty-state"><i class="fas fa-sms"></i> Carregando...</td></tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Os mesmos três gráficos da Visão Geral, escopados a este canal. Pedido do Nicollas:
+                 sem isso, a única leitura possível era a do cliente inteiro, e não dava pra saber
+                 se um pico de recuperação veio do SMS ou do email.
+                 A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
+                 mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
+                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso". -->
+            <div class="grid-2">
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
+                        <div style="height:220px; position:relative"><canvas id="chartAutoCampSms"></canvas></div>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
+                        <div style="height:220px; position:relative"><canvas id="chartRecUpsellSms"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS — a taxa é DESTE canal, não a do cliente</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartRefundSms"></canvas></div>
                 </div>
             </div>
         </div><!-- end tab-content-sms -->
@@ -2959,6 +3035,8 @@
                     refundSection && refundSection.style.display !== 'none'
                         ? loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime)
                         : null,
+                    loadGraficosDoCanal('sms', from, to, timeOpts.fromTime, timeOpts.toTime),
+                    loadGraficosDoCanal('email', from, to, timeOpts.fromTime, timeOpts.toTime),
                     loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime }),
                     reloadClientStatsForPeriod(from, to, timeOpts),
                     loadSmsStats(from, to, timeOpts),
@@ -3180,6 +3258,12 @@
 
         // ── Refund doughnut chart (Fase D.5) ──
         const __clientRefundChart = { chart: null };
+        // Um ref por canvas: Chart.js guarda a instância presa ao canvas, e reaproveitar o mesmo
+        // ref para dois gráficos faz o segundo destruir o primeiro na próxima atualização.
+        const __refundChartEmail = { chart: null };
+        const __refundChartSms = { chart: null };
+        const __chartsEmail = {};
+        const __chartsSms = {};
 
         function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
             const symbol = currencySymbol(d.currency);
@@ -3242,6 +3326,43 @@
                     : '';
             }
             return pctReembolso;
+        }
+
+        // Versões por canal dos três gráficos. Mesma função de render dos da Visão Geral — o que
+        // muda é só o parâmetro channel e o canvas de destino, então um conserto no desenho vale
+        // para os três lugares de uma vez.
+        async function loadGraficosDoCanal(canal, from, to, fromTime, toTime) {
+            const suf = canal === 'sms' ? 'Sms' : 'Email';
+            const refs = canal === 'sms' ? __chartsSms : __chartsEmail;
+            const refRefund = canal === 'sms' ? __refundChartSms : __refundChartEmail;
+            const rotulo = `gráficos de ${canal.toUpperCase()}`;
+            try {
+                const params = new URLSearchParams({ from, to, client_id: clientId, channel: canal });
+                appendPeriodTimeParams(params, fromTime, toTime);
+
+                const [rSerie, rRefund] = await Promise.all([
+                    fetch(`${API}/dashboard/revenue-charts?${params}`),
+                    fetch(`${API}/dashboard/revenue-vs-refund?${params}`),
+                ]);
+                if (!rSerie.ok) throw new Error(`HTTP ${rSerie.status}`);
+                const dSerie = await rSerie.json();
+                updateRevenueCharts(
+                    dSerie,
+                    document.getElementById('chartAutoCamp' + suf),
+                    document.getElementById('chartRecUpsell' + suf),
+                    refs
+                );
+
+                // O de reembolso pode faltar (cliente só CartPanda não rastreia estorno) sem que
+                // os de série estejam errados — por isso é conferido separado, e a falha de um não
+                // apaga o outro.
+                if (rRefund.ok) {
+                    renderRefundChart(await rRefund.json(), document.getElementById('chartRefund' + suf), refRefund, null, null);
+                }
+                clearDataLoadError(rotulo);
+            } catch (e) {
+                reportDataLoadError(rotulo, e);
+            }
         }
 
         async function loadRefundChartClient(from, to, fromTime, toTime) {
