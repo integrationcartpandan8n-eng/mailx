@@ -4978,8 +4978,10 @@ adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(as
 // aparecer na tela: total incompleto sem aviso vira conclusão errada sobre o canal.
 adminRouter.get('/clientes/:id/saude-da-coleta', asyncHandler(async (req: Request, res: Response) => {
   const clientId = parseInt(req.params.id as string, 10);
-  const cliente = await queryOne<{ id: number; name: string }>(
-    `SELECT id, name FROM clients WHERE id = $1`, [clientId]
+  // company_name: a tabela clients não tem coluna `name` (o mesmo engano quebrou o vigia inteiro
+  // na primeira subida, com "column c.name does not exist" a cada verificação).
+  const cliente = await queryOne<{ id: number; nome: string }>(
+    `SELECT id, company_name AS nome FROM clients WHERE id = $1`, [clientId]
   );
   if (!cliente) {
     res.status(404).json({ error: 'Cliente não encontrado' });
@@ -4989,7 +4991,7 @@ adminRouter.get('/clientes/:id/saude-da-coleta', asyncHandler(async (req: Reques
   const start = String(req.query.start ?? '').trim();
   const end = String(req.query.end ?? '').trim();
 
-  const estado = await estadoDoCliente(cliente.id, cliente.name);
+  const estado = await estadoDoCliente(cliente.id, cliente.nome);
 
   // Sobreposição de intervalos, com fim nulo significando "ainda aberta". Comparar só o início
   // deixaria passar a janela que começou antes do período e invadiu metade dele — que é

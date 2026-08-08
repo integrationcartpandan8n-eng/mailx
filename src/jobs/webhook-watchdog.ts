@@ -127,8 +127,12 @@ function formatarEspera(horas: number): string {
 }
 
 async function verificar(): Promise<void> {
-  const clientes = await query<{ id: number; name: string }>(
-    `SELECT DISTINCT c.id, c.name
+  // company_name, não name: a tabela clients nunca teve coluna `name`, e a query quebrava
+  // inteira com "column c.name does not exist" — o vigia subia, anunciava que estava ativo e
+  // morria em toda verificação. Silêncio de vigia quebrado é indistinguível de silêncio de
+  // sistema saudável, que é exatamente o defeito que ele existe para consertar.
+  const clientes = await query<{ id: number; nome: string }>(
+    `SELECT DISTINCT c.id, c.company_name AS nome
      FROM clients c
      JOIN store_integrations si ON si.client_id = c.id
      WHERE c.status <> 'paused'`
@@ -141,7 +145,7 @@ async function verificar(): Promise<void> {
 
   for (const c of clientes) {
     try {
-      const estado = await estadoDoCliente(c.id, c.name);
+      const estado = await estadoDoCliente(c.id, c.nome);
       if (!estado.emSilencio) continue;
       emSilencio++;
 
@@ -154,7 +158,7 @@ async function verificar(): Promise<void> {
         : 'Sem histórico suficiente para estimar a cadência normal.';
 
       const { enviados, falhas } = await notificar({
-        titulo: `Webhook parado: ${c.name}`,
+        titulo: `Webhook parado: ${c.nome}`,
         urgente: true,
         corpo:
           `Nenhuma venda recebida há ${espera}.\n` +
@@ -176,9 +180,9 @@ async function verificar(): Promise<void> {
           [c.id, chave]
         );
         avisados++;
-        logger.warn(CTX, `⚠️ ${c.name}: sem webhook há ${espera} — avisado por ${enviados.join(', ')}`);
+        logger.warn(CTX, `⚠️ ${c.nome}: sem webhook há ${espera} — avisado por ${enviados.join(', ')}`);
       } else {
-        logger.error(CTX, `${c.name}: sem webhook há ${espera}, mas NENHUM canal aceitou (${falhas.join('; ')})`);
+        logger.error(CTX, `${c.nome}: sem webhook há ${espera}, mas NENHUM canal aceitou (${falhas.join('; ')})`);
       }
     } catch (err: any) {
       logger.error(CTX, `Falha verificando cliente ${c.id}: ${err.message}`);
@@ -187,6 +191,48 @@ async function verificar(): Promise<void> {
 
   if (emSilencio > 0) {
     logger.info(CTX, `${clientes.length} clientes verificados — ${emSilencio} em silêncio, ${avisados} avisados agora`);
+  }
+}
+
+/**
+ * O vigia avisando que o vigia parou.
+ *
+ * Na primeira subida em produção ele anunciou "ativo — notificando por ntfy" e depois morreu em
+ * TODA verificação com `column c.name does not exist`. Do lado de fora, isso é indistinguível de
+ * "está tudo bem": nenhum alerta chegando. O erro só apareceu porque alguém foi ler o log.
+ *
+ * Um monitor que falha em silêncio é pior que monitor nenhum, porque produz confiança sem
+ * cobertura. Uma vez por dia (chave = data), a própria falha vira notificação.
+ */
+async function avisarQueOVigiaQuebrou(err: any): Promise<void> {
+  const hoje = new Date().toISOString().slice(0, 10);
+  try {
+    // client_id nulo: a falha é do vigia, não de um cliente. O índice único cobre isso porque
+    // NULL não colide em UNIQUE — por isso a checagem explícita antes de inserir.
+    const jaAvisouHoje = await queryOne<{ id: number }>(
+      `SELECT id FROM alertas_enviados
+       WHERE client_id IS NULL AND tipo = 'vigia_quebrado' AND chave = $1`,
+      [hoje]
+    );
+    if (jaAvisouHoje) return;
+
+    const { enviados } = await notificar({
+      titulo: 'Vigia de webhook com defeito',
+      urgente: true,
+      corpo:
+        `A verificação automática está falhando: ${err.message}\n\n` +
+        `Enquanto isso, NINGUÉM está vigiando se os webhooks pararam. ` +
+        `Ver o log com: pm2 logs mailx-api --nostream | grep VigiaWebhook`,
+    });
+
+    if (enviados.length > 0) {
+      await query(
+        `INSERT INTO alertas_enviados (client_id, tipo, chave) VALUES (NULL, 'vigia_quebrado', $1)`,
+        [hoje]
+      );
+    }
+  } catch (e: any) {
+    logger.error(CTX, `Não consegui nem avisar que o vigia quebrou: ${e.message}`);
   }
 }
 
@@ -201,7 +247,10 @@ export function startWebhookWatchdog(): void {
   }
 
   const rodar = () => {
-    verificar().catch((err) => logger.error(CTX, `Falha na verificação: ${err.message}`));
+    verificar().catch((err) => {
+      logger.error(CTX, `Falha na verificação: ${err.message}`);
+      avisarQueOVigiaQuebrou(err).catch(() => { /* já foi logado; não há mais a quem recorrer */ });
+    });
   };
 
   setTimeout(rodar, ATRASO_INICIAL_MS);
