@@ -2003,8 +2003,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     SELECT
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
-      COUNT(*) AS compra_total
+      -- NOT recovery: as duas linhas da tabela são segmentos EXCLUDENTES, não um dentro do outro.
+      -- Antes "Compradores" contava TODAS as vendas, inclusive as de carrinho abandonado, e as
+      -- duas linhas se sobrepunham: na tela do North Scale aparecia Carrinho Abandonado 2 e
+      -- Compradores 3, com 3 vendas no período — ou seja, "Compradores" era o total. Pior, o
+      -- resumo do topo da mesma página dizia "2 de recuperação e 1 de upsell", o número certo:
+      -- a tela mostrava o certo e o errado ao mesmo tempo. Como leads de compradores e leads de
+      -- abandono são listas diferentes, o numerador errado inflava a taxa de Compradores.
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND ${ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
       ${smsSegPeriod ? `AND ${smsSegPeriod}` : ''}
@@ -2037,7 +2044,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       v.product_name AS produto,
       v.utm_campaign AS utm,
       COUNT(*) FILTER (WHERE v.is_rec) AS rec_fora,
-      COUNT(*) AS compra_fora,
+      -- NOT is_rec pelo mesmo motivo da tabela: a nota dizia "70 vendas e 52 recuperações" com
+      -- as 52 DENTRO das 70, e quem lê soma 122. Agora os dois números são disjuntos e somam.
+      COUNT(*) FILTER (WHERE NOT v.is_rec) AS compra_fora,
       -- Agora que o escopo é pela automação, o motivo de ficar fora é sempre o mesmo: não há
       -- mensagem vinculada. O que muda é o que fazer, e isso depende de existir utm_campaign.
       CASE
@@ -2243,8 +2252,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
         AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_abandono_id IS NOT NULL)) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
-      COUNT(*) AS compra_total
+      -- Mesma correção do SMS: Compradores exclui recuperação, senão as duas linhas se sobrepõem.
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}
+        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_EMAIL}
       ${emailSegPeriod ? `AND ${emailSegPeriod}` : ''}
@@ -5056,5 +5067,77 @@ adminRouter.get('/clientes/:id/saude-da-coleta', asyncHandler(async (req: Reques
         ? 'Nenhum canal configurado: o silêncio é detectado e vai pro log, mas ninguém é avisado no celular.'
         : null,
     },
+  });
+}));
+
+// GET /admin/clientes/:id/vendas-fora-do-escopo?limit=20
+//
+// QUAIS vendas ficam fora da tabela de Conversão por Segmento, uma a uma.
+//
+// A tabela mostra só a quantidade agregada ("70 vendas de fluxo de comprador e 52 recuperações de
+// carrinho do período não aparecem aqui"). Quantidade agregada não dá pra conferir: o Nicollas
+// pediu 5 ou 6 exemplos reais pra analisar, e ele está certo — número que ninguém consegue abrir
+// vira crença, não medição.
+//
+// Cada linha traz o pedido, a data, o produto, o valor e o utm_campaign que a gerou. Com o
+// utm_campaign em mãos dá pra ir na SlickText e ver qual mensagem é, ou concluir que o link saiu
+// sem marcação.
+adminRouter.get('/clientes/:id/vendas-fora-do-escopo', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const limite = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+
+  const params: (string | number)[] = [clientId];
+  const periodo = periodSql(period, params);
+
+  const linhas = await query<any>(`
+    SELECT
+      payload->>'order_id' AS pedido,
+      created_at::text     AS quando,
+      product_name         AS produto,
+      total_price          AS valor,
+      utm_campaign,
+      utm_medium,
+      (${SQL_IS_RECOVERY}) AS e_recuperacao
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+      ${periodo ? `AND ${periodo}` : ''}
+      AND NOT EXISTS (
+        SELECT 1 FROM sms_campaign_map m
+        WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign
+      )
+    ORDER BY created_at DESC
+    LIMIT ${limite}
+  `, params);
+
+  const semUtm = linhas.filter((l: any) => !l.utm_campaign || !String(l.utm_campaign).trim()).length;
+
+  res.json({
+    pergunta: 'Quais vendas ficam fora da tabela de Conversão por Segmento, e por quê?',
+    periodo: period.from && period.to ? { de: period.from, ate: period.to } : 'todo o histórico',
+    total_listado: linhas.length,
+    limite_aplicado: limite,
+    // Limite explícito na resposta: lista cortada sem dizer que foi cortada faz alguém concluir
+    // que o problema é menor do que é.
+    aviso: linhas.length === limite
+      ? `Lista truncada em ${limite}. Use ?limit= para ver mais.`
+      : null,
+    resumo: {
+      sem_utm_campaign: semUtm,
+      com_utm_mas_nao_vinculada: linhas.length - semUtm,
+      o_que_significa: 'Sem utm_campaign, o link não identifica a mensagem e não há como vincular — o conserto é no link, na SlickText. Com utm_campaign mas sem vínculo, é só rodar o Auto-vincular na aba SMS.',
+    },
+    vendas: linhas.map((l: any) => ({
+      pedido: l.pedido,
+      quando: l.quando,
+      produto: l.produto,
+      valor: l.valor != null ? parseFloat(l.valor) : null,
+      utm_campaign: l.utm_campaign,
+      utm_medium: l.utm_medium,
+      fluxo: l.e_recuperacao ? 'carrinho abandonado' : 'comprador (pós-compra/upsell)',
+      motivo: !l.utm_campaign || !String(l.utm_campaign).trim()
+        ? 'venda sem utm_campaign — o link não identifica a mensagem'
+        : 'mensagem não vinculada a nenhuma automação — rode o Auto-vincular',
+    })),
   });
 }));
