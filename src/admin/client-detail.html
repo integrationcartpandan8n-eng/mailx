@@ -3960,15 +3960,16 @@
 
             (d.janelas_sem_coleta || []).forEach(j => {
                 const fim = j.em_aberto ? 'agora (ainda aberta)' : fmtDataHora(j.fim);
-                const perdas = j.vendas_perdidas_estimadas
-                    ? ` Estimativa do que ficou de fora, medida no painel da Digistore: <strong>${j.vendas_perdidas_estimadas.toLocaleString('pt-BR')} vendas</strong>${j.valor_perdido_estimado ? ` (${j.valor_perdido_estimado.toLocaleString('pt-BR', {style:'currency', currency:'USD'})} de bruto)` : ''}.`
-                    : '';
+                // A estimativa de vendas perdidas continua guardada em janelas_sem_coleta e vem no
+                // endpoint, mas NÃO entra no banner: o aviso precisa ser lido batendo o olho, e
+                // parágrafo longo no topo de um painel é lido como decoração. Quem quiser o número
+                // consulta /saude-da-coleta ou a tabela.
                 partes.push(`<div class="alerta-coleta alerta-coleta--buraco">
                     <i class="fas fa-circle-exclamation"></i>
                     <div>
                         <strong>Este período tem ${fmtDataHora(j.inicio)} → ${fim} sem coleta.</strong>
                         Os números abaixo estão <strong>subestimados</strong> nesse intervalo — vendas aconteceram e não foram gravadas.
-                        <div class="alerta-coleta__acao">Motivo: ${j.motivo}${perdas}</div>
+                        <div class="alerta-coleta__acao">Motivo: ${j.motivo}</div>
                     </div>
                 </div>`);
             });
