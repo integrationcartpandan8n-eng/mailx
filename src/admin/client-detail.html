@@ -3475,7 +3475,19 @@
             // .kpi-tip em vez de title nativo: title só aparece depois de 1-2s de hover, e ninguém
             // descobre por acidente que existe uma ressalva ali.
             const leadsCell = (seg) => {
-                const n = seg.leads.toLocaleString('pt-BR');
+                // Consolidado não soma leads: a mesma pessoa está na lista do SMS e na tag do
+                // email, e somar conta cada uma duas vezes (dava 77.845 numa base que não tem 77
+                // mil pessoas). Sem jeito de desduplicar — exigiria cruzar telefone com email, e
+                // nenhuma das duas APIs entrega isso. Melhor a célula dizer que não sabe do que
+                // exibir um total que parece certo e afunda a taxa pela metade.
+                if (seg.leads_nao_somavel) {
+                    const pc = seg.leads_por_canal || {};
+                    const detalhe = `SMS: ${(pc.sms ?? 0).toLocaleString('pt-BR')} · Email: ${(pc.email ?? 0).toLocaleString('pt-BR')}`;
+                    return `<span style="color:var(--text-dim)">não somável</span>
+                        <span class="kpi-tip" tabindex="0" data-tip="A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign — quem abandona o carrinho recebe SMS e email do mesmo fluxo. Somar os dois contaria cada pessoa duas vezes e a taxa sairia pela metade da real. Para o número por canal, veja as tabelas Conversão por Segmento (SMS) e (Email) logo abaixo, onde a taxa é válida.">ⓘ</span>
+                        <small style="display:block; color:var(--text-dim); font-size:0.68rem">${detalhe} — pessoas repetidas nos dois</small>`;
+                }
+                const n = (seg.leads ?? 0).toLocaleString('pt-BR');
                 const p = seg.leads_periodo;
                 const escopo = seg.leads_source === 'snapshot_delta'
                     ? (p && p.janela_bate === false
