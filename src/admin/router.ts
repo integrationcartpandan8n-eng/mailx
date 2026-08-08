@@ -2406,24 +2406,37 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     origem_do_faturamento: origemDoFaturamento,
     desempenho_por_caminho: desempenhoPorCaminho,
     email_automacao_vs_campanha: emailAutomacaoVsCampanha,
+    //
+    // LEADS NÃO SÃO SOMADOS AQUI, e a taxa consolidada não existe.
+    //
+    // A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign: quem abandonou o
+    // carrinho recebe SMS e email do mesmo fluxo. Somar os dois lados conta cada pessoa duas
+    // vezes — no cliente de referência dava 77.845 leads (39.173 do SMS + 38.672 do AC) para uma
+    // base que não tem 77 mil pessoas. Com o denominador dobrado, a taxa consolidada saía pela
+    // METADE da real, e o canal parecia converter menos do que converte.
+    //
+    // Não existe conserto por cálculo: para desduplicar seria preciso cruzar telefone com email
+    // pessoa a pessoa, dado que nenhuma das duas APIs entrega. Então a tela deixa de somar em vez
+    // de mostrar um número que parece certo. Vendas continuam somadas — venda é evento distinto,
+    // não pessoa, e a mesma compra não aparece nos dois canais.
     conversao_por_segmento: {
       carrinho_abandonado: {
-        leads: abandonoLeads + emailAbandonoLeads,
+        leads: null,
         vendas: smsSegRecoveryCount + emailSegRecoveryCount,
         vendas_fora_escopo: smsSegRecoveryFora + emailSegRecoveryFora,
-        taxa: (abandonoLeads + emailAbandonoLeads) > 0
-          ? parseFloat((((smsSegRecoveryCount + emailSegRecoveryCount) / (abandonoLeads + emailAbandonoLeads)) * 100).toFixed(2))
-          : 0,
+        taxa: null,
+        leads_nao_somavel: true,
+        leads_por_canal: { sms: abandonoLeads, email: emailAbandonoLeads },
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },
       compradores: {
-        leads: compradorLeads + emailCompradorLeads,
+        leads: null,
         vendas: smsSegSalesCount + emailSegSalesCount,
         vendas_fora_escopo: smsSegSalesFora + emailSegSalesFora,
-        taxa: (compradorLeads + emailCompradorLeads) > 0
-          ? parseFloat((((smsSegSalesCount + emailSegSalesCount) / (compradorLeads + emailCompradorLeads)) * 100).toFixed(2))
-          : 0,
+        taxa: null,
+        leads_nao_somavel: true,
+        leads_por_canal: { sms: compradorLeads, email: emailCompradorLeads },
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },
