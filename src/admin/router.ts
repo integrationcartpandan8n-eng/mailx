@@ -252,7 +252,7 @@ async function leadsPorPeriodoViaSnapshots(
   compraIds: string[],
   from: string,
   to: string
-): Promise<{ abandono: number; compra: number; baseDate: string; endDate: string } | null> {
+): Promise<{ abandono: number; compra: number; deltaPorLista: Map<string, number>; baseDate: string; endDate: string } | null> {
   const todas = [...new Set([...abandonoIds, ...compraIds])];
   if (todas.length === 0) return null;
 
@@ -299,13 +299,26 @@ async function leadsPorPeriodoViaSnapshots(
   const compra = somar(compraIds);
   if (abandono === null || compra === null) return null;
 
+  // Delta POR LISTA, não só o total. É o que permite a tabela "Aberto por produto" usar a MESMA
+  // fonte de leads da tabela de cima.
+  //
+  // Antes ela usava o total atual da lista (vitalício) enquanto a de cima usava o delta do
+  // período — e as duas apareciam no mesmo card, com a mesma venda: 26 recuperações contra 644
+  // leads davam 4,0% em cima, e as mesmas 26 contra 31.980 davam 0,08% embaixo. Cinquenta vezes
+  // de diferença, os dois "certos" no seu próprio universo, e só o de cima com legenda. Comparar
+  // taxas de universos diferentes lado a lado é pior que não mostrar a segunda.
+  const deltaPorLista = new Map<string, number>();
+  for (const [id, e] of porLista) {
+    if (e.base != null && e.fim != null) deltaPorLista.set(id, Math.max(0, e.fim - e.base));
+  }
+
   // As datas vêm como texto do SQL (snapshot_date::text) de propósito: o driver do Postgres devolve
   // DATE como objeto Date do JS, e String(date).slice(0,10) produzia "Thu Jul 30" — foi o que
   // apareceu na tela em produção, no idioma errado e sem ano.
   const datas = [...porLista.values()];
   const baseDate = datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from;
   const endDate = datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? to;
-  return { abandono, compra, baseDate: String(baseDate).slice(0, 10), endDate: String(endDate).slice(0, 10) };
+  return { abandono, compra, deltaPorLista, baseDate: String(baseDate).slice(0, 10), endDate: String(endDate).slice(0, 10) };
 }
 
 /**
@@ -1855,6 +1868,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           : null;
 
         if (delta) {
+          // A tabela por produto passa a ler daqui também — mesma fonte, mesmo universo, taxas
+          // comparáveis entre as duas partes do card.
+          contagemPorLista = new Map(delta.deltaPorLista);
           abandonoLeads = delta.abandono;
           compradorLeads = delta.compra;
           leadsSource = 'snapshot_delta';
