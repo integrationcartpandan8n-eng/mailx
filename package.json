@@ -4,11 +4,12 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/validar-html.js",
     "start": "node dist/index.js",
     "bootstrap": "tsx src/setup/bootstrap.ts",
     "resync": "tsx src/setup/resync-webhooks.ts",
-    "backfill-refund": "tsx src/setup/backfill-refund-csv.ts"
+    "backfill-refund": "tsx src/setup/backfill-refund-csv.ts",
+    "validar-html": "node scripts/validar-html.js"
   },
   "keywords": [],
   "author": "MailX Group",
