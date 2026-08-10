@@ -80,6 +80,8 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
   // perguntar o tamanho dela nas outras contas do cliente — com três contas, sondar todas seria
   // três vezes mais requisição para dois erros esperados e uma resposta.
   const contaDaLista = new Map<string, number | null>();
+  // Nome por lista, para o retrato dizer o que é sem precisar de outra chamada depois.
+  const nomeDaLista = new Map<string, string>();
   for (const conta of contas) {
     try {
       const st = new SlickTextClient(conta.token, conta.brandId);
@@ -88,6 +90,7 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
         inventario.push({ client_id: conta.clientId, list_id: id });
         const chave = `${conta.clientId}:${id}`;
         if (!contaDaLista.has(chave)) contaDaLista.set(chave, conta.accountId);
+        if (l.name && !nomeDaLista.has(chave)) nomeDaLista.set(chave, String(l.name).slice(0, 255));
       }
     } catch (err: any) {
       logger.warn(CTX, `Não consegui listar as listas da conta ${conta.brandId}: ${err.message}`);
@@ -158,11 +161,14 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
 
     try {
       await query(
-        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count)
-         VALUES ($1, $2, $3, CURRENT_DATE, $4)
+        // COALESCE no nome ao atualizar: se a segunda passada do dia não souber o nome (lista de
+        // kit que não apareceu em listagem nenhuma), não apaga o que a primeira já tinha gravado.
+        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count, list_name)
+         VALUES ($1, $2, $3, CURRENT_DATE, $4, $5)
          ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
-         DO UPDATE SET contact_count = EXCLUDED.contact_count`,
-        [lista.client_id, melhor.accountId, lista.list_id, melhor.count]
+         DO UPDATE SET contact_count = EXCLUDED.contact_count,
+                       list_name = COALESCE(EXCLUDED.list_name, list_contact_snapshots.list_name)`,
+        [lista.client_id, melhor.accountId, lista.list_id, melhor.count, nomeDaLista.get(chave) ?? null]
       );
       resultado.gravadas++;
     } catch (err: any) {

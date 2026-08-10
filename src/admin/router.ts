@@ -219,17 +219,21 @@ async function getSlickTextAccounts(clientId: number | string): Promise<SlickTex
  */
 async function gravarSnapshotDeListas(
   clientId: string,
-  listas: Array<{ id: string; count: number; accountId: number | null }>
+  listas: Array<{ id: string; count: number; accountId: number | null; nome?: string | null }>
 ): Promise<void> {
   for (const l of listas) {
     if (l.count <= 0) continue; // lista que não respondeu — gravar 0 criaria degrau falso no delta
     try {
+      // Este caminho conta lista por ID vindo do kit, então normalmente NÃO sabe o nome. O
+      // COALESCE existe para ele não apagar o nome que o job já gravou: abrir a aba SMS não pode
+      // desfazer informação que a gravação automática obteve.
       await query(
-        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count)
-         VALUES ($1, $2, $3, CURRENT_DATE, $4)
+        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count, list_name)
+         VALUES ($1, $2, $3, CURRENT_DATE, $4, $5)
          ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
-         DO UPDATE SET contact_count = EXCLUDED.contact_count`,
-        [clientId, l.accountId, l.id, l.count]
+         DO UPDATE SET contact_count = EXCLUDED.contact_count,
+                       list_name = COALESCE(EXCLUDED.list_name, list_contact_snapshots.list_name)`,
+        [clientId, l.accountId, l.id, l.count, l.nome ?? null]
       );
     } catch (err: any) {
       logger.warn(CTX, `Falha ao gravar retrato da lista ${l.id} (client ${clientId}): ${err.message}`);
@@ -3312,18 +3316,22 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
   const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
   const todas = [...new Set([...abandonoIds, ...compraIds])];
 
-  const retratos = await query<{ list_id: string; st_account_id: number | null; snapshot_date: string; contact_count: string }>(
-    `SELECT list_id, st_account_id, snapshot_date::text AS snapshot_date, contact_count
+  const retratos = await query<{ list_id: string; st_account_id: number | null; list_name: string | null; snapshot_date: string; contact_count: string }>(
+    `SELECT list_id, st_account_id, list_name, snapshot_date::text AS snapshot_date, contact_count
      FROM list_contact_snapshots WHERE client_id = $1
      ORDER BY list_id, snapshot_date DESC`,
     [clientId]
   );
 
   const porLista = new Map<string, Array<{ data: string; contatos: number; conta: number | null }>>();
+  const nomePorLista = new Map<string, string>();
   for (const r of retratos) {
     const arr = porLista.get(r.list_id) ?? [];
     arr.push({ data: r.snapshot_date.slice(0, 10), contatos: parseInt(r.contact_count), conta: r.st_account_id });
     porLista.set(r.list_id, arr);
+    // Retratos vêm do mais recente para o mais antigo, então o primeiro nome visto é o atual.
+    // Nome mudado no meio da série é sinal de alguém ter mexido na conta — vale ver a série inteira.
+    if (r.list_name && !nomePorLista.has(r.list_id)) nomePorLista.set(r.list_id, r.list_name);
   }
 
   // Roda o MESMO cálculo que o /stats usa — não uma reimplementação. Se este devolver null, o da
@@ -3337,6 +3345,7 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
     const datas = rs.map(r => r.data);
     return {
       list_id: id,
+      nome: nomePorLista.get(id) ?? null,
       segmento: abandonoIds.includes(id) ? (compraIds.includes(id) ? 'abandono e compra' : 'abandono') : 'compra',
       retratos_gravados: rs.length,
       datas,
@@ -3376,6 +3385,34 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
               : 'Há retratos, mas nenhum dentro da tolerância de 3 dias das pontas do período pedido. Tente um período que termine hoje.',
         },
     listas: diagnosticoPorLista,
+    // Listas COM retrato que não estão vinculadas a kit nenhum. Existe por causa da migração do
+    // NeuroMind: a lista vinculada estava congelada em 19.706 e a lista viva era outra, em outra
+    // conta da SlickText, que o painel não olhava. O que decide qual é a viva não é o tamanho — é
+    // qual CRESCE. Por isso aqui vai a variação da série, e não só a contagem atual.
+    listas_sem_vinculo: [...porLista.keys()]
+      .filter(id => !todas.includes(id))
+      .map(id => {
+        const rs = porLista.get(id)!;             // ordenada do mais recente para o mais antigo
+        const atual = rs[0];
+        const antiga = rs[rs.length - 1];
+        return {
+          list_id: id,
+          nome: nomePorLista.get(id) ?? null,
+          conta: atual.conta,
+          contatos_agora: atual.contatos,
+          retratos_gravados: rs.length,
+          primeiro_retrato: antiga.data,
+          // null, e não 0, enquanto há só um retrato: não medido é diferente de medido e parado, e
+          // é justamente essa diferença que decide a religação.
+          variacao: rs.length >= 2 ? atual.contatos - antiga.contatos : null,
+          veredito: rs.length < 2
+            ? 'sem série ainda — precisa de um segundo dia de retrato'
+            : atual.contatos > antiga.contatos
+              ? 'CRESCENDO — está recebendo contato novo'
+              : 'PARADA — não entrou contato desde o primeiro retrato',
+        };
+      })
+      .sort((a, b) => b.contatos_agora - a.contatos_agora),
     como_confirmar_amanha: [
       'Rode este endpoint com ?from= e ?to= terminando no dia de hoje.',
       'Quando calculo_de_leads_por_periodo.resolve virar true, a aba SMS passa a mostrar "entraram no período" com as datas na célula de Leads.',
