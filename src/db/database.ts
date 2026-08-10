@@ -274,6 +274,15 @@ export async function initDatabase(): Promise<void> {
         -- colide com nada em UNIQUE comum e geraria uma linha nova a cada chamada do /stats.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_list_snapshot_unique
           ON list_contact_snapshots (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date);
+        -- Nome da lista no dia do retrato. Sem ele, diagnosticar exige cruzar ID cru com a API a
+        -- cada vez: a série que provou a migração do NeuroMind era uma tabela de números como
+        -- "141504" sem nenhuma indicação de que produto era. O nome vem de graça, porque a
+        -- listagem que descobre as listas já o devolve.
+        --
+        -- Guardado por retrato, e não numa tabela de listas: lista renomeada mantém o nome que
+        -- tinha no dia. Ler a série e ver o nome mudar é justamente como se descobre que alguém
+        -- mexeu na conta -- que foi o que aconteceu aqui, e ninguém soube dizer quando.
+        ALTER TABLE list_contact_snapshots ADD COLUMN IF NOT EXISTS list_name VARCHAR(255);
 
         -- Períodos em que a coleta esteve parada e NENHUMA venda foi gravada, mesmo tendo
         -- acontecido venda de verdade. Existe porque em 03/08/2026 o banco caiu, os webhooks
