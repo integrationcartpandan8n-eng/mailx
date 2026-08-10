@@ -5341,3 +5341,247 @@ adminRouter.get('/clientes/:id/diagnostico/inventario-de-listas', asyncHandler(a
     contas: saida,
   });
 }));
+
+/**
+ * Normaliza UTM para comparar grafias. Minúscula e sem separador: `mailx-sms`, `mailx_sms` e
+ * `MailxSMS` colapsam no mesmo valor.
+ *
+ * Existe porque a grafia já custou uma conclusão errada: uma consulta com `ILIKE '%mailxsms%'`
+ * devolveu zero venda de SMS em toda a janela investigada, e a leitura foi "não houve venda de
+ * SMS" quando o valor real era `mailx-sms`, com hífen. Duas grafias da mesma coisa são,
+ * para qualquer filtro, duas coisas diferentes — e o filtro não avisa que perdeu linha.
+ */
+function normalizarUtm(v: string | null | undefined): string {
+  return String(v ?? '').trim().toLowerCase().replace(/[-_\s.]/g, '');
+}
+
+/** Extrai os utm_* da query string de um link. Devolve strings vazias no lugar de null. */
+function utmDaUrl(url: string | null | undefined): { source: string; medium: string; campaign: string } {
+  const vazio = { source: '', medium: '', campaign: '' };
+  if (!url) return vazio;
+  try {
+    // Base fictícia para aceitar URL relativa sem lançar; o que interessa é só a query.
+    const q = new URL(String(url), 'https://x.invalid').searchParams;
+    return {
+      source: q.get('utm_source') ?? '',
+      medium: q.get('utm_medium') ?? '',
+      campaign: q.get('utm_campaign') ?? '',
+    };
+  } catch {
+    return vazio;
+  }
+}
+
+// GET /admin/clientes/:id/diagnostico/inventario-de-utm
+//
+// Todas as UTM que os links da SlickText CARREGAM, contra todas as UTM que de fato CHEGAM nas
+// vendas — e a diferença entre as duas.
+//
+// Por que existe: a UTM não está no n8n. O n8n move contato entre listas; quem carrega a UTM é o
+// link dentro do texto do SMS, e esse link vive na SlickText (`GET /links` traz a `url` com a query
+// string inteira). Auditar fluxo no n8n nunca vai encontrar erro de UTM, porque a UTM não passa por
+// lá — foi por isso que uma auditoria dos workflows voltou sem essa informação.
+//
+// O que este endpoint responde, que nenhum dos dois lados responde sozinho:
+//
+//   1. CONFIGURADO E NUNCA CHEGOU — link existe com aquela UTM, mas nenhuma venda veio com ela.
+//      Ou a mensagem não está sendo enviada, ou ninguém clica, ou a plataforma perde o parâmetro.
+//      Nos três casos a receita daquela mensagem aparece como zero no painel, e zero de receita é
+//      indistinguível de mensagem que não converte.
+//   2. CHEGA E NÃO ESTÁ CONFIGURADO — venda com UTM que nenhum link nosso carrega. É atribuição
+//      que o painel está aceitando sem saber de onde vem.
+//   3. GRAFIA DIVERGENTE — duas escritas da mesma coisa (`mailx-sms` vs `mailx_sms`). É o caso mais
+//      perigoso porque some silenciosamente: o filtro casa uma e descarta a outra, e a venda
+//      descartada não aparece em lugar nenhum como "descartada" — aparece como se não existisse.
+//   4. CAMPANHA SEM VÍNCULO — utm_campaign que chega mas não está em `sms_campaign_map`, ou seja,
+//      venda que fica fora do escopo por automação e não entra em taxa nenhuma.
+adminRouter.get('/clientes/:id/diagnostico/inventario-de-utm', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const dias = Math.min(365, Math.max(1, parseInt(String(req.query.dias ?? '45')) || 45));
+  const contas = await getSlickTextAccounts(clientId);
+
+  // ── Lado CONFIGURADO: os links da SlickText ──
+  //
+  // getAllLinks, e não getLinks({source:'Workflow'}): os links dos disparos via N8N são criados à
+  // mão no encurtador e têm source='manual', então o filtro por Workflow nunca os enxerga. Filtrar
+  // aqui esconderia justamente os links que este cliente mais usa.
+  type LinkUtm = { conta: string; brand_id: string; source: string; workflow_id: number | null; node_id: number | null; url: string; utm: { source: string; medium: string; campaign: string } };
+  const links: LinkUtm[] = [];
+  const errosPorConta: Array<{ conta: string; erro: string }> = [];
+
+  for (const acc of contas) {
+    const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+    try {
+      const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+      for (const l of await st.getAllLinks()) {
+        const url = String(l.url ?? l.long_url ?? '');
+        links.push({
+          conta: rotulo,
+          brand_id: acc.st_brand_id,
+          source: String(l.source ?? 'desconhecido'),
+          workflow_id: l._source_id != null ? Number(l._source_id) : null,
+          node_id: l._sub_source_id != null ? Number(l._sub_source_id) : null,
+          url,
+          utm: utmDaUrl(url),
+        });
+      }
+    } catch (err: any) {
+      // Conta que falhou NÃO pode virar "nenhum link configurado": isso transformaria falha de
+      // leitura em achado ("chega e não está configurado") para todas as UTM daquela conta.
+      errosPorConta.push({ conta: rotulo, erro: err.message });
+    }
+  }
+
+  const chave = (u: { source: string; medium: string; campaign: string }) => `${u.source}|${u.medium}|${u.campaign}`;
+
+  const configurado = new Map<string, { utm: { source: string; medium: string; campaign: string }; links: number; contas: Set<string>; workflows: Set<number>; nodes: Set<number>; exemplo_url: string }>();
+  for (const l of links) {
+    // Link sem utm_source nenhum não é erro: encurtador tem link de suporte, de opt-out, de
+    // rastreio interno. Só entra no inventário o que carrega alguma atribuição.
+    if (!l.utm.source && !l.utm.medium && !l.utm.campaign) continue;
+    const k = chave(l.utm);
+    const e = configurado.get(k) ?? { utm: l.utm, links: 0, contas: new Set<string>(), workflows: new Set<number>(), nodes: new Set<number>(), exemplo_url: l.url };
+    e.links++;
+    e.contas.add(l.conta);
+    if (l.workflow_id != null) e.workflows.add(l.workflow_id);
+    if (l.node_id != null) e.nodes.add(l.node_id);
+    configurado.set(k, e);
+  }
+
+  // ── Lado QUE CHEGA: as vendas gravadas ──
+  const chegando = await query<{ source: string | null; medium: string | null; campaign: string | null; vendas: string; receita: string | null; primeira: string; ultima: string }>(
+    `SELECT utm_source AS source, utm_medium AS medium, utm_campaign AS campaign,
+            COUNT(*)::text AS vendas,
+            COALESCE(SUM(total_price), 0)::text AS receita,
+            MIN(created_at)::text AS primeira,
+            MAX(created_at)::text AS ultima
+     FROM webhook_logs
+     WHERE client_id = $1 AND event_type = 'order.paid'
+       AND created_at >= NOW() - ($2 || ' days')::interval
+       AND COALESCE(utm_source, '') <> ''
+     GROUP BY utm_source, utm_medium, utm_campaign
+     ORDER BY COUNT(*) DESC`,
+    [clientId, String(dias)]
+  );
+
+  // ── Campanhas com vínculo de mensagem ──
+  const mapeadas = await query<{ utm_campaign: string }>(
+    `SELECT DISTINCT utm_campaign FROM sms_campaign_map WHERE client_id = $1`,
+    [clientId]
+  );
+  const campanhasMapeadas = new Set(mapeadas.map(m => m.utm_campaign));
+
+  // ── Cruzamento ──
+  //
+  // O casamento é feito na forma NORMALIZADA. Comparar cru diria que `mailx-sms` e `mailx_sms` são
+  // duas coisas sem relação, e o relatório sairia com um "configurado e nunca chegou" e um "chega e
+  // não está configurado" que na verdade são o MESMO par, separados por um caractere.
+  const chaveNorm = (u: { source: string; medium: string; campaign: string }) =>
+    `${normalizarUtm(u.source)}|${normalizarUtm(u.medium)}|${normalizarUtm(u.campaign)}`;
+
+  const normConfigurado = new Set([...configurado.values()].map(c => chaveNorm(c.utm)));
+  const normChegando = new Set(chegando.map(c => chaveNorm({ source: c.source ?? '', medium: c.medium ?? '', campaign: c.campaign ?? '' })));
+
+  const configuradoENuncaChegou = [...configurado.values()]
+    .filter(c => !normChegando.has(chaveNorm(c.utm)))
+    .map(c => ({
+      utm: c.utm,
+      links: c.links,
+      contas: [...c.contas],
+      workflows: [...c.workflows],
+      nodes: [...c.nodes],
+      exemplo_url: c.exemplo_url.slice(0, 200),
+    }));
+
+  const chegaENaoConfigurado = chegando
+    .filter(c => !normConfigurado.has(chaveNorm({ source: c.source ?? '', medium: c.medium ?? '', campaign: c.campaign ?? '' })))
+    .map(c => ({
+      utm: { source: c.source, medium: c.medium, campaign: c.campaign },
+      vendas: parseInt(c.vendas),
+      receita: parseFloat(c.receita ?? '0'),
+      primeira: c.primeira,
+      ultima: c.ultima,
+    }));
+
+  // ── Grafia divergente ──
+  //
+  // Agrupa por forma normalizada e denuncia todo grupo com mais de uma escrita crua. Olha os dois
+  // lados juntos de propósito: o caso perigoso é justamente o link estar escrito de um jeito e a
+  // venda chegar do outro.
+  const porNormalizado = new Map<string, Set<string>>();
+  const registrar = (campo: string, valor: string | null | undefined) => {
+    const cru = String(valor ?? '').trim();
+    if (!cru) return;
+    const k = `${campo}:${normalizarUtm(cru)}`;
+    porNormalizado.set(k, (porNormalizado.get(k) ?? new Set<string>()).add(cru));
+  };
+  for (const c of configurado.values()) {
+    registrar('utm_source', c.utm.source);
+    registrar('utm_medium', c.utm.medium);
+    registrar('utm_campaign', c.utm.campaign);
+  }
+  for (const c of chegando) {
+    registrar('utm_source', c.source);
+    registrar('utm_medium', c.medium);
+    registrar('utm_campaign', c.campaign);
+  }
+  const grafiaDivergente = [...porNormalizado.entries()]
+    .filter(([, escritas]) => escritas.size > 1)
+    .map(([k, escritas]) => ({ campo: k.split(':')[0], escritas: [...escritas] }));
+
+  // ── Campanhas que chegam sem vínculo de mensagem ──
+  const campanhaSemVinculo = [...new Set(chegando.map(c => c.campaign).filter((v): v is string => !!v))]
+    .filter(c => !campanhasMapeadas.has(c))
+    .map(c => {
+      const linhas = chegando.filter(x => x.campaign === c);
+      return {
+        utm_campaign: c,
+        vendas: linhas.reduce((a, b) => a + parseInt(b.vendas), 0),
+        receita: linhas.reduce((a, b) => a + parseFloat(b.receita ?? '0'), 0),
+      };
+    })
+    .sort((a, b) => b.vendas - a.vendas);
+
+  const leituraIncompleta = errosPorConta.length > 0;
+
+  res.json({
+    pergunta: 'As UTM que os links carregam são as mesmas que chegam nas vendas?',
+    periodo_das_vendas: `últimos ${dias} dias`,
+    // A cobertura vem ANTES dos achados: conta que falhou faz toda UTM dela parecer "não
+    // configurada", e quem lê precisa saber disso antes de acreditar na lista.
+    cobertura: {
+      contas_lidas: contas.length - errosPorConta.length,
+      contas_com_erro: errosPorConta,
+      links_lidos: links.length,
+      links_com_utm: [...configurado.values()].reduce((a, b) => a + b.links, 0),
+      aviso: leituraIncompleta
+        ? 'LEITURA INCOMPLETA — uma ou mais contas falharam. O bloco "chega_e_nao_configurado" está inflado: as UTM dessas contas não foram lidas e por isso parecem inexistentes.'
+        : null,
+    },
+    veredito: leituraIncompleta
+      ? 'Não dá para concluir: faltou ler pelo menos uma conta.'
+      : grafiaDivergente.length > 0
+        ? `${grafiaDivergente.length} valor(es) escrito(s) de mais de uma forma — isso faz filtro perder venda em silêncio. Comece por aqui.`
+        : chegaENaoConfigurado.length > 0
+          ? `${chegaENaoConfigurado.length} UTM chegando sem link nosso que a carregue — atribuição de origem desconhecida.`
+          : configuradoENuncaChegou.length > 0
+            ? `Grafias consistentes. ${configuradoENuncaChegou.length} UTM configurada(s) que nunca trouxe venda — verificar se a mensagem está sendo enviada.`
+            : 'Os dois lados batem.',
+    grafia_divergente: grafiaDivergente,
+    chega_e_nao_configurado: chegaENaoConfigurado,
+    configurado_e_nunca_chegou: configuradoENuncaChegou,
+    campanha_sem_vinculo_de_mensagem: campanhaSemVinculo,
+    // As duas listas cruas, para colar em planilha.
+    configurado: [...configurado.values()]
+      .map(c => ({ utm: c.utm, links: c.links, contas: [...c.contas], workflows: [...c.workflows], nodes: [...c.nodes] }))
+      .sort((a, b) => b.links - a.links),
+    chegando: chegando.map(c => ({
+      utm: { source: c.source, medium: c.medium, campaign: c.campaign },
+      vendas: parseInt(c.vendas),
+      receita: parseFloat(c.receita ?? '0'),
+      primeira: c.primeira,
+      ultima: c.ultima,
+      campanha_com_vinculo: c.campaign ? campanhasMapeadas.has(c.campaign) : null,
+    })),
+  });
+}));
