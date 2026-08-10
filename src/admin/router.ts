@@ -5194,3 +5194,113 @@ adminRouter.get('/clientes/:id/diagnostico/invariantes', asyncHandler(async (req
     invariantes: resultado.invariantes,
   });
 }));
+
+// GET /admin/clientes/:id/diagnostico/inventario-de-listas
+//
+// TODAS as listas da conta, com a contagem atual e o vínculo (se houver), pra achar lista
+// abandonada e lista nova que ninguém vinculou.
+//
+// Por que existe: em 10/08/2026 a lista de compradores do NeuroMind (107460) apareceu com 19.706
+// contatos em OITO retratos consecutivos — zero variação em 11 dias, num produto que vende
+// centenas por semana. A lista de abandono do MESMO produto crescia todo dia (+632 no período),
+// então não era a conta, nem a marca, nem a API.
+//
+// Número perfeitamente imóvel não parece automação quebrada; parece lista ABANDONADA — alguém
+// criou uma nova, os compradores passaram a entrar nela, e a antiga congelou no valor do dia da
+// troca. O auto-vínculo casa por NOME e pegou a velha, então o denominador do segmento de
+// compradores virou zero e a taxa ficou incalculável, sem nada na tela explicando por quê.
+//
+// Este endpoint mostra o inventário inteiro justamente porque o problema NÃO está no que a gente
+// já conhece: está numa lista que o painel nunca olhou.
+adminRouter.get('/clientes/:id/diagnostico/inventario-de-listas', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+
+  // Vínculos atuais, pra marcar cada lista como usada por qual produto e em qual papel.
+  const vinculos = await query<{ nome: string; compra: string | null; abandono: string | null }>(
+    `SELECT name AS nome, st_list_compra_id AS compra, st_list_abandono_id AS abandono
+     FROM kits WHERE client_id = $1 AND enabled = true`,
+    [clientId]
+  );
+  const usoPorLista = new Map<string, string[]>();
+  for (const v of vinculos) {
+    if (v.compra) usoPorLista.set(v.compra, [...(usoPorLista.get(v.compra) ?? []), `${v.nome} (compra)`]);
+    if (v.abandono) usoPorLista.set(v.abandono, [...(usoPorLista.get(v.abandono) ?? []), `${v.nome} (abandono)`]);
+  }
+
+  // Variação medida pelos retratos: é ela que distingue lista viva de lista congelada. Sem isso
+  // o inventário mostraria só tamanhos, e tamanho grande não quer dizer lista em uso.
+  const variacao = await query<{ list_id: string; primeiro: string; ultimo: string; dias: string }>(
+    `SELECT list_id,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date))[1]::text AS primeiro,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date DESC))[1]::text AS ultimo,
+            COUNT(*)::text AS dias
+     FROM list_contact_snapshots WHERE client_id = $1 GROUP BY list_id`,
+    [clientId]
+  );
+  const varPorLista = new Map(variacao.map(v => [v.list_id, v]));
+
+  const saida: any[] = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    let listas: any[] = [];
+    let erro: string | null = null;
+    try {
+      listas = await st.getLists();
+    } catch (err: any) {
+      erro = err.message;
+    }
+
+    const detalhadas = [];
+    for (const l of listas) {
+      const id = String(l.contact_list_id);
+      // Contagem é chamada por lista; erro em uma não pode zerar as outras nem virar 0 na tela —
+      // 0 e "não sei" são coisas diferentes.
+      let contatos: number | null = null;
+      try {
+        contatos = await st.getListContactCount(l.contact_list_id);
+      } catch { contatos = null; }
+
+      const v = varPorLista.get(id);
+      const cresceu = v ? parseInt(v.ultimo) - parseInt(v.primeiro) : null;
+
+      detalhadas.push({
+        list_id: id,
+        nome: l.name,
+        criada: l.created ?? null,
+        contatos_agora: contatos,
+        vinculada_a: usoPorLista.get(id) ?? null,
+        retratos: v ? { dias: parseInt(v.dias), variacao_no_periodo: cresceu } : null,
+        // O rótulo que responde a pergunta de uma vez.
+        situacao: v == null
+          ? (usoPorLista.has(id) ? 'vinculada, mas sem retrato ainda' : 'NÃO VINCULADA — o painel nunca olhou esta lista')
+          : cresceu === 0
+            ? 'CONGELADA — nenhum contato novo no período coberto pelos retratos'
+            : 'viva',
+      });
+    }
+
+    saida.push({
+      conta: acc.accountId == null ? 'principal' : `extra #${acc.accountId}`,
+      brand_id: acc.st_brand_id,
+      erro,
+      total_de_listas: detalhadas.length,
+      listas: detalhadas.sort((a, b) => (b.contatos_agora ?? 0) - (a.contatos_agora ?? 0)),
+    });
+  }
+
+  const congeladas = saida.flatMap(c => c.listas.filter((l: any) => l.situacao.startsWith('CONGELADA')));
+  const orfas = saida.flatMap(c => c.listas.filter((l: any) => l.situacao.startsWith('NÃO VINCULADA') && (l.contatos_agora ?? 0) > 0));
+
+  res.json({
+    pergunta: 'Existe lista abandonada (congelada) ou lista nova que ninguém vinculou?',
+    veredito: congeladas.length > 0 && orfas.length > 0
+      ? `Suspeita CONFIRMÁVEL: ${congeladas.length} lista(s) congelada(s) e ${orfas.length} lista(s) com contatos que o painel não olha. Compare os nomes — se houver par do mesmo produto, a antiga foi abandonada e a nova é a que está em uso.`
+      : congeladas.length > 0
+        ? `${congeladas.length} lista(s) congelada(s), mas nenhuma lista nova com contatos apareceu. Aí a hipótese muda: a automação que alimenta essa lista pode estar desligada na SlickText.`
+        : 'Nenhuma lista congelada no período coberto pelos retratos.',
+    resumo: { congeladas: congeladas.map((l: any) => l.nome), nao_vinculadas_com_contatos: orfas.map((l: any) => l.nome) },
+    contas: saida,
+  });
+}));
