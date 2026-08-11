@@ -3805,36 +3805,62 @@
             // que aquela lista específica ficou "muda" até a taxa dela aparecer estranha semanas
             // depois.
             //
-            // <details>/<summary> nativo em vez de parede de texto sempre aberta: a primeira
-            // versão listava uma linha por lista direto na tela (visto em produção com 10 listas
-            // reais — ainda dava pra ler, mas cresce mal). Recolhido por padrão, com tabela de
-            // verdade (não divs empilhados) quando expandido — não precisa de JS de toggle, o
-            // navegador já faz.
+            // <details>/<summary> nativo em vez de parede de texto sempre aberta. A versão anterior
+            // desta tabela listava as datas por extenso ("30/07/2026, 03/08/2026, ...") — lista de
+            // texto não é visualização, e crescia sem dar nenhum padrão visível. Troca por uma
+            // barra de cobertura: um quadradinho por dia, preenchido = tem retrato, vazio = não tem
+            // — o padrão "sólido com 1 furo" vs "só os 2 últimos dias" salta aos olhos sem ler nada.
             const retratoStatus = cs.listas_retrato_status || [];
             if (retratoStatus.length > 0) {
                 const emStandby = retratoStatus.filter(l => l.standby).length;
-                const linhasTabela = retratoStatus.map(l => {
-                    const seg = l.segmento === 'abandono' ? 'Abandono' : 'Compradores';
-                    const datasTxt = (l.datas || []).length > 0
-                        ? l.datas.map(d => fmtData(d)).join(', ')
-                        : 'nenhum retrato';
-                    const statusTxt = l.standby
-                        ? `<span style="color:var(--warning)">standby</span>`
-                        : `<span style="color:var(--success, #4ade80)">ok</span>`;
-                    return `<tr>
-                        <td style="padding:0.3rem 0.6rem 0.3rem 0">${escapeHtml(l.produto)}</td>
-                        <td style="padding:0.3rem 0.6rem">${seg}</td>
-                        <td style="padding:0.3rem 0.6rem; font-family:monospace; font-size:0.7rem; opacity:0.8">${escapeHtml(l.list_id)}</td>
-                        <td style="padding:0.3rem 0.6rem">${statusTxt}</td>
-                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${datasTxt}</td>
+
+                // Range comum a todas as barras: do dia mais antigo com retrato ao mais recente.
+                // Sem um eixo compartilhado, a barra de uma lista de 2 dias e a de uma lista de 9
+                // dias teriam larguras diferentes e não daria pra comparar cobertura entre elas.
+                const todasDatas = retratoStatus.flatMap(l => l.datas || []);
+                const diaMaisAntigo = todasDatas.length > 0 ? todasDatas.reduce((a, b) => a < b ? a : b) : null;
+                const diaMaisRecente = todasDatas.length > 0 ? todasDatas.reduce((a, b) => a > b ? a : b) : null;
+                const rangeDias = [];
+                if (diaMaisAntigo && diaMaisRecente) {
+                    let d = new Date(`${diaMaisAntigo}T00:00:00Z`);
+                    const fim = new Date(`${diaMaisRecente}T00:00:00Z`);
+                    while (d <= fim) {
+                        rangeDias.push(d.toISOString().slice(0, 10));
+                        d.setUTCDate(d.getUTCDate() + 1);
+                    }
+                }
+
+                const barraCobertura = (datas) => {
+                    const gravados = new Set(datas || []);
+                    return `<div style="display:flex; gap:1px">${rangeDias.map(dia => {
+                        const tem = gravados.has(dia);
+                        return `<span title="${fmtData(dia)}${tem ? '' : ' — sem retrato'}" style="width:9px; height:9px; border-radius:2px; background:${tem ? 'var(--success)' : 'var(--surface-2)'}; border:1px solid ${tem ? 'var(--success)' : 'var(--border)'}"></span>`;
+                    }).join('')}</div>`;
+                };
+
+                // Agrupado por produto (mesma ordem que já vem do servidor) — só imprime o nome do
+                // produto na primeira linha do grupo, com uma borda separando de um produto pro
+                // outro, pra não repetir "NeuroMind Pro" quatro vezes seguidas.
+                const linhasTabela = retratoStatus.map((l, i) => {
+                    const seg = l.segmento === 'abandono' ? 'Abandono' : 'Compra Aprovada';
+                    const novoGrupo = i === 0 || retratoStatus[i - 1].produto !== l.produto;
+                    const statusHtml = l.standby
+                        ? `<span style="color:var(--warning)"><i class="fas fa-clock"></i> nova</span>`
+                        : `<span style="color:var(--success)"><i class="fas fa-check"></i> histórico ok</span>`;
+                    return `<tr style="${novoGrupo && i > 0 ? 'border-top:1px solid var(--border)' : ''}">
+                        <td style="padding:0.3rem 0.6rem 0.3rem 0; ${novoGrupo ? 'font-weight:600' : 'opacity:0'}">${escapeHtml(l.produto)}</td>
+                        <td style="padding:0.3rem 0.6rem; color:var(--text-dim)">${seg}</td>
+                        <td style="padding:0.3rem 0.6rem">${statusHtml}</td>
+                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${barraCobertura(l.datas)}</td>
                     </tr>`;
                 }).join('');
+
                 const resumoTxt = emStandby > 0
                     ? `${emStandby} de ${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico`
                     : `${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} com retrato — nenhuma em standby`;
                 const icone = emStandby > 0
                     ? `<i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>`
-                    : `<i class="fas fa-circle-check" style="color:var(--success, #4ade80); margin-right:0.35rem"></i>`;
+                    : `<i class="fas fa-circle-check" style="color:var(--success); margin-right:0.35rem"></i>`;
                 tbody.insertAdjacentHTML('beforeend', `
                     <tr>
                         <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
@@ -3848,15 +3874,16 @@
                                             <tr style="text-align:left; color:var(--text-dim); border-bottom:1px solid var(--border)">
                                                 <th style="padding:0 0.6rem 0.3rem 0; font-weight:600">Produto</th>
                                                 <th style="padding:0 0.6rem 0.3rem; font-weight:600">Segmento</th>
-                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Lista</th>
-                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Status</th>
-                                                <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Datas gravadas</th>
+                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Histórico</th>
+                                                <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Cobertura (${diaMaisAntigo ? fmtData(diaMaisAntigo) : ''} → ${diaMaisRecente ? fmtData(diaMaisRecente) : ''})</th>
                                             </tr>
                                         </thead>
                                         <tbody>${linhasTabela}</tbody>
                                     </table>
                                 </div>
-                                <div style="margin-top:0.4rem; opacity:0.85">Lista em standby conta como total vitalício até acumular retrato suficiente.</div>
+                                <div style="margin-top:0.5rem; opacity:0.85">
+                                    "Histórico ok" é sobre a LISTA, não sobre a taxa: a taxa do produto continua "não calculável" enquanto QUALQUER lista dele (abandono ou compra, incluindo a de um segundo gateway) ainda estiver "nova" — é tudo ou nada por produto, não lista por lista.
+                                </div>
                             </details>
                         </td>
                     </tr>
