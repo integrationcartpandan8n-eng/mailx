@@ -658,6 +658,20 @@ export class SlickTextClient {
   }
 
   /**
+   * Registros crus de /lists/{id}/contacts — pra descobrir se a SlickText devolve, por contato, a
+   * data em que ele ENTROU NA LISTA (não a data de criação do contato em geral, que pode ser bem
+   * anterior). Se esse campo existir, dá pra contar leads exatos de qualquer período sem depender
+   * de retrato diário — inclusive retroativo, cobrindo período de antes de o retrato existir.
+   *
+   * offset/limit livres de propósito: primeira chamada é só pra ver os NOMES dos campos; depois
+   * o diagnóstico decide se vale paginar a lista inteira.
+   */
+  async rawListContacts(listId: number, params: Record<string, any> = {}): Promise<any[]> {
+    const res = await this.http.get(`/lists/${listId}/contacts`, { params });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
+  /**
    * Procura pedaços de texto (ex: o slug de um link slk1.io criado à mão) no corpo das mensagens
    * de um workflow, e devolve o `_sub_source_id` — o node — de cada acerto. É o caminho para
    * recuperar envios por período de mensagem com link manual: o link não tem node, mas a MENSAGEM

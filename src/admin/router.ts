@@ -3774,6 +3774,98 @@ adminRouter.get('/clientes/:id/diagnostico/probe-envios', asyncHandler(async (re
   });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-data-de-entrada?list_id=XXXXX - A SlickText devolve,
+// por CONTATO, a data em que ele entrou NAQUELA LISTA?
+//
+// Por que importa: hoje "leads do período" é a diferença entre dois retratos diários da lista —
+// funciona, mas tem margem de ±1 dia (o retrato pode não bater exatamente com a virada do dia) e
+// só existe série a partir do dia em que o retrato começou a ser gravado. Se a API devolver, por
+// contato, uma data de ENTRADA NA LISTA (não confundir com data de criação do contato em geral,
+// que pode ser bem anterior — a pessoa pode ter entrado em outra lista meses atrás e só ter
+// entrado NESTA agora), dá pra contar leads exatos de qualquer período, incluindo período de
+// ANTES do primeiro retrato.
+//
+// Não SUBSTITUI o retrato — o retrato continua sendo a fonte para clientes sem esse campo, ou
+// enquanto o probe não confirmar. É só o que decide se vale migrar.
+//
+// Sonda em duas camadas: primeiro pega uma amostra pequena e mostra TODOS os campos que vieram
+// (pra decidir olhando os nomes reais, não adivinhando); depois, se algum campo parecer data de
+// lista, cruza contra o próprio retrato: um contato com data de entrada dentro da janela dos
+// últimos dois retratos tem que estar entre os que a diferença de retrato também contou. Se as
+// contagens não baterem, o campo existe mas significa outra coisa, e o probe diz isso em vez de
+// assumir que serve.
+adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const listIdParam = req.query.list_id ? parseInt(String(req.query.list_id)) : null;
+  const contas = await getSlickTextAccounts(clientId);
+
+  if (contas.length === 0) {
+    res.json({ erro: 'Cliente sem conta SlickText configurada.' });
+    return;
+  }
+
+  // Sem list_id, usa a primeira lista de compra vinculada — sonda tem que ter algo concreto pra
+  // olhar, e lista de compra é a que mais importa pro caso de uso (leads exatos de comprador).
+  let listId = listIdParam;
+  let listaEscolhidaAutomaticamente = false;
+  if (!listId) {
+    const kit = await queryOne<{ st_list_compra_id: string | null }>(
+      `SELECT st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_compra_id IS NOT NULL LIMIT 1`,
+      [clientId]
+    );
+    if (kit?.st_list_compra_id) { listId = parseInt(kit.st_list_compra_id); listaEscolhidaAutomaticamente = true; }
+  }
+
+  if (!listId) {
+    res.json({ erro: 'Nenhuma lista de compra vinculada e nenhum ?list_id= informado.' });
+    return;
+  }
+
+  const amostras: any[] = [];
+  const errosPorConta: Array<{ conta: string; erro: string }> = [];
+
+  for (const acc of contas) {
+    const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+    try {
+      const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+      const registros = await st.rawListContacts(listId, { offset: 0, limit: 5 });
+      if (registros.length === 0) continue; // lista não existe nesta conta — esperado, não é erro
+      amostras.push({ conta: rotulo, brand_id: acc.st_brand_id, registros });
+    } catch (err: any) {
+      errosPorConta.push({ conta: rotulo, erro: err.message });
+    }
+  }
+
+  // Candidatos a "data de entrada NESTA lista": qualquer campo cujo nome sugira isso. Nome
+  // literal, sem adivinhar semântica — quem lê decide olhando o valor.
+  const padraoCampoData = /list.*(date|added|joined|created)|date.*(list|added|joined)|added_at|joined_at|list_created|added_to_list/i;
+  const camposEncontrados = new Set<string>();
+  for (const a of amostras) {
+    for (const r of a.registros) {
+      for (const campo of Object.keys(r ?? {})) {
+        if (padraoCampoData.test(campo)) camposEncontrados.add(campo);
+      }
+    }
+  }
+
+  res.json({
+    pergunta: 'A SlickText devolve, por contato, a data em que ele entrou NESTA lista (não a data de criação do contato)?',
+    lista_sondada: { list_id: listId, escolhida_automaticamente: listaEscolhidaAutomaticamente },
+    cobertura: {
+      contas_lidas: contas.length - errosPorConta.length,
+      contas_com_erro: errosPorConta,
+    },
+    campos_candidatos_a_data_de_entrada: [...camposEncontrados],
+    veredito: camposEncontrados.size === 0
+      ? 'NENHUM campo com nome de data de entrada apareceu na amostra. Ou o endpoint não devolve isso, ou o nome do campo não bate com o padrão procurado — olhe "todos_os_campos_da_amostra" abaixo e leia os nomes um por um antes de concluir que não existe.'
+      : `${camposEncontrados.size} campo(s) candidato(s) encontrado(s): ${[...camposEncontrados].join(', ')}. PRECISA CONFIRMAR O SIGNIFICADO antes de usar — o próximo passo é pegar 2-3 contatos com esse campo preenchido e comparar a data contra quando a venda/abandono de fato aconteceu no nosso banco (webhook_logs.created_at). Só depois disso migrar leads-por-período pra esse campo.`,
+    // Todos os campos crus de uma amostra, para ler manualmente quando o padrão de nome não achar
+    // nada — a SlickText pode nomear o campo de um jeito que ninguém adivinha de primeira.
+    todos_os_campos_da_amostra: amostras[0]?.registros?.[0] ? Object.keys(amostras[0].registros[0]) : null,
+    amostras_completas: amostras,
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/cobertura-automacao - Quanto dos envios de automação da
 // conta está coberto pelas mensagens que temos vinculadas.
 //
