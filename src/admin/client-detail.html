@@ -3797,6 +3797,31 @@
                     </tr>
                 `);
             }
+
+            // Lista recém-conectada (troca de conta/lista no workflow, gateway novo, produto
+            // migrado) sem histórico suficiente ainda. Existe só no card SMS (cs.listas_em_standby
+            // vem null/undefined no Email e no consolidado) — sem essa nota, quem troca o vínculo
+            // não tem como saber que aquela lista específica ficou "muda" até a taxa dela aparecer
+            // estranha semanas depois.
+            const standby = cs.listas_em_standby || [];
+            if (standby.length > 0) {
+                const linhas = standby.map(l => {
+                    const seg = l.segmento === 'abandono' ? 'abandono' : 'compradores';
+                    const desde = l.desde
+                        ? `desde ${fmtData(l.desde)} (${l.dias_gravados} dia${l.dias_gravados === 1 ? '' : 's'} de retrato)`
+                        : 'nenhum retrato gravado ainda';
+                    return `<div><span style="color:var(--text)">${escapeHtml(l.produto)}</span> — lista de ${seg} <span style="font-family:monospace; font-size:0.68rem; opacity:0.8">${escapeHtml(l.list_id)}</span> — ${desde}</div>`;
+                }).join('');
+                tbody.insertAdjacentHTML('beforeend', `
+                    <tr>
+                        <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                            <i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>
+                            ${standby.length} lista${standby.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico. Até lá conta como total vitalício, igual às demais.
+                            <div style="margin-top:0.45rem; display:flex; flex-direction:column; gap:0.2rem">${linhas}</div>
+                        </td>
+                    </tr>
+                `);
+            }
         }
 
         window.__clientTabCharts = window.__clientTabCharts || {};
