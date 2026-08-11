@@ -262,8 +262,8 @@ export async function autoLinkSlickTextLists(
   // Só produtos ATIVADOS: os descobertos automaticamente entram desativados e só ganham lista no
   // bootstrap da ativação — contá-los como "sem lista vinculada" enchia o aviso de ruído
   // (13 dos 15 avisos no cliente de referência eram produtos que ninguém ativou).
-  const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT id, name, st_list_abandono_id, st_list_compra_id
+  const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+    `SELECT id, name, st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
      FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
@@ -273,7 +273,9 @@ export async function autoLinkSlickTextLists(
 
   for (const kit of kits) {
     let abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+    let abandonoId2 = kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null;
     let compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
+    let compraId2 = kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null;
 
     // Comparação normalizada (sem espaço, hífen, pontuação ou caixa): as listas são nomeadas por
     // FAMÍLIA de produto ("[NeuroMind Pro]") e os produtos vêm do gateway por SKU
@@ -282,22 +284,31 @@ export async function autoLinkSlickTextLists(
     // diferente. Normalizar remove essa classe inteira de falso negativo.
     const kitKey = normalizeForMatch(kit.name);
 
-    if (!abandonoId) {
-      for (const [product, listId] of abandonoByProduct) {
-        if (kitKey.includes(normalizeForMatch(product))) { abandonoId = listId; break; }
-      }
+    // Esta função roda uma vez PARA CADA CONTA da SlickText do cliente (o chamador itera as
+    // contas). O slot 1 fica com a primeira lista encontrada e nunca é sobrescrito — mesmo
+    // comportamento de sempre. A novidade é o slot 2: se o produto já tem uma lista (de uma
+    // chamada anterior, outra conta) e ESTA conta tem outra lista da MESMA família com ID
+    // diferente, essa segunda lista é o sinal de que o produto é vendido por mais de um gateway
+    // de lead (Digistore, JVZoo, BuyGoods) cada um caindo numa conta/lista diferente — e ela
+    // entra sozinha, sem precisar de UPDATE manual da próxima vez que isso acontecer.
+    for (const [product, listId] of abandonoByProduct) {
+      if (!kitKey.includes(normalizeForMatch(product))) continue;
+      if (!abandonoId) { abandonoId = listId; break; }
+      if (listId !== abandonoId && !abandonoId2) { abandonoId2 = listId; break; }
     }
-    if (!compraId) {
-      for (const [product, listId] of compraByProduct) {
-        if (kitKey.includes(normalizeForMatch(product))) { compraId = listId; break; }
-      }
+    for (const [product, listId] of compraByProduct) {
+      if (!kitKey.includes(normalizeForMatch(product))) continue;
+      if (!compraId) { compraId = listId; break; }
+      if (listId !== compraId && !compraId2) { compraId2 = listId; break; }
     }
 
     if (abandonoId !== (kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null)
-        || compraId !== (kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null)) {
+        || abandonoId2 !== (kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null)
+        || compraId !== (kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null)
+        || compraId2 !== (kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null)) {
       await query(
-        `UPDATE kits SET st_list_abandono_id = $1, st_list_compra_id = $2 WHERE id = $3`,
-        [abandonoId ? String(abandonoId) : null, compraId ? String(compraId) : null, kit.id]
+        `UPDATE kits SET st_list_abandono_id = $1, st_list_abandono_id_2 = $2, st_list_compra_id = $3, st_list_compra_id_2 = $4 WHERE id = $5`,
+        [abandonoId ? String(abandonoId) : null, abandonoId2 ? String(abandonoId2) : null, compraId ? String(compraId) : null, compraId2 ? String(compraId2) : null, kit.id]
       );
       linked++;
     }

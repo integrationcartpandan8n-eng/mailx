@@ -31,7 +31,7 @@ const CTX = 'Admin';
 import {
   SQL_IS_MAILX, SQL_IS_SMS, SQL_MAILX_SMS, SQL_MAILX_EMAIL,
   SQL_IS_RECOVERY, SQL_MEDIUM_AUTO, SQL_MEDIUM_CAMPAIGN, SQL_IS_UPSELL, SQL_REVENUE,
-  SQL_ESCOPO_POR_AUTOMACAO, familiaDoProduto, apurarSms,
+  SQL_ESCOPO_POR_AUTOMACAO, familiaDoProduto, apurarSms, listasDoKit,
 } from './atribuicao';
 
 const SQL_EXCLUDE_PAUSED_CLIENTS = `client_id NOT IN (SELECT id FROM clients WHERE status = 'paused')`;
@@ -1783,7 +1783,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
   // Insumos da conversão POR PRODUTO (pedido 3.4 do documento: "precisa ser dividido por produto").
   let contagemPorLista = new Map<string, number>();
-  let kitsComListas: Array<{ nome: string; listaAbandono: string | null; listaCompra: string | null }> = [];
+  let kitsComListas: Array<{ nome: string; listasAbandono: string[]; listasCompra: string[] }> = [];
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1813,13 +1813,16 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           const r = await autoLinkSlickTextLists(clients[i]!.st, parseInt(clientId as string));
           unmatched = i === 0 ? r.unmatched : unmatched.filter(u => r.unmatched.some(x => x.kitId === u.kitId));
         }
-        const kits = await query<{ name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-          `SELECT DISTINCT name, st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+        const kits = await query<{ name: string; st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+          `SELECT DISTINCT name, st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
+           FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
         );
 
-        const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
-        const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+        // flatMap via listasDoKit, e não só a coluna 1: um produto pode ter uma segunda lista de
+        // outro gateway de lead (ver comentário em listasDoKit), e as duas contam.
+        const abandonoIds = [...new Set(kits.flatMap(k => listasDoKit(k).abandono))];
+        const compraIds = [...new Set(kits.flatMap(k => listasDoKit(k).compra))];
 
         // Um list_id existe em UMA das contas; nas outras a chamada falha e vira 0. Por isso o
         // total de cada lista é o MAIOR valor entre as contas, não a soma — somar contaria a
@@ -1838,11 +1841,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         // SlickText: as mesmas listas são as dos produtos, só agrupadas de outro jeito.
         contagemPorLista = new Map<string, number>();
         for (const l of [...abandonoPorLista, ...compraPorLista]) contagemPorLista.set(l.id, l.count);
-        kitsComListas = kits.map(k => ({
-          nome: k.name,
-          listaAbandono: k.st_list_abandono_id,
-          listaCompra: k.st_list_compra_id,
-        }));
+        kitsComListas = kits.map(k => {
+          const l = listasDoKit(k);
+          return { nome: k.name, listasAbandono: l.abandono, listasCompra: l.compra };
+        });
 
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
@@ -2088,8 +2090,8 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       for (const k of kitsComListas) {
         const nk = norm(k.nome);
         if (!nk.includes(chave) && !chave.includes(nk)) continue;
-        if (k.listaAbandono) atual.listasAb.add(k.listaAbandono);
-        if (k.listaCompra) atual.listasCo.add(k.listaCompra);
+        k.listasAbandono.forEach(id => atual.listasAb.add(id));
+        k.listasCompra.forEach(id => atual.listasCo.add(id));
       }
       porProduto.set(chave, atual);
     }
@@ -3308,12 +3310,13 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
   const clientId = req.params.id as string;
   const period = resolvePeriodFilter(req);
 
-  const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+  const kits = await query<{ st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+    `SELECT DISTINCT st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
+     FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
-  const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
-  const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+  const abandonoIds = [...new Set(kits.flatMap(k => listasDoKit(k).abandono))];
+  const compraIds = [...new Set(kits.flatMap(k => listasDoKit(k).compra))];
   const todas = [...new Set([...abandonoIds, ...compraIds])];
 
   const retratos = await query<{ list_id: string; st_account_id: number | null; list_name: string | null; snapshot_date: string; contact_count: string }>(
@@ -4097,10 +4100,11 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
 
   const kits = await query<{
     id: number; name: string; enabled: boolean; external_id: string | null;
-    st_list_compra_id: string | null; st_list_abandono_id: string | null;
+    st_list_compra_id: string | null; st_list_compra_id_2: string | null;
+    st_list_abandono_id: string | null; st_list_abandono_id_2: string | null;
     ac_tag_compra_id: string | null; ac_tag_abandono_id: string | null;
-  }>(`SELECT id, name, enabled, external_id, st_list_compra_id, st_list_abandono_id,
-             ac_tag_compra_id, ac_tag_abandono_id
+  }>(`SELECT id, name, enabled, external_id, st_list_compra_id, st_list_compra_id_2,
+             st_list_abandono_id, st_list_abandono_id_2, ac_tag_compra_id, ac_tag_abandono_id
       FROM kits WHERE client_id = $1 ORDER BY enabled DESC, name`, [clientId]);
 
   // Nomes reais das listas da conta e das tags do AC — pra distinguir "não existe" de
@@ -4172,7 +4176,9 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
     ativado: k.enabled,
     origem: k.external_id ? 'descoberto automaticamente' : 'cadastrado à mão',
     st_lista_compra: !!k.st_list_compra_id,
+    st_lista_compra_2: !!k.st_list_compra_id_2,
     st_lista_abandono: !!k.st_list_abandono_id,
+    st_lista_abandono_2: !!k.st_list_abandono_id_2,
     ac_tag_compra: !!k.ac_tag_compra_id,
     ac_tag_abandono: !!k.ac_tag_abandono_id,
     // Listas da conta cujo nome de produto aparece no nome do kit, ignorando espaço/hífen/caixa —
@@ -4740,9 +4746,11 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const kits = await query<{
       name: string;
       st_list_compra_id: string | null;
+      st_list_compra_id_2: string | null;
       st_list_abandono_id: string | null;
+      st_list_abandono_id_2: string | null;
     }>(
-      `SELECT name, st_list_compra_id, st_list_abandono_id
+      `SELECT name, st_list_compra_id, st_list_compra_id_2, st_list_abandono_id, st_list_abandono_id_2
        FROM kits WHERE client_id = $1 AND enabled = true`,
       [clientId]
     );
@@ -4750,11 +4758,13 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     // Vários SKUs do mesmo produto COMPARTILHAM a mesma lista (confirmado: as três variações de
     // Glyco Pulse apontam para o mesmo par de listas). Buscar por kit contava a mesma lista uma
     // vez por SKU — era o que inflava o card de contatos para várias vezes o tamanho da conta.
-    // Aqui cada lista é buscada UMA vez, e o total soma listas distintas.
+    // Aqui cada lista é buscada UMA vez, e o total soma listas distintas — incluindo a segunda
+    // lista de produto vendido por mais de um gateway de lead (ver listasDoKit).
     const distinctListIds = new Set<number>();
     for (const kit of kits) {
-      if (kit.st_list_compra_id) distinctListIds.add(parseInt(kit.st_list_compra_id));
-      if (kit.st_list_abandono_id) distinctListIds.add(parseInt(kit.st_list_abandono_id));
+      const l = listasDoKit(kit);
+      l.compra.forEach(id => distinctListIds.add(parseInt(id)));
+      l.abandono.forEach(id => distinctListIds.add(parseInt(id)));
     }
     // Um list_id só é válido numa das contas; as outras devolvem 0 (getListContactCount engole o erro).
     const countByList = new Map<number, number>();
@@ -4764,20 +4774,22 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     }));
 
     const listStats = kits.map((kit) => {
-      const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
-      const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+      const l = listasDoKit(kit);
+      const somar = (ids: string[]) => ids.reduce((t, id) => t + (countByList.get(parseInt(id)) ?? 0), 0);
       return {
         product: kit.name,
-        compra_list_id: compraId,
-        compra_contacts: compraId != null ? (countByList.get(compraId) ?? 0) : 0,
-        abandono_list_id: abandonoId,
-        abandono_contacts: abandonoId != null ? (countByList.get(abandonoId) ?? 0) : 0,
+        compra_list_id: kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null,
+        compra_list_id_2: kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null,
+        compra_contacts: somar(l.compra),
+        abandono_list_id: kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null,
+        abandono_list_id_2: kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null,
+        abandono_contacts: somar(l.abandono),
       };
     });
 
     // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez.
-    const compraListIds = new Set(kits.map(k => k.st_list_compra_id).filter(Boolean).map(v => parseInt(v as string)));
-    const abandonoListIds = new Set(kits.map(k => k.st_list_abandono_id).filter(Boolean).map(v => parseInt(v as string)));
+    const compraListIds = new Set(kits.flatMap(k => listasDoKit(k).compra).map(v => parseInt(v)));
+    const abandonoListIds = new Set(kits.flatMap(k => listasDoKit(k).abandono).map(v => parseInt(v)));
     const totalCompra = [...compraListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
     const totalAbandono = [...abandonoListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
 
@@ -5253,16 +5265,21 @@ adminRouter.get('/clientes/:id/diagnostico/inventario-de-listas', asyncHandler(a
   const clientId = req.params.id as string;
   const contas = await getSlickTextAccounts(clientId);
 
-  // Vínculos atuais, pra marcar cada lista como usada por qual produto e em qual papel.
-  const vinculos = await query<{ nome: string; compra: string | null; abandono: string | null }>(
-    `SELECT name AS nome, st_list_compra_id AS compra, st_list_abandono_id AS abandono
+  // Vínculos atuais, pra marcar cada lista como usada por qual produto e em qual papel — incluindo
+  // a segunda lista, quando o produto é vendido por mais de um gateway de lead (ver listasDoKit).
+  // Sem isso, a segunda lista continuaria aparecendo aqui como "NÃO VINCULADA" mesmo depois de
+  // vinculada, porque este inventário lia só a coluna 1.
+  const vinculos = await query<{ nome: string; compra: string | null; compra_2: string | null; abandono: string | null; abandono_2: string | null }>(
+    `SELECT name AS nome, st_list_compra_id AS compra, st_list_compra_id_2 AS compra_2,
+            st_list_abandono_id AS abandono, st_list_abandono_id_2 AS abandono_2
      FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
   const usoPorLista = new Map<string, string[]>();
   for (const v of vinculos) {
-    if (v.compra) usoPorLista.set(v.compra, [...(usoPorLista.get(v.compra) ?? []), `${v.nome} (compra)`]);
-    if (v.abandono) usoPorLista.set(v.abandono, [...(usoPorLista.get(v.abandono) ?? []), `${v.nome} (abandono)`]);
+    const l = listasDoKit({ st_list_compra_id: v.compra, st_list_compra_id_2: v.compra_2, st_list_abandono_id: v.abandono, st_list_abandono_id_2: v.abandono_2 });
+    l.compra.forEach(id => usoPorLista.set(id, [...(usoPorLista.get(id) ?? []), `${v.nome} (compra)`]));
+    l.abandono.forEach(id => usoPorLista.set(id, [...(usoPorLista.get(id) ?? []), `${v.nome} (abandono)`]));
   }
 
   // Variação medida pelos retratos: é ela que distingue lista viva de lista congelada. Sem isso
