@@ -1967,19 +1967,41 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           [clientId, [...abandonoIds, ...compraIds]]
         ).catch(() => []);
         const retratoPorListaMap = new Map(retratoPorLista.map(r => [r.list_id, { primeiro: r.primeiro.slice(0, 10), dias: parseInt(r.dias) }]));
-        listasEmStandby = kits.flatMap(k => {
+
+        // A lista é da FAMÍLIA, mas kit.name é por SKU — "M2 - NeuroMind Pro (3 Bottles)",
+        // "UP1 - NeuroMind Pro (6 Bottles)" etc. apontam pra MESMA lista. Sem agrupar por
+        // list_id, a mesma lista nova aparecia 6 vezes na tela (visto em produção: 34 linhas pra
+        // só ~10 listas de verdade) — o oposto de "fácil de ver o que é novo". Tira o prefixo de
+        // código (M1/M2/UP1-V3/DW1...) e o sufixo de tamanho pra chegar no nome da família.
+        const nomeFamilia = (nomeSku: string): string =>
+          nomeSku
+            .replace(/^\s*[A-Za-z]{1,4}\d*(-[A-Za-z]?\d+)?\s*-\s*/, '')
+            .replace(/\s*\(\d+\s*[Bb]ottles?\)\s*$/, '')
+            .trim() || nomeSku;
+
+        const standbyPorLista = new Map<string, { segmento: 'abandono' | 'compra'; familias: Set<string>; desde: string | null; dias: number }>();
+        for (const k of kits) {
           const l = listasDoKit(k);
-          const linhas: typeof listasEmStandby = [];
+          const familia = nomeFamilia(k.name);
           const checar = (id: string, segmento: 'abandono' | 'compra') => {
             const r = retratoPorListaMap.get(id);
-            if (!r || r.dias < STANDBY_DIAS_MIN) {
-              linhas.push({ produto: k.name, segmento, list_id: id, desde: r?.primeiro ?? null, dias_gravados: r?.dias ?? 0 });
-            }
+            if (r && r.dias >= STANDBY_DIAS_MIN) return;
+            const atual = standbyPorLista.get(id) ?? { segmento, familias: new Set<string>(), desde: r?.primeiro ?? null, dias: r?.dias ?? 0 };
+            atual.familias.add(familia);
+            standbyPorLista.set(id, atual);
           };
           l.abandono.forEach(id => checar(id, 'abandono'));
           l.compra.forEach(id => checar(id, 'compra'));
-          return linhas;
-        });
+        }
+        listasEmStandby = [...standbyPorLista.entries()]
+          .map(([list_id, v]) => ({
+            produto: [...v.familias].join(' / '),
+            segmento: v.segmento,
+            list_id,
+            desde: v.desde,
+            dias_gravados: v.dias,
+          }))
+          .sort((a, b) => a.produto.localeCompare(b.produto));
 
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
