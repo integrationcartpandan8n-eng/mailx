@@ -4347,11 +4347,15 @@
                     return;
                 }
 
+                // k.warn: quando true, o valor fica em amarelo — usado quando o número é real mas
+                // sabemos que pode estar incompleto (lista que não respondeu agora). k.sub: linha
+                // pequena abaixo do rótulo, pro "desde quando" do histórico de retrato.
                 const smsKpiCardTip = (k) => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-value"${k.warn ? ' style="color:var(--warning)"' : ''}>${k.value}</div>
                         <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
+                        ${k.sub ? `<div style="font-size:0.65rem; color:var(--text-muted); margin-top:0.15rem">${k.sub}</div>` : ''}
                     </div>
                 `;
 
@@ -4376,22 +4380,37 @@
 
                 // Contact KPIs
                 const c = data.contacts || {};
-                // Total contacts: prefer SlickText brand-wide total over per-kit sum (which is 0 until kits link to lists)
-                const brandTotal = c.analytics?.totals?.total ?? 0;
-                const totalContatos = brandTotal || (c.total || 0);
+                // Desde quando o retrato diário mede o tamanho das listas — mesma leitura que já
+                // existe no card de Conversão por Segmento, aqui pros KPIs de contato.
+                const rh = c.retrato_historico;
+                const retratoSub = rh
+                    ? `Retrato desde ${fmtData(rh.primeiro_retrato)} (${rh.dias_com_retrato} dia${rh.dias_com_retrato === 1 ? '' : 's'})`
+                    : '';
+                // Total Contatos: SÓ usa o total da marca (analytics) quando a API respondeu de
+                // verdade. Antes, `brandTotal || c.total` trocava pra soma das listas de produto
+                // (um número menor, com significado diferente) sempre que brandTotal dava 0 —
+                // inclusive quando 0 era "a API falhou", não "a marca não tem contato". Agora essa
+                // troca só acontece com aviso explícito (analytics_indisponivel), nunca em silêncio.
+                const totalContatos = c.analytics_indisponivel ? (c.total || 0) : (c.analytics?.totals?.total ?? 0);
+                const totalContatosTip = c.analytics_indisponivel
+                    ? 'A SlickText não respondeu o total de contatos da marca agora — mostrando a SOMA DAS LISTAS DE PRODUTO no lugar (um número menor: só quem está em lista de abandono/compra vinculada, não a marca inteira). Recarregue a aba em alguns minutos.'
+                    : 'FONTE: API da SlickText, endpoint de analytics de contatos da marca. ESCOPO: total atual da conta, VITALÍCIO — a API não permite contar contatos por data, então este número não muda ao trocar o período.';
                 document.getElementById('smsContactKpis').innerHTML = [
-                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint de analytics de contatos da marca. ESCOPO: total atual da conta, VITALÍCIO — a API não permite contar contatos por data, então este número não muda ao trocar o período.' },
-                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Compra Aprovada dos produtos ativos (endpoint /lists/{id}/contacts/count). Lista compartilhada por vários produtos da mesma família é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Abandono de Carrinho dos produtos ativos. Lista compartilhada é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' },
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: totalContatosTip, warn: c.analytics_indisponivel, sub: c.analytics_indisponivel ? '' : retratoSub },
+                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Compra Aprovada dos produtos ativos (endpoint /lists/{id}/contacts/count). Lista compartilhada por vários produtos da mesma família é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' + (c.contatos_incompletos ? ' AVISO: pelo menos uma lista não respondeu agora — este número pode estar MENOR que o real.' : ''), warn: c.contatos_incompletos, sub: retratoSub },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Abandono de Carrinho dos produtos ativos. Lista compartilhada é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' + (c.contatos_incompletos ? ' AVISO: pelo menos uma lista não respondeu agora — este número pode estar MENOR que o real.' : ''), warn: c.contatos_incompletos, sub: retratoSub },
                 ].map(smsKpiCardTip).join('');
 
                 // Credits/Messages KPIs
                 const credits = data.credits?.usage || {};
+                const creditsIndisponivel = data.credits?.indisponivel;
+                const listsIndisponivel = data.lists?.indisponivel;
+                const creditsTip = (base) => base + (creditsIndisponivel ? ' AVISO: a SlickText não respondeu agora — este valor é 0 por falta de resposta, NÃO é o saldo real. Recarregue em alguns minutos.' : '');
                 document.getElementById('smsSendKpis').innerHTML = [
-                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage da marca. ESCOPO: saldo agora, não do período. Atenção: mensagem acima de 160 caracteres consome mais de um crédito por envio.' },
-                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage. ESCOPO: acumulado da conta, VITALÍCIO — não é o consumo do período selecionado.' },
-                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, endpoint /usage — o total contratado no plano do cliente.' },
-                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0, tip: 'FONTE: API da SlickText — todas as listas existentes na conta, incluindo as que não são de produto (rastreio, teste). Contando todas as contas SlickText do cliente.' },
+                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: creditsIndisponivel ? '—' : (credits.credits_available || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage da marca. ESCOPO: saldo agora, não do período. Atenção: mensagem acima de 160 caracteres consome mais de um crédito por envio.'), warn: creditsIndisponivel },
+                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: creditsIndisponivel ? '—' : (credits.credits_used || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage. ESCOPO: acumulado da conta, VITALÍCIO — não é o consumo do período selecionado.'), warn: creditsIndisponivel },
+                    { icon: 'fa-database purple', label: 'Total Créditos', value: creditsIndisponivel ? '—' : (credits.total_credits || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage — o total contratado no plano do cliente.'), warn: creditsIndisponivel },
+                    { icon: 'fa-list orange', label: 'Listas SMS', value: listsIndisponivel ? '—' : (data.lists?.total || 0), tip: 'FONTE: API da SlickText — todas as listas existentes na conta, incluindo as que não são de produto (rastreio, teste). Contando todas as contas SlickText do cliente.' + (listsIndisponivel ? ' AVISO: a SlickText não respondeu agora — sem dado nenhum pra mostrar. Recarregue em alguns minutos.' : ''), warn: listsIndisponivel },
                 ].map(smsKpiCardTip).join('');
 
                 // Lists per product table
@@ -4400,14 +4419,40 @@
                     document.getElementById('smsListsBody').innerHTML =
                         '<tr><td colspan="4" class="empty-state"><i class="fas fa-box-open"></i> Nenhum produto com listas SMS</td></tr>';
                 } else {
+                    // Lista compartilhada entre produtos conta uma vez só nos totais do topo da
+                    // aba, mas aparece em mais de uma linha aqui (é a mesma lista, uma linha por
+                    // produto que a usa) — sem aviso, somar esta coluna dá um número maior que os
+                    // cards acima, e parece inconsistência em vez de contagem esperada.
+                    const compartilhadaTip = (nomes) => nomes && nomes.length > 0
+                        ? ` <span class="kpi-tip" tabindex="0" data-tip="Mesma lista da SlickText também usada por: ${nomes.map(escapeHtml).join(', ')}. Por isso o número se repete nas duas linhas — nos totais do topo da aba, essa lista é contada uma vez só.">ⓘ</span>`
+                        : '';
+                    const algumCompartilhado = listStats.some(l =>
+                        (l.compra_compartilhada_com?.length > 0) || (l.abandono_compartilhada_com?.length > 0));
+                    // null = a SlickText não respondeu essa lista agora (falha real) — "indisponível"
+                    // em vez de 0, mesmo padrão já usado pra envios sem retrato nesta mesma tela.
+                    const contagem = (v) => v == null ? `<span style="color:var(--warning)">indisponível</span>` : v;
+                    const algumIndisponivel = listStats.some(l => l.compra_contacts == null || l.abandono_contacts == null);
+
                     document.getElementById('smsListsBody').innerHTML = listStats.map(l => `
                         <tr>
                             <td style="color:#fff; font-weight:600">${l.product}</td>
-                            <td><span class="tag green">${l.compra_contacts}</span></td>
-                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${l.abandono_contacts}</span></td>
-                            <td style="font-weight:700">${l.compra_contacts + l.abandono_contacts}</td>
+                            <td><span class="tag green">${contagem(l.compra_contacts)}</span>${compartilhadaTip(l.compra_compartilhada_com)}</td>
+                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${contagem(l.abandono_contacts)}</span>${compartilhadaTip(l.abandono_compartilhada_com)}</td>
+                            <td style="font-weight:700">${(l.compra_contacts == null || l.abandono_contacts == null) ? '—' : l.compra_contacts + l.abandono_contacts}</td>
                         </tr>
-                    `).join('');
+                    `).join('') + (algumIndisponivel ? `
+                        <tr>
+                            <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                                <i class="fas fa-triangle-exclamation" style="margin-right:0.35rem; color:var(--warning)"></i>
+                                Pelo menos uma lista não respondeu à SlickText agora — "indisponível" não é zero, é falha temporária de consulta. Recarregue a aba em alguns minutos.
+                            </td>
+                        </tr>` : '') + (algumCompartilhado ? `
+                        <tr>
+                            <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                                <i class="fas fa-circle-info" style="margin-right:0.35rem"></i>
+                                Alguns produtos compartilham a mesma lista (ⓘ em cima do número) — a soma desta tabela pode ficar maior que os totais de Compradores/Carrinhos Abandonados no topo da aba, que contam cada lista uma vez só.
+                            </td>
+                        </tr>` : '');
                 }
                 clearDataLoadError('SMS');
             } catch (e) {

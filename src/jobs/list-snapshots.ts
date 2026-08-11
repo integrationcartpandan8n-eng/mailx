@@ -145,7 +145,9 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
       try {
         const st = new SlickTextClient(conta.token, conta.brandId);
         const count = await st.getListContactCount(parseInt(lista.list_id));
-        if (count > melhor.count) melhor = { count, accountId: conta.accountId };
+        // null = falha real (não "esta conta não tem essa lista", que já é o catch abaixo) —
+        // não pode virar candidato a "melhor" nem disputar com uma conta que respondeu de verdade.
+        if (count != null && count > melhor.count) melhor = { count, accountId: conta.accountId };
       } catch {
         // Conta que não tem essa lista responde erro — esperado, não é falha do job.
       }
