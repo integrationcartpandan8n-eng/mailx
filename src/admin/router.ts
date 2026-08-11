@@ -1934,14 +1934,23 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const abandonoIds = [...new Set(kits.flatMap(k => listasDoKit(k).abandono))];
         const compraIds = [...new Set(kits.flatMap(k => listasDoKit(k).compra))];
 
-        // Um list_id existe em UMA das contas; nas outras a chamada falha e vira 0. Por isso o
-        // total de cada lista é o MAIOR valor entre as contas, não a soma — somar contaria a
-        // mesma lista de novo se duas contas respondessem.
-        const contarLista = async (listId: string): Promise<{ count: number; accountId: number | null }> => {
+        // Um list_id existe em UMA das contas; nas outras a chamada falha com 404 e vira 0
+        // (esperado — ver getListContactCount). Por isso o total de cada lista é o MAIOR valor
+        // entre as contas, não a soma — somar contaria a mesma lista de novo se duas contas
+        // respondessem.
+        //
+        // incerto:true quando NENHUMA conta respondeu de verdade (todas com falha real, não
+        // 404) — 0 aqui seria indistinguível de "lista genuinamente vazia", e essa lista não
+        // pode entrar como se fosse um zero de verdade nos totais vitalícios nem no retrato do
+        // dia (por isso o count fica 0, mas a flag avisa quem soma).
+        const contarLista = async (listId: string): Promise<{ count: number; accountId: number | null; incerto: boolean }> => {
           const porConta = await Promise.all(
             clients.map(async c => ({ accountId: c.acc.accountId, count: await c.st.getListContactCount(parseInt(listId)) }))
           );
-          return porConta.reduce((melhor, atual) => (atual.count > melhor.count ? atual : melhor), { count: 0, accountId: null as number | null });
+          const validas = porConta.filter((c): c is { accountId: number | null; count: number } => c.count !== null);
+          if (validas.length === 0) return { count: 0, accountId: null, incerto: true };
+          const melhor = validas.reduce((m, a) => (a.count > m.count ? a : m));
+          return { ...melhor, incerto: false };
         };
 
         const abandonoPorLista = await Promise.all(abandonoIds.map(async id => ({ id, ...(await contarLista(id)) })));
@@ -2134,6 +2143,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const avisos: string[] = [];
         if (unmatched.length > 0) {
           avisos.push(`${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`);
+        }
+        // incerto:true = a SlickText não respondeu de verdade pra essa lista agora (timeout, erro
+        // 500, token vencido) — o count fica 0 pra não quebrar a soma, mas 0 aqui NÃO significa
+        // lista vazia, e quem olha a tela precisa saber que o número pode estar subcontado.
+        const listasIncertas = [...abandonoPorLista, ...compraPorLista].filter(l => l.incerto);
+        if (listasIncertas.length > 0) {
+          avisos.push(`${listasIncertas.length} lista(s) não responderam agora (falha temporária da SlickText, não lista vazia) — leads e conversão podem estar subcontados até a próxima tentativa`);
         }
         if (leadsSource === 'slicktext_list' && periodoAtivo && !comprasExatas) {
           avisos.push('Leads são o total atual de cada lista (vitalício) contra vendas do período — a SlickText não conta contatos por lista e por data ao mesmo tempo. A partir de agora um retrato diário é gravado, e períodos futuros passam a ter leads exatos.');
@@ -5143,12 +5159,31 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
   try {
     const stClients = accounts.map(acc => new SlickTextClient(acc.st_api_token, acc.st_brand_id));
 
-    // Fetch all data em paralelo, pra cada conta, e soma
-    const perAccount = await Promise.all(stClients.map(async (st) => ({
-      contactAnalytics: await st.getContactAnalytics().catch(() => null),
-      brandUsage: await st.getBrandUsage().catch(() => null),
-      lists: await st.getLists().catch(() => []),
-    })));
+    // Fetch all data em paralelo, pra cada conta, e soma. allSettled em vez de .catch(() => null)
+    // por chamada: precisamos saber se a conta respondeu vazio (dado real) ou se a chamada FALHOU
+    // (timeout, 500, token vencido) — as duas viravam a mesma coisa antes, e o card de
+    // Créditos/Listas mostrava "0" como se fosse saldo real quando, na verdade, ninguém conseguiu
+    // perguntar pra SlickText. Só quando TODAS as contas falham de verdade é que marcamos
+    // indisponível; se ALGUMA respondeu, a soma das que responderam já é o comportamento de antes.
+    const perAccount = await Promise.all(stClients.map(async (st) => {
+      const [analyticsR, usageR, listsR] = await Promise.allSettled([
+        st.getContactAnalytics(),
+        st.getBrandUsage(),
+        st.getLists(),
+      ]);
+      return {
+        contactAnalytics: analyticsR.status === 'fulfilled' ? analyticsR.value : null,
+        contactAnalyticsOk: analyticsR.status === 'fulfilled',
+        brandUsage: usageR.status === 'fulfilled' ? usageR.value : null,
+        brandUsageOk: usageR.status === 'fulfilled',
+        lists: listsR.status === 'fulfilled' ? listsR.value : [],
+        listsOk: listsR.status === 'fulfilled',
+      };
+    }));
+
+    const contactAnalyticsIndisponivel = perAccount.every(a => !a.contactAnalyticsOk);
+    const brandUsageIndisponivel = perAccount.every(a => !a.brandUsageOk);
+    const listsIndisponivel = perAccount.every(a => !a.listsOk);
 
     const contactAnalyticsTotal = perAccount.reduce((sum, a) => sum + (a.contactAnalytics?.totals?.total ?? a.contactAnalytics?.total ?? 0), 0);
     const contactAnalytics = perAccount.some(a => a.contactAnalytics) ? { totals: { total: contactAnalyticsTotal } } : null;
@@ -5160,6 +5195,18 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const lists = perAccount.flatMap(a => a.lists);
     const messageAnalytics = null; // não usado no frontend hoje — ver getMessageAnalytics
     const creditAnalytics = null; // getCreditAnalytics sempre retorna null (endpoint 404 confirmado)
+
+    // Histórico de retrato — mesma tabela que já alimenta "leads do período" no card de Conversão
+    // por Segmento, reaproveitada aqui pra dizer desde quando o painel vem medindo o tamanho das
+    // listas de contato (pedido ao revisar esta seção).
+    const retratoContatos = await queryOne<{ primeiro: string | null; dias: string }>(
+      `SELECT MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias
+       FROM list_contact_snapshots WHERE client_id = $1`,
+      [clientId]
+    ).catch(() => null);
+    const contatosRetratoHistorico = retratoContatos?.primeiro
+      ? { primeiro_retrato: retratoContatos.primeiro.slice(0, 10), dias_com_retrato: parseInt(retratoContatos.dias) }
+      : null;
 
     // Contagem de contatos por lista de produto. Só produtos ATIVADOS: os descobertos
     // automaticamente entram desativados e só ganham lista no bootstrap da ativação, então
@@ -5187,11 +5234,14 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       l.compra.forEach(id => distinctListIds.add(parseInt(id)));
       l.abandono.forEach(id => distinctListIds.add(parseInt(id)));
     }
-    // Um list_id só é válido numa das contas; as outras devolvem 0 (getListContactCount engole o erro).
-    const countByList = new Map<number, number>();
+    // Um list_id só é válido numa das contas; as outras devolvem 0 via 404 (esperado). null =
+    // NENHUMA conta respondeu de verdade (falha real, não "não é desta conta") — nesse caso a
+    // lista fica com contagem desconhecida, não zero: 0 aqui pareceria "a lista esvaziou".
+    const countByList = new Map<number, number | null>();
     await Promise.all([...distinctListIds].map(async (listId) => {
-      const perAccount = await Promise.all(stClients.map(st => st.getListContactCount(listId)));
-      countByList.set(listId, perAccount.reduce((a, b) => a + b, 0));
+      const porConta = await Promise.all(stClients.map(st => st.getListContactCount(listId)));
+      const validos = porConta.filter((c): c is number => c !== null);
+      countByList.set(listId, validos.length > 0 ? validos.reduce((a, b) => a + b, 0) : null);
     }));
 
     // Quem mais usa a MESMA lista — pra tabela poder avisar em vez de deixar a pessoa somar a
@@ -5226,7 +5276,18 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
 
     const listStats = kits.map((kit) => {
       const l = listasDoKit(kit);
-      const somar = (ids: string[]) => ids.reduce((t, id) => t + (countByList.get(parseInt(id)) ?? 0), 0);
+      // null se QUALQUER lista do produto, desse lado, tiver contagem desconhecida — somar 0 no
+      // lugar do desconhecido daria um total menor que o real, sem avisar. O front-end mostra
+      // "indisponível" em vez de um número (mesmo padrão já usado pra envios sem retrato).
+      const somar = (ids: string[]): number | null => {
+        let total = 0;
+        for (const id of ids) {
+          const v = countByList.get(parseInt(id));
+          if (v == null) return null;
+          total += v;
+        }
+        return total;
+      };
       return {
         product: kit.name,
         compra_list_id: kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null,
@@ -5240,11 +5301,19 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       };
     });
 
-    // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez.
+    // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez. Lista com contagem
+    // desconhecida (falha real na SlickText) fica de fora da soma E acende contatosIncompletos —
+    // sem a flag, o total ficaria menor que o real e pareceria uma queda de contatos.
     const compraListIds = new Set(kits.flatMap(k => listasDoKit(k).compra).map(v => parseInt(v)));
     const abandonoListIds = new Set(kits.flatMap(k => listasDoKit(k).abandono).map(v => parseInt(v)));
-    const totalCompra = [...compraListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
-    const totalAbandono = [...abandonoListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
+    let contatosIncompletos = false;
+    const somarConhecidas = (ids: Set<number>): number => [...ids].reduce((sum, id) => {
+      const v = countByList.get(id);
+      if (v == null) { contatosIncompletos = true; return sum; }
+      return sum + v;
+    }, 0);
+    const totalCompra = somarConhecidas(compraListIds);
+    const totalAbandono = somarConhecidas(abandonoListIds);
 
     // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') — respeita o período de análise ──
     const period = resolvePeriodFilter(req);
@@ -5342,16 +5411,26 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         total: totalCompra + totalAbandono,
         compradores: totalCompra,
         carrinhos_abandonados: totalAbandono,
+        // true quando pelo menos uma lista de produto não pôde ser consultada agora — os totais
+        // acima ficam MENORES que o real nesse caso, não errados por conta própria.
+        contatos_incompletos: contatosIncompletos,
         analytics: contactAnalytics,
+        // A SlickText não respondeu o analytics de marca pra NENHUMA conta — o front-end não pode
+        // usar o total de listas de produto como substituto silencioso (é um número menor e com
+        // significado diferente: só produto vinculado, não a marca inteira).
+        analytics_indisponivel: contactAnalyticsIndisponivel,
+        retrato_historico: contatosRetratoHistorico,
       },
       messages: messageAnalytics,
       credits: {
         usage: brandUsage,
         analytics: creditAnalytics,
+        indisponivel: brandUsageIndisponivel,
       },
       lists: {
         total: lists.length,
         per_product: listStats,
+        indisponivel: listsIndisponivel,
       },
     });
   } catch (err: any) {

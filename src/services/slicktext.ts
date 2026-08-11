@@ -244,16 +244,23 @@ export class SlickTextClient {
   }
 
   /**
-   * Get contact count for a list.
+   * Contagem de contatos de uma lista. Retorna null (não 0) quando a falha NÃO é o 404 esperado
+   * de "esta lista pertence a outra conta" — 0 de verdade e "não consegui checar" são coisas
+   * diferentes, e até aqui as duas viravam 0 do mesmo jeito. Achado ao auditar a aba SMS: um
+   * timeout ou token vencido bem na hora de alguém abrir o painel fazia uma lista de 30 mil
+   * contatos aparecer como "0" — indistinguível de a lista estar realmente vazia. Quem chama
+   * decide o que fazer com null (normalmente: não deixar entrar como se fosse zero real).
    */
-  async getListContactCount(listId: number): Promise<number> {
+  async getListContactCount(listId: number): Promise<number | null> {
     try {
       const res = await this.http.get(`/lists/${listId}/contacts/count`);
       // Endpoint returns a bare number (e.g. 228), not an object
       if (typeof res.data === 'number') return res.data;
       return res.data?.count ?? res.data?.total ?? 0;
-    } catch {
-      return 0;
+    } catch (err: any) {
+      if (err.response?.status === 404) return 0; // lista não existe nesta conta — esperado
+      logger.warn(CTX, `getListContactCount falhou pra lista ${listId} (não é 404 — pode ser falha real, não lista vazia): ${err.message}`);
+      return null;
     }
   }
 
