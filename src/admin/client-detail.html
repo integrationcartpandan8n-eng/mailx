@@ -3588,11 +3588,16 @@
                 // aparecia deslocado do "LEADS ABANDONO".
                 const parte = (rot, seg) => {
                     const leads = seg.leads;
+                    // Usa seg.taxa do servidor, não recalcula aqui — é o servidor que sabe se o
+                    // lead é do período ou vitalício (taxa_nao_calculavel_motivo === 'leads_vitalicio'
+                    // quando é vitalício, e nesse caso ele já manda taxa: null de propósito).
                     const taxa = leads == null
                         ? '<span class="sem-base">sem lista</span>'
-                        : leads < 30
-                            ? `<span class="sem-base">base pequena</span>`
-                            : `<strong>${calcTaxa(seg.vendas, leads)}</strong>`;
+                        : seg.taxa_nao_calculavel_motivo === 'leads_vitalicio'
+                            ? `<span class="sem-base">não calculável <span class="kpi-tip" tabindex="0" data-tip="Os leads aqui são o total vitalício da lista, não do período — dividir venda do período por gente acumulada desde sempre não é taxa aproximada, é comparar janelas de tempo diferentes.">ⓘ</span></span>`
+                            : leads < 30
+                                ? `<span class="sem-base">base pequena</span>`
+                                : `<strong>${calcTaxa(seg.vendas, leads)}</strong>`;
                     return `
                         <div class="prod-parte">
                             <div class="pp-rot">${rot}</div>
@@ -3715,9 +3720,18 @@
             // há amostra para afirmar nada. Melhor dizer que a base é pequena do que dar um número
             // que parece medido.
             const BASE_MINIMA = 30;
+            // Fontes cujo lead é DO PERÍODO — as únicas em que dividir venda do período por lead
+            // dá uma taxa de verdade. 'slicktext_list' é vitalício (tamanho atual da lista inteira,
+            // não do período): dividir venda de 30 dias por gente acumulada desde sempre não é taxa
+            // aproximada, é comparar janelas de tempo diferentes — visto em produção rendendo 0,98%
+            // quando o denominador tinha 9+ meses de gente contra 30 dias de venda.
+            const FONTES_DO_PERIODO = new Set(['snapshot_delta', 'webhook_exato']);
             const numTaxa = (seg) => {
                 const leads = seg.leads;
                 if (leads == null) return `<div class="sem-base">—</div>`;
+                if (!FONTES_DO_PERIODO.has(seg.leads_source)) {
+                    return `<div class="sem-base">não calculável <span class="kpi-tip" tabindex="0" data-tip="Os leads aqui são o total VITALÍCIO da lista (todo mundo que já entrou, desde sempre); as vendas são só do período escolhido. Dividir um pelo outro não é uma taxa aproximada — é comparar janelas de tempo diferentes, e o resultado pode sair uma ou duas ordens de grandeza menor que a conversão real. Leads e vendas continuam certos, a divisão entre eles é que não significa nada ainda. Some dias de retrato até a lista ter cobertura do período pedido, e a taxa aparece.">ⓘ</span></div>`;
+                }
                 if (leads < BASE_MINIMA) {
                     return `<div class="sem-base">base pequena <span class="kpi-tip" tabindex="0" data-tip="Só ${leads.toLocaleString('pt-BR')} lead(s) no período: uma venda a mais ou a menos mudaria a taxa em dezenas de pontos. Um número assim não sustenta conclusão nenhuma, então não é exibido como se sustentasse. Escolha um período maior.">ⓘ</span></div>`;
                 }

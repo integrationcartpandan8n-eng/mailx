@@ -1853,6 +1853,15 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // Insumos da conversão POR PRODUTO (pedido 3.4 do documento: "precisa ser dividido por produto").
   let contagemPorLista = new Map<string, number>();
   let kitsComListas: Array<{ nome: string; listasAbandono: string[]; listasCompra: string[] }> = [];
+  // Quais listas, dentro de contagemPorLista, têm número DO PERÍODO (snapshot_delta ou
+  // webhook_exato) — as únicas em que dividir vendas do período por esses leads produz uma taxa
+  // de verdade. As de fora têm número VITALÍCIO (tamanho atual da lista inteira, acumulado desde
+  // sempre) misturado com venda de um recorte de dias — dividir os dois não é taxa "aproximada",
+  // é comparar coisas de janelas de tempo diferentes, e o resultado pode ficar uma ou duas ordens
+  // de grandeza menor que a conversão real (visto em produção: 0,98% quando o denominador tinha
+  // 9+ meses de gente acumulada contra 30 dias de venda). Produto cuja lista caia fora daqui não
+  // ganha taxa nenhuma — "não calculável" é mais honesto que um número pequeno demais.
+  let listasComNumeroDoPeriodo = new Set<string>();
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1955,6 +1964,9 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           abandonoLeads = delta.abandono;
           compradorLeads = delta.compra;
           leadsSource = 'snapshot_delta';
+          // Todo mundo em delta.deltaPorLista já é DO PERÍODO — a diferença entre dois retratos
+          // conta só quem entrou entre eles.
+          listasComNumeroDoPeriodo = new Set([...abandonoIds, ...compraIds]);
           // A janela dos leads coincide com o período pedido?
           //
           // A busca de retratos aceita até 3 dias de folga em cada ponta, porque o retrato é gravado
@@ -1988,7 +2000,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         compradorLeadsSource = leadsSource;
         leadsPeriodoInfoCompra = leadsPeriodoInfo;
         if (comprasExatas) {
-          for (const [id, leads] of comprasExatas.porLista) contagemPorLista.set(id, leads);
+          for (const [id, leads] of comprasExatas.porLista) {
+            contagemPorLista.set(id, leads);
+            listasComNumeroDoPeriodo.add(id); // exato e do período, mesmo quando delta falhou
+          }
           // Recalcula o total somando TODAS as listas de compra pela fonte que cada uma tem —
           // exata pra produto de lista única, aproximada (retrato/vitalício) pra produto com duas
           // listas, que fica de fora de comprasExatas de propósito (ver o comentário da função).
@@ -2213,24 +2228,37 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     }
 
     const somaListas = (ids: Set<string>) => [...ids].reduce((t, id) => t + (contagemPorLista.get(id) ?? 0), 0);
+    // Taxa só quando TODAS as listas do produto, daquele lado, têm número do período. Uma lista
+    // vitalício sozinha no meio já invalida a divisão inteira — não dá pra fazer "meia taxa".
+    const todasDoPeriodo = (ids: Set<string>) => ids.size > 0 && [...ids].every(id => listasComNumeroDoPeriodo.has(id));
 
     return [...porProduto.values()]
       .map(a => {
         const leadsAb = somaListas(a.listasAb);
         const leadsCo = somaListas(a.listasCo);
+        const abDoPeriodo = todasDoPeriodo(a.listasAb);
+        const coDoPeriodo = todasDoPeriodo(a.listasCo);
         return {
           produto: a.produto,
           // null, não 0, quando o produto do utm não casou com nenhum kit com lista: a taxa não é
           // calculável, e 0 leads com vendas > 0 renderizaria uma taxa infinita ou um zero mentiroso.
+          //
+          // taxa null também quando o lead é vitalício: dividir venda DO PERÍODO por lead
+          // VITALÍCIO (tamanho da lista inteira, acumulado desde sempre) não é taxa aproximada, é
+          // comparar janelas de tempo diferentes — visto em produção rendendo 0,98% quando o
+          // denominador tinha 9+ meses de gente contra 30 dias de venda. leads e vendas continuam
+          // aparecendo (são fatos), só a razão entre eles some quando não é uma razão de verdade.
           carrinho_abandonado: {
             leads: a.listasAb.size > 0 ? leadsAb : null,
             vendas: a.rec,
-            taxa: leadsAb > 0 ? parseFloat(((a.rec / leadsAb) * 100).toFixed(2)) : null,
+            taxa: (leadsAb > 0 && abDoPeriodo) ? parseFloat(((a.rec / leadsAb) * 100).toFixed(2)) : null,
+            taxa_nao_calculavel_motivo: (leadsAb > 0 && !abDoPeriodo) ? 'leads_vitalicio' : null,
           },
           compradores: {
             leads: a.listasCo.size > 0 ? leadsCo : null,
             vendas: a.vendas,
-            taxa: leadsCo > 0 ? parseFloat(((a.vendas / leadsCo) * 100).toFixed(2)) : null,
+            taxa: (leadsCo > 0 && coDoPeriodo) ? parseFloat(((a.vendas / leadsCo) * 100).toFixed(2)) : null,
+            taxa_nao_calculavel_motivo: (leadsCo > 0 && !coDoPeriodo) ? 'leads_vitalicio' : null,
           },
           // O terceiro estado também aqui: sem ele, a soma das duas colunas não bate com o total
           // do produto e não há como saber se falta venda ou se sobra.
