@@ -242,20 +242,28 @@ function normalizeForMatch(s: string): string {
 }
 
 /**
- * Uma lista só é aceita como SEGUNDA lista (slot 2) se tiver crescido de verdade nos retratos.
+ * Uma lista só é aceita como SEGUNDA lista (slot 2) se tiver crescido de verdade nos retratos —
+ * "de verdade" significando mais que ruído, não só "mais que zero".
  *
- * Por que existe: o NeuroMind provou o risco na prática. A lista antiga (107460), abandonada
- * numa migração de conta, tem o MESMO padrão de nome que a nova (145091) — e sem esta checagem,
- * o auto-vínculo escreveu a antiga de volta no slot 2 assim que rodou contra a conta principal,
- * reintroduzindo os 19.706 contatos congelados no denominador que a religação manual tinha acabado
- * de tirar de lá. Lista congelada de migração e lista de segundo gateway de lead são
- * estruturalmente IDÊNTICAS — mesmo nome, conta diferente, ID diferente — e só o retrato diz qual
- * é qual: uma recebe contato novo, a outra não.
+ * Por que existe, e por que "mais que zero" não bastava: o NeuroMind provou o risco DUAS vezes.
+ * Primeiro com a lista 107460 (parada em 19.706 exatos, zero variação — essa a versão anterior
+ * desta checagem já rejeitava). Depois com a lista 119972 — outra sobra da mesma migração, também
+ * abandonada — que tinha ido de 20.095 para 20.096 num contato isolado ao longo de 9 dias de
+ * retrato. Tecnicamente "cresceu" (20.096 > 20.095), e a versão anterior aceitou. O resultado:
+ * 6 dos 8 kits do NeuroMind passaram a excluir a venda real do cálculo exato, porque a query de
+ * leads via webhook só cobre produto com list_compra_id_2 vazio.
+ *
+ * MINIMO_LEADS_REAIS existe pra separar as duas coisas: uma lista que recebe LEAD de verdade
+ * ganha dezenas ou centenas em poucos dias; uma lista morta que alguém tocou por engano ganha 1.
+ * O valor é um julgamento, não uma medição — mas rejeitar +1 e aceitar +50 no mesmo teste é uma
+ * escolha melhor que aceitar os dois igualmente por serem ambos "positivos".
  *
  * Sem retrato ainda (menos de 2 dias de série): NÃO aceita. Não dá pra provar que cresce, e
  * escrever sem prova é o mesmo erro que esta função existe para não repetir — a lista entra assim
- * que tiver dois dias de retrato e mostrar crescimento de verdade.
+ * que tiver dois dias de retrato e mostrar crescimento acima do ruído.
  */
+const MINIMO_LEADS_REAIS_PARA_SEGUNDA_LISTA = 5;
+
 async function candidataDeSegundaListaCresceu(clientId: number, listId: number): Promise<boolean> {
   const r = await queryOne<{ primeiro: string; ultimo: string; dias: string }>(
     `SELECT (ARRAY_AGG(contact_count ORDER BY snapshot_date))[1]::text AS primeiro,
@@ -265,7 +273,7 @@ async function candidataDeSegundaListaCresceu(clientId: number, listId: number):
     [clientId, String(listId)]
   );
   if (!r || parseInt(r.dias) < 2) return false;
-  return parseInt(r.ultimo) > parseInt(r.primeiro);
+  return (parseInt(r.ultimo) - parseInt(r.primeiro)) >= MINIMO_LEADS_REAIS_PARA_SEGUNDA_LISTA;
 }
 
 export async function autoLinkSlickTextLists(
