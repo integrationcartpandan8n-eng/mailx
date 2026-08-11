@@ -5219,10 +5219,15 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const periodActive = period.isToday || !!(period.from && period.to);
     const smsSalesParams: (string | number)[] = [clientId];
     const smsSalesPeriod = periodSql(period, smsSalesParams);
+    // status IN ('processed', 'processing') nas tr\u00EAs consultas abaixo, igual ao clientTotal logo
+    // adiante (e ao padr\u00E3o usado no resto do arquivo) \u2014 de prop\u00F3sito, n\u00E3o por acaso. Sem isso, um
+    // pedido SMS com status='failed' (cen\u00E1rio real do pipeline da Digistore) entrava no numerador
+    // da Representatividade SMS mas n\u00E3o no denominador (clientTotal j\u00E1 filtrava), e o card podia
+    // passar de 100% \u2014 um n\u00FAmero que n\u00E3o existe fisicamente, achado ao auditar esta se\u00E7\u00E3o.
     const smsSales = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         ${smsSalesPeriod ? `AND ${smsSalesPeriod}` : ''}
     `, smsSalesParams);
@@ -5231,7 +5236,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_RECOVERY}
         ${smsRecPeriod ? `AND ${smsRecPeriod}` : ''}
@@ -5241,7 +5246,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const smsUpsell = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_UPSELL}
         ${smsUpsellPeriod ? `AND ${smsUpsellPeriod}` : ''}
