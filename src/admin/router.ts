@@ -255,29 +255,43 @@ async function leadsPorPeriodoViaSnapshots(
   abandonoIds: string[],
   compraIds: string[],
   from: string,
-  to: string
+  to: string,
+  liveFimCounts?: Map<string, number>
 ): Promise<{ abandono: number; compra: number; deltaPorLista: Map<string, number>; baseDate: string; endDate: string } | null> {
   const todas = [...new Set([...abandonoIds, ...compraIds])];
   if (todas.length === 0) return null;
 
-  // Uma consulta só: para cada lista, o retrato mais próximo de cada ponta dentro da tolerância.
-  const rows = await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
-    `WITH base AS (
-       SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-       FROM list_contact_snapshots
-       WHERE client_id = $1 AND list_id = ANY($2)
-         AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
-       ORDER BY list_id, snapshot_date DESC
-     ), fim AS (
-       SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-       FROM list_contact_snapshots
-       WHERE client_id = $1 AND list_id = ANY($2)
-         AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
-       ORDER BY list_id, snapshot_date ASC
-     )
-     SELECT * FROM base UNION ALL SELECT * FROM fim`,
-    [clientId, todas, from, to]
-  );
+  // Quando `to` é hoje, a ponta final não pode vir do retrato: o retrato de hoje, se existir, foi
+  // gravado na primeira janela do dia e fica congelado a partir dali — filtrar "Hoje" às 18h
+  // mostraria o tamanho da lista às 9h, não agora. `liveFimCounts` é a contagem que a própria
+  // rota chamadora ACABOU de buscar na SlickText (ao vivo, pro total vitalício) — reaproveitar
+  // em vez de bater na API de novo, e sem esperar o próximo retrato existir.
+  const rows = liveFimCounts
+    ? await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
+        `SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
+         FROM list_contact_snapshots
+         WHERE client_id = $1 AND list_id = ANY($2)
+           AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
+         ORDER BY list_id, snapshot_date DESC`,
+        [clientId, todas, from]
+      )
+    : await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
+        `WITH base AS (
+           SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
+           FROM list_contact_snapshots
+           WHERE client_id = $1 AND list_id = ANY($2)
+             AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
+           ORDER BY list_id, snapshot_date DESC
+         ), fim AS (
+           SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date::text AS snapshot_date, contact_count
+           FROM list_contact_snapshots
+           WHERE client_id = $1 AND list_id = ANY($2)
+             AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
+           ORDER BY list_id, snapshot_date ASC
+         )
+         SELECT * FROM base UNION ALL SELECT * FROM fim`,
+        [clientId, todas, from, to]
+      );
 
   const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string }>();
   for (const r of rows) {
@@ -285,6 +299,16 @@ async function leadsPorPeriodoViaSnapshots(
     if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; }
     else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; }
     porLista.set(r.list_id, e);
+  }
+  if (liveFimCounts) {
+    for (const id of todas) {
+      const count = liveFimCounts.get(id);
+      if (count == null) continue; // sem contagem ao vivo pra essa lista — cai no "falta uma ponta" abaixo, honesto
+      const e = porLista.get(id) ?? {};
+      e.fim = count;
+      e.fimD = to;
+      porLista.set(id, e);
+    }
   }
 
   // Exige as duas pontas em TODAS as listas. Faltando uma, a soma sairia menor que a realidade e
@@ -1862,6 +1886,13 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // 9+ meses de gente acumulada contra 30 dias de venda). Produto cuja lista caia fora daqui não
   // ganha taxa nenhuma — "não calculável" é mais honesto que um número pequeno demais.
   let listasComNumeroDoPeriodo = new Set<string>();
+  // Lista recém-conectada (troca de conta/lista no workflow, gateway novo, produto migrado) que
+  // ainda não tem retrato suficiente pra entrar em cálculo de período nenhum. Sem isso, uma troca
+  // no meio do mês passa muda: a tela continua respondendo (cai no vitalício, que sempre tem
+  // número), e ninguém percebe que aquela lista específica ficou sem histórico até a taxa estranhar
+  // semanas depois. Quem troca lista/conta no workflow é o Murilo — precisa ver na hora, não
+  // descobrir por reclamação do Nicollas.
+  let listasEmStandby: Array<{ produto: string; segmento: 'abandono' | 'compra'; list_id: string; desde: string | null; dias_gravados: number }> = [];
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1924,6 +1955,32 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           return { nome: k.name, listasAbandono: l.abandono, listasCompra: l.compra };
         });
 
+        // Standby: quantos dias de retrato cada lista JÁ tinha antes da gravação de hoje (por
+        // isso a consulta vem antes de gravarSnapshotDeListas, e não depois) — uma lista trocada
+        // ontem tem que continuar aparecendo como nova hoje, não "resetar" porque acabou de ganhar
+        // o retrato do dia.
+        const STANDBY_DIAS_MIN = 4; // abaixo disso a lista nunca serviu de base nem com a tolerância de 3 dias
+        const retratoPorLista = await query<{ list_id: string; primeiro: string; dias: string }>(
+          `SELECT list_id, MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias
+           FROM list_contact_snapshots WHERE client_id = $1 AND list_id = ANY($2)
+           GROUP BY list_id`,
+          [clientId, [...abandonoIds, ...compraIds]]
+        ).catch(() => []);
+        const retratoPorListaMap = new Map(retratoPorLista.map(r => [r.list_id, { primeiro: r.primeiro.slice(0, 10), dias: parseInt(r.dias) }]));
+        listasEmStandby = kits.flatMap(k => {
+          const l = listasDoKit(k);
+          const linhas: typeof listasEmStandby = [];
+          const checar = (id: string, segmento: 'abandono' | 'compra') => {
+            const r = retratoPorListaMap.get(id);
+            if (!r || r.dias < STANDBY_DIAS_MIN) {
+              linhas.push({ produto: k.name, segmento, list_id: id, desde: r?.primeiro ?? null, dias_gravados: r?.dias ?? 0 });
+            }
+          };
+          l.abandono.forEach(id => checar(id, 'abandono'));
+          l.compra.forEach(id => checar(id, 'compra'));
+          return linhas;
+        });
+
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
         await gravarSnapshotDeListas(clientId as string, [...abandonoPorLista, ...compraPorLista]);
@@ -1944,17 +2001,27 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const abandonoVitalicio = abandonoPorLista.reduce((a, b) => a + b.count, 0);
         const compraVitalicio = compraPorLista.reduce((a, b) => a + b.count, 0);
 
+        // "Hoje" chega com period.isToday e SEM from/to (ver resolvePeriodFilter) — trata como
+        // período ativo de hoje-a-hoje, usando a contagem AO VIVO que acabamos de buscar (linha
+        // acima) como ponta final, em vez de esperar o retrato do dia. Sem isso, o filtro "Hoje"
+        // caía sempre no vitalício, porque `period.from`/`period.to` vinham vazios.
+        const hojeStr = period.isToday
+          ? (await queryOne<{ hoje: string }>(`SELECT CURRENT_DATE::text AS hoje`))?.hoje.slice(0, 10)
+          : null;
+        const periodoDe = period.isToday ? hojeStr! : period.from;
+        const periodoAte = period.isToday ? hojeStr! : period.to;
+        const periodoAtivo = !!(periodoDe && periodoAte);
+
         // Leads DO PERÍODO via diferença de retratos, quando existem os dois lados. Só com
         // período ativo — sem período o vitalício é a resposta certa, não uma aproximação.
-        const periodoAtivo = !!(period.from && period.to);
         const delta = periodoAtivo
-          ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, period.from!, period.to!)
+          ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, periodoDe!, periodoAte!, period.isToday ? contagemPorLista : undefined)
           : null;
         // Independente do retrato: venda que a gente recebeu já diz, com precisão de segundos,
         // quando o comprador virou lead. Não depende de dois retratos existirem — funciona mesmo
         // em período retroativo a antes de o mecanismo de retrato ligar.
         const comprasExatas = periodoAtivo
-          ? await leadsDeCompraViaWebhookLogs(clientId as string, compraIds, period.from!, period.to!)
+          ? await leadsDeCompraViaWebhookLogs(clientId as string, compraIds, periodoDe!, periodoAte!)
           : null;
 
         if (delta) {
@@ -1978,14 +2045,16 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           //
           // O esperado para a ponta inicial é a VÉSPERA do primeiro dia do período: quem entrou no
           // dia 05 aparece na diferença entre o retrato do dia 04 e o do dia 06.
-          const vespera = new Date(`${period.from}T00:00:00Z`);
+          const vespera = new Date(`${periodoDe}T00:00:00Z`);
           vespera.setUTCDate(vespera.getUTCDate() - 1);
           const esperadoDe = vespera.toISOString().slice(0, 10);
           leadsPeriodoInfo = {
             de: delta.baseDate,
             ate: delta.endDate,
             // Quando false, a tela para de dizer "exata" e mostra a janela que realmente foi usada.
-            janela_bate: delta.baseDate === esperadoDe && delta.endDate === period.to,
+            // Em "Hoje" a ponta final é sempre a contagem ao vivo (delta.endDate === periodoAte por
+            // construção), então isso só falha se a ponta inicial não achou retrato de véspera.
+            janela_bate: delta.baseDate === esperadoDe && delta.endDate === periodoAte,
           };
         } else {
           abandonoLeads = abandonoVitalicio;
@@ -2019,7 +2088,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           if (cobreTudo) {
             compradorLeadsSource = 'webhook_exato';
             // Janela exata por construção — não há folga de retrato pra estourar o período pedido.
-            leadsPeriodoInfoCompra = { de: period.from!, ate: period.to!, janela_bate: true };
+            leadsPeriodoInfoCompra = { de: periodoDe!, ate: periodoAte!, janela_bate: true };
           }
 
           // O retrato também mediu este período? Compara só as listas que o webhook cobriu —
@@ -2633,6 +2702,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       fora_escopo_detalhe: smsSegForaDetalhe,
       // Pedido 3.4 do documento: a mesma divisão, aberta por produto (por família, ver o bloco).
       por_produto: conversaoPorProduto,
+      // Lista trocada/adicionada há pouco tempo (conta nova, gateway novo, produto migrado) e
+      // ainda sem histórico — pra quem mexe nos vínculos do workflow não perder de vista que ela
+      // está aí, coletando, em vez de descobrir só quando a taxa aparecer estranha.
+      listas_em_standby: listasEmStandby,
     },
     conversao_por_segmento_email: {
       carrinho_abandonado: {
