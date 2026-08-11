@@ -131,6 +131,34 @@ export function familiaDoProduto(nome: string | null | undefined): string {
   return String(nome).replace(/[\s._-]*n8n$/i, '').trim() || String(nome);
 }
 
+export interface KitListasRow {
+  st_list_abandono_id: string | null;
+  st_list_abandono_id_2?: string | null;
+  st_list_compra_id: string | null;
+  st_list_compra_id_2?: string | null;
+}
+
+/**
+ * Todas as listas de abandono/compra de um kit, incluindo a segunda quando existir.
+ *
+ * Existe porque um produto pode ser vendido por mais de um gateway de captação de lead ao mesmo
+ * tempo (Digistore direto, JVZoo, BuyGoods como afiliado) — confirmado com o Murilo para a família
+ * NorthScale: não importa de onde veio o lead, toda venda que fecha cai na MESMA conta Digistore
+ * cadastrada. O lead de cada gateway cai numa lista diferente, às vezes em conta diferente da
+ * SlickText, e as duas são leads DE VERDADE do mesmo produto — têm que ser SOMADAS.
+ *
+ * Único ponto de leitura das duas colunas: todo lugar que soma lista de produto usa esta função,
+ * em vez de ler `st_list_compra_id` sozinho — assim uma segunda lista vinculada pelo auto-vínculo
+ * entra em TODO cálculo (leads, contagem por conta, inventário) sem precisar lembrar de atualizar
+ * cada um separadamente.
+ */
+export function listasDoKit(kit: KitListasRow): { abandono: string[]; compra: string[] } {
+  return {
+    abandono: [kit.st_list_abandono_id, kit.st_list_abandono_id_2].filter((v): v is string => !!v),
+    compra: [kit.st_list_compra_id, kit.st_list_compra_id_2].filter((v): v is string => !!v),
+  };
+}
+
 /**
  * APURAÇÃO DO CANAL SMS — a contagem canônica de vendas por segmento.
  *

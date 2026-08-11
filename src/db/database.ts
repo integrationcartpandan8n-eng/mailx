@@ -157,6 +157,18 @@ export async function initDatabase(): Promise<void> {
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_compra_id VARCHAR(50);
         ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_abandono_id VARCHAR(50);
 
+        -- Segunda lista de compra/abandono do mesmo produto. Existe porque um produto pode ser
+        -- vendido por mais de um gateway de captação de lead ao mesmo tempo (Digistore direto,
+        -- JVZoo, BuyGoods como afiliado) -- confirmado com o Murilo para a família NorthScale
+        -- (NeuroMind, Thermo Burn, Glyco Pulse, Max Vitalize): não importa de onde o lead veio,
+        -- toda venda que fecha cai na MESMA conta Digistore cadastrada no painel. O lead de cada
+        -- gateway costuma cair numa lista diferente, às vezes em conta diferente da SlickText, e
+        -- as duas são leads DE VERDADE do mesmo produto -- precisam ser SOMADAS, não escolhida
+        -- uma. Foi exatamente escolher a errada (a antiga, maior) que travou o card do NeuroMind
+        -- por 11 dias antes de existir este segundo campo.
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_compra_id_2 VARCHAR(50);
+        ALTER TABLE kits ADD COLUMN IF NOT EXISTS st_list_abandono_id_2 VARCHAR(50);
+
         -- Fase A: colunas normalizadas para métricas multi-gateway
         DO $$ BEGIN
           ALTER TABLE webhook_logs ADD COLUMN IF NOT EXISTS total_price NUMERIC(12,2);
