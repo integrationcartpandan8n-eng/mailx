@@ -6,7 +6,7 @@
  */
 
 import { SlickTextClient } from '../services/slicktext';
-import { query } from '../db/database';
+import { query, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import type { StoreContext } from './store-lookup';
 import type { KitRecord } from './product-upsert';
@@ -241,6 +241,33 @@ function normalizeForMatch(s: string): string {
     .toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/**
+ * Uma lista só é aceita como SEGUNDA lista (slot 2) se tiver crescido de verdade nos retratos.
+ *
+ * Por que existe: o NeuroMind provou o risco na prática. A lista antiga (107460), abandonada
+ * numa migração de conta, tem o MESMO padrão de nome que a nova (145091) — e sem esta checagem,
+ * o auto-vínculo escreveu a antiga de volta no slot 2 assim que rodou contra a conta principal,
+ * reintroduzindo os 19.706 contatos congelados no denominador que a religação manual tinha acabado
+ * de tirar de lá. Lista congelada de migração e lista de segundo gateway de lead são
+ * estruturalmente IDÊNTICAS — mesmo nome, conta diferente, ID diferente — e só o retrato diz qual
+ * é qual: uma recebe contato novo, a outra não.
+ *
+ * Sem retrato ainda (menos de 2 dias de série): NÃO aceita. Não dá pra provar que cresce, e
+ * escrever sem prova é o mesmo erro que esta função existe para não repetir — a lista entra assim
+ * que tiver dois dias de retrato e mostrar crescimento de verdade.
+ */
+async function candidataDeSegundaListaCresceu(clientId: number, listId: number): Promise<boolean> {
+  const r = await queryOne<{ primeiro: string; ultimo: string; dias: string }>(
+    `SELECT (ARRAY_AGG(contact_count ORDER BY snapshot_date))[1]::text AS primeiro,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date DESC))[1]::text AS ultimo,
+            COUNT(*)::text AS dias
+     FROM list_contact_snapshots WHERE client_id = $1 AND list_id = $2`,
+    [clientId, String(listId)]
+  );
+  if (!r || parseInt(r.dias) < 2) return false;
+  return parseInt(r.ultimo) > parseInt(r.primeiro);
+}
+
 export async function autoLinkSlickTextLists(
   st: SlickTextClient,
   clientId: number
@@ -288,18 +315,19 @@ export async function autoLinkSlickTextLists(
     // contas). O slot 1 fica com a primeira lista encontrada e nunca é sobrescrito — mesmo
     // comportamento de sempre. A novidade é o slot 2: se o produto já tem uma lista (de uma
     // chamada anterior, outra conta) e ESTA conta tem outra lista da MESMA família com ID
-    // diferente, essa segunda lista é o sinal de que o produto é vendido por mais de um gateway
-    // de lead (Digistore, JVZoo, BuyGoods) cada um caindo numa conta/lista diferente — e ela
-    // entra sozinha, sem precisar de UPDATE manual da próxima vez que isso acontecer.
+    // diferente, essa segunda lista é candidata a sinal de que o produto é vendido por mais de um
+    // gateway de lead (Digistore, JVZoo, BuyGoods) — mas só ENTRA se o retrato provar que ela
+    // recebe contato de verdade (ver candidataDeSegundaListaCresceu). Lista congelada nunca é
+    // aceita, mesmo com o nome batendo perfeito.
     for (const [product, listId] of abandonoByProduct) {
       if (!kitKey.includes(normalizeForMatch(product))) continue;
       if (!abandonoId) { abandonoId = listId; break; }
-      if (listId !== abandonoId && !abandonoId2) { abandonoId2 = listId; break; }
+      if (listId !== abandonoId && !abandonoId2 && await candidataDeSegundaListaCresceu(clientId, listId)) { abandonoId2 = listId; break; }
     }
     for (const [product, listId] of compraByProduct) {
       if (!kitKey.includes(normalizeForMatch(product))) continue;
       if (!compraId) { compraId = listId; break; }
-      if (listId !== compraId && !compraId2) { compraId2 = listId; break; }
+      if (listId !== compraId && !compraId2 && await candidataDeSegundaListaCresceu(clientId, listId)) { compraId2 = listId; break; }
     }
 
     if (abandonoId !== (kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null)

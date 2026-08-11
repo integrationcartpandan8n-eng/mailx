@@ -347,6 +347,14 @@ async function leadsPorPeriodoViaSnapshots(
  * vendido via Digistore (só para CartPanda) — o abandono desses produtos é tratado inteiramente
  * pelo n8n, sem gravar nada aqui. Sem evento nosso para ancorar, o lado abandono continua
  * dependendo do retrato.
+ *
+ * SÓ CONTA PRODUTO COM UMA LISTA DE COMPRA (sem slot 2), de propósito. Uma venda nossa não diz em
+ * QUAL das duas listas o comprador caiu quando o produto tem gateway duplo (ex.: Thermo Burn,
+ * 105431 + 145156) — só sabemos que ele comprou. Uma versão anterior desta função tentava contar
+ * as duas listas separadamente com um CROSS JOIN, e cada venda desses produtos entrava DUAS vezes
+ * (uma por lista) — 14.460 "leads" onde o total real de vendas do período inteiro era 8.237.
+ * Produto com duas listas fica de fora daqui e cai no retrato, que mede o tamanho real de cada
+ * lista sem precisar saber de qual gateway veio cada contato — aproximado, mas não inflado.
  */
 async function leadsDeCompraViaWebhookLogs(
   clientId: string,
@@ -357,14 +365,14 @@ async function leadsDeCompraViaWebhookLogs(
   if (compraListIds.length === 0) return null;
 
   const rows = await query<{ list_id: string; leads: string }>(
-    `SELECT lista.list_id, COUNT(*)::text AS leads
+    `SELECT k.st_list_compra_id AS list_id, COUNT(*)::text AS leads
      FROM webhook_logs w
      JOIN kits k ON k.client_id = w.client_id AND k.platform = w.source AND k.external_id = w.product_external_id
-     CROSS JOIN LATERAL (VALUES (k.st_list_compra_id), (k.st_list_compra_id_2)) AS lista(list_id)
      WHERE w.client_id = $1 AND w.event_type = 'order.paid'
-       AND lista.list_id = ANY($2)
+       AND k.st_list_compra_id = ANY($2)
+       AND k.st_list_compra_id_2 IS NULL
        AND w.created_at >= $3::date AND w.created_at < ($4::date + INTERVAL '1 day')
-     GROUP BY lista.list_id`,
+     GROUP BY k.st_list_compra_id`,
     [clientId, compraListIds, from, to]
   );
 
@@ -1981,20 +1989,35 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         leadsPeriodoInfoCompra = leadsPeriodoInfo;
         if (comprasExatas) {
           for (const [id, leads] of comprasExatas.porLista) contagemPorLista.set(id, leads);
-          compradorLeads = comprasExatas.total;
-          compradorLeadsSource = 'webhook_exato';
-          // Janela exata por construção — não há folga de retrato pra estourar o período pedido.
-          leadsPeriodoInfoCompra = { de: period.from!, ate: period.to!, janela_bate: true };
+          // Recalcula o total somando TODAS as listas de compra pela fonte que cada uma tem —
+          // exata pra produto de lista única, aproximada (retrato/vitalício) pra produto com duas
+          // listas, que fica de fora de comprasExatas de propósito (ver o comentário da função).
+          // Um total só, misturando as duas fontes por lista, é mais correto que escolher uma das
+          // duas fontes inteira — e é exatamente o que contagemPorLista já representa aqui.
+          compradorLeads = compraIds.reduce((soma, id) => soma + (contagemPorLista.get(id) ?? 0), 0);
 
-          // O retrato também mediu este período? A diferença entre os dois é o tamanho do que
-          // entrou na lista por uma venda que NÃO foi esta (gateway não ingerido, ex.: JVZoo,
-          // BuyGoods — confirmado sem handler no nosso lado). Não decide sozinho se é problema:
-          // registra o tamanho pra quem olha decidir.
+          // Só chama de "exata" quando TODA lista de compra do cliente coube no cálculo exato. Com
+          // produto de duas listas na mistura, o total é parcialmente aproximado, e dizer "exata"
+          // pra ele seria a mesma classe de erro que motivou o resto desta auditoria: legenda
+          // afirmando mais certeza do que o número tem.
+          const cobreTudo = comprasExatas.porLista.size === compraIds.length;
+          if (cobreTudo) {
+            compradorLeadsSource = 'webhook_exato';
+            // Janela exata por construção — não há folga de retrato pra estourar o período pedido.
+            leadsPeriodoInfoCompra = { de: period.from!, ate: period.to!, janela_bate: true };
+          }
+
+          // O retrato também mediu este período? Compara só as listas que o webhook cobriu —
+          // comparar contra delta.compra (que inclui produto de duas listas, fora do escopo do
+          // webhook) acusaria "venda não capturada" no Thermo por engano, quando a diferença ali é
+          // só o segundo gateway de lead que o retrato já soma legitimamente.
           if (delta) {
+            const retratoDasMesmasListas = [...comprasExatas.porLista.keys()]
+              .reduce((soma, id) => soma + (delta.deltaPorLista.get(id) ?? 0), 0);
             compraDivergencia = {
-              do_retrato: delta.compra,
+              do_retrato: retratoDasMesmasListas,
               explicado_por_venda: comprasExatas.total,
-              diferenca: delta.compra - comprasExatas.total,
+              diferenca: retratoDasMesmasListas - comprasExatas.total,
             };
           }
         }
