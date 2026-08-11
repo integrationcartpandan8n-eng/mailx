@@ -3859,34 +3859,40 @@ adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(
   // do CONTATO (não muda por lista) e não serve pra medir entrada — o retrato continua sendo a
   // única fonte. Se vier DIFERENTE, `created` muda por lista e é candidato real.
   let testeCruzado: any = { executado: false, motivo: 'nenhum kit com abandono e compra vinculados foi encontrado' };
-  const kitParaCruzar = await queryOne<{ name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT name, st_list_abandono_id, st_list_compra_id FROM kits
+  // TODOS os pares abandono/compra, não só o primeiro kit: um produto pode ter migrado (como o
+  // NeuroMind) e ter as duas listas em CONTAS DIFERENTES — nesse caso não existe conta onde as
+  // duas respondam juntas, e o teste não é possível com aquele produto. Sem tentar outros pares,
+  // o resultado ficava indistinguível de "nenhum produto tem as duas listas vinculadas", que é
+  // outra situação (e falsa aqui: 21 dos 24 kits têm as duas colunas preenchidas).
+  const paresParaCruzar = await query<{ nome: string; abandono: string; compra: string }>(
+    `SELECT DISTINCT name AS nome, st_list_abandono_id AS abandono, st_list_compra_id AS compra
+     FROM kits
      WHERE client_id = $1 AND enabled = true
-       AND st_list_abandono_id IS NOT NULL AND st_list_compra_id IS NOT NULL
-     LIMIT 1`,
+       AND st_list_abandono_id IS NOT NULL AND st_list_compra_id IS NOT NULL`,
     [clientId]
   );
-  if (kitParaCruzar) {
+
+  const paresTentados: Array<{ produto: string; motivo: string }> = [];
+  buscaDoTesteCruzado:
+  for (const par of paresParaCruzar) {
     for (const acc of contas) {
       const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
       try {
         const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
         const [doAbandono, doCompra] = await Promise.all([
-          st.rawListContacts(parseInt(kitParaCruzar.st_list_abandono_id!), { offset: 0, limit: 200 }),
-          st.rawListContacts(parseInt(kitParaCruzar.st_list_compra_id!), { offset: 0, limit: 200 }),
+          st.rawListContacts(parseInt(par.abandono), { offset: 0, limit: 200 }),
+          st.rawListContacts(parseInt(par.compra), { offset: 0, limit: 200 }),
         ]);
         // As duas listas do produto têm que existir NESTA conta — se uma vier vazia, as listas
-        // do kit vivem em contas diferentes e a comparação não é válida aqui.
+        // do kit vivem em contas diferentes (caso do NeuroMind: abandono na principal, compra na
+        // 32935) e a comparação não é válida aqui. Tenta a próxima conta, depois o próximo par.
         if (doAbandono.length === 0 || doCompra.length === 0) continue;
 
         const porId = new Map(doAbandono.map((c: any) => [c.contact_id, c]));
         const comum = doCompra.filter((c: any) => porId.has(c.contact_id));
         if (comum.length === 0) {
-          testeCruzado = {
-            executado: true, conta: rotulo, produto: kitParaCruzar.name,
-            resultado: 'nenhum contato em comum entre as duas listas nesta amostra (200 de cada) — normal se pouca gente que abandonou já comprou; tentar de novo mais tarde ou com produto de maior volume.',
-          };
-          break;
+          paresTentados.push({ produto: par.nome, motivo: `sem contato em comum na amostra (200 de cada) na conta ${rotulo}` });
+          continue;
         }
 
         const comparacoes = comum.slice(0, 5).map((c: any) => {
@@ -3902,18 +3908,26 @@ adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(
         testeCruzado = {
           executado: true,
           conta: rotulo,
-          produto: kitParaCruzar.name,
+          produto: par.nome,
           contatos_em_comum_na_amostra: comum.length,
           comparacoes,
           veredito: todasIguais
             ? '`created` veio IGUAL nas duas listas pra mesma pessoa — é a data de criação do CONTATO, não de entrada NESTA lista. NÃO usar para leads-por-período; o retrato diário continua sendo a única fonte confiável.'
             : '`created` MUDOU entre as duas listas pra mesma pessoa — candidato real a data de entrada por lista. Vale aprofundar: comparar contra webhook_logs.created_at antes de migrar o cálculo.',
         };
-        break;
+        break buscaDoTesteCruzado;
       } catch {
         continue; // conta sem essa lista — tenta a próxima
       }
     }
+  }
+  if (!testeCruzado.executado && paresParaCruzar.length > 0) {
+    testeCruzado = {
+      executado: false,
+      motivo: paresTentados.length > 0
+        ? `${paresParaCruzar.length} produto(s) com abandono+compra vinculados, mas nenhum teve as duas listas respondendo na MESMA conta com contato em comum. Detalhe: ${JSON.stringify(paresTentados)}`
+        : `${paresParaCruzar.length} produto(s) com abandono+compra vinculados, mas as listas de cada um vivem em contas diferentes (produto migrado, ver /diagnostico/inventario-de-listas) — não há onde comparar.`,
+    };
   }
 
   res.json({
