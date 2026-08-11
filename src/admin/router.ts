@@ -3848,6 +3848,74 @@ adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(
     }
   }
 
+  // ── Teste cruzado: `created` é do CONTATO ou da ENTRADA NESTA LISTA? ──
+  //
+  // Amostra sozinha não decide isso: numa conta NOVA, alimentada por API direto na lista de
+  // compra, todo contato nasce já naquela lista — `created` bate com "entrou na lista" só porque
+  // não existe passado nenhum antes disso, não porque o campo signifique isso.
+  //
+  // O teste real: achar a MESMA PESSOA em duas listas do MESMO produto (abandonou o carrinho,
+  // comprou depois) e comparar o `created` lido via cada lista. Se vier IGUAL nas duas, o campo é
+  // do CONTATO (não muda por lista) e não serve pra medir entrada — o retrato continua sendo a
+  // única fonte. Se vier DIFERENTE, `created` muda por lista e é candidato real.
+  let testeCruzado: any = { executado: false, motivo: 'nenhum kit com abandono e compra vinculados foi encontrado' };
+  const kitParaCruzar = await queryOne<{ name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
+    `SELECT name, st_list_abandono_id, st_list_compra_id FROM kits
+     WHERE client_id = $1 AND enabled = true
+       AND st_list_abandono_id IS NOT NULL AND st_list_compra_id IS NOT NULL
+     LIMIT 1`,
+    [clientId]
+  );
+  if (kitParaCruzar) {
+    for (const acc of contas) {
+      const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+      try {
+        const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+        const [doAbandono, doCompra] = await Promise.all([
+          st.rawListContacts(parseInt(kitParaCruzar.st_list_abandono_id!), { offset: 0, limit: 200 }),
+          st.rawListContacts(parseInt(kitParaCruzar.st_list_compra_id!), { offset: 0, limit: 200 }),
+        ]);
+        // As duas listas do produto têm que existir NESTA conta — se uma vier vazia, as listas
+        // do kit vivem em contas diferentes e a comparação não é válida aqui.
+        if (doAbandono.length === 0 || doCompra.length === 0) continue;
+
+        const porId = new Map(doAbandono.map((c: any) => [c.contact_id, c]));
+        const comum = doCompra.filter((c: any) => porId.has(c.contact_id));
+        if (comum.length === 0) {
+          testeCruzado = {
+            executado: true, conta: rotulo, produto: kitParaCruzar.name,
+            resultado: 'nenhum contato em comum entre as duas listas nesta amostra (200 de cada) — normal se pouca gente que abandonou já comprou; tentar de novo mais tarde ou com produto de maior volume.',
+          };
+          break;
+        }
+
+        const comparacoes = comum.slice(0, 5).map((c: any) => {
+          const doLadoAbandono = porId.get(c.contact_id);
+          return {
+            contact_id: c.contact_id,
+            created_via_lista_abandono: doLadoAbandono.created,
+            created_via_lista_compra: c.created,
+            iguais: doLadoAbandono.created === c.created,
+          };
+        });
+        const todasIguais = comparacoes.every((c: any) => c.iguais);
+        testeCruzado = {
+          executado: true,
+          conta: rotulo,
+          produto: kitParaCruzar.name,
+          contatos_em_comum_na_amostra: comum.length,
+          comparacoes,
+          veredito: todasIguais
+            ? '`created` veio IGUAL nas duas listas pra mesma pessoa — é a data de criação do CONTATO, não de entrada NESTA lista. NÃO usar para leads-por-período; o retrato diário continua sendo a única fonte confiável.'
+            : '`created` MUDOU entre as duas listas pra mesma pessoa — candidato real a data de entrada por lista. Vale aprofundar: comparar contra webhook_logs.created_at antes de migrar o cálculo.',
+        };
+        break;
+      } catch {
+        continue; // conta sem essa lista — tenta a próxima
+      }
+    }
+  }
+
   res.json({
     pergunta: 'A SlickText devolve, por contato, a data em que ele entrou NESTA lista (não a data de criação do contato)?',
     lista_sondada: { list_id: listId, escolhida_automaticamente: listaEscolhidaAutomaticamente },
@@ -3858,7 +3926,8 @@ adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(
     campos_candidatos_a_data_de_entrada: [...camposEncontrados],
     veredito: camposEncontrados.size === 0
       ? 'NENHUM campo com nome de data de entrada apareceu na amostra. Ou o endpoint não devolve isso, ou o nome do campo não bate com o padrão procurado — olhe "todos_os_campos_da_amostra" abaixo e leia os nomes um por um antes de concluir que não existe.'
-      : `${camposEncontrados.size} campo(s) candidato(s) encontrado(s): ${[...camposEncontrados].join(', ')}. PRECISA CONFIRMAR O SIGNIFICADO antes de usar — o próximo passo é pegar 2-3 contatos com esse campo preenchido e comparar a data contra quando a venda/abandono de fato aconteceu no nosso banco (webhook_logs.created_at). Só depois disso migrar leads-por-período pra esse campo.`,
+      : `${camposEncontrados.size} campo(s) candidato(s) encontrado(s): ${[...camposEncontrados].join(', ')}. Ver "teste_cruzado" abaixo — é ele que decide se o campo serve, não a presença sozinha.`,
+    teste_cruzado: testeCruzado,
     // Todos os campos crus de uma amostra, para ler manualmente quando o padrão de nome não achar
     // nada — a SlickText pode nomear o campo de um jeito que ninguém adivinha de primeira.
     todos_os_campos_da_amostra: amostras[0]?.registros?.[0] ? Object.keys(amostras[0].registros[0]) : null,
