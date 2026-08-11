@@ -5279,6 +5279,14 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       },
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
+        // Valor bruto (número, não string formatada) — o resumo do negócio no front precisa dividir
+        // por isso pra calcular "% da receita do SMS" da mensagem campeã. Sem ele, a única soma
+        // numérica disponível no cliente era a da tabela granular (/sms-granular), que exige
+        // utm_medium/utm_source EXATOS ('auto-sms'/'mailx-sms') — mais estreito que o SQL_IS_SMS
+        // usado aqui, que também aceita formato não padrão (ex.: Horse Peak manda utm_medium=WFI001).
+        // Resultado visto em produção: tabela granular somando $6.619 contra $7.936 do faturamento
+        // real, e a mensagem campeã aparecendo com 58% de receita quando o certo era 48%.
+        receita_sms: smsRevenue,
         vendas_sms: smsVendas,
         ticket_medio_sms: fmtBRL(smsTicketMedio),
         recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),

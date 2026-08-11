@@ -4892,17 +4892,24 @@
                 const porReceita = rows.slice().sort((a, b) => b.receita_liquida - a.receita_liquida);
                 const melhor = porReceita.find(x => x.vendas > 0);
                 const pior = porReceita[porReceita.length - 1];
-                const totalRec = rows.reduce((sum, x) => sum + x.receita_liquida, 0);
                 const semVenda = rows.filter(x => x.vendas === 0 && x.receita_liquida < 0).length;
 
                 const tipoTxt = (t) => /upsell|compra aprovada/i.test(t || '') ? 'Compra Aprovada' : 'Carrinho Abandonado';
                 const money = (v) => (v < 0 ? '−' : '') + '$' + Math.abs(Math.round(v)).toLocaleString('pt-BR');
 
+                // Denominador tem que ser o faturamento SMS OFICIAL (r.receita_sms), não a soma da
+                // própria tabela granular. A granular exige utm_medium/utm_source EXATOS
+                // ('auto-sms'/'mailx-sms'); o faturamento oficial usa uma regra mais larga que
+                // também aceita formato não padrão (ex.: Horse Peak manda utm_medium=WFI001) — a
+                // soma da granular fica menor que o total real, e dividir por ela infla o
+                // percentual (visto em produção: 58% quando o real era 48%).
+                const totalSmsReal = r.receita_sms || 0;
+
                 const blocoBom = melhor ? `
                     <div class="rn-dest bom">
                         <span class="t">Mensagem que mais vendeu</span>
                         <span class="n">${escapeHtml(humanizeMsgCode(melhor.mensagem).human)} · ${tipoTxt(melhor.tipo_automacao)}${melhor.produto ? ' · ' + escapeHtml(melhor.produto) : ''}</span>
-                        <span class="f"><span class="pos">${money(melhor.receita_liquida)}</span> em <b>${melhor.vendas.toLocaleString('pt-BR')} vendas</b>${totalRec > 0 ? ` — ${Math.round(melhor.receita_liquida / totalRec * 100)}% da receita do SMS` : ''}.</span>
+                        <span class="f"><span class="pos">${money(melhor.receita_liquida)}</span> em <b>${melhor.vendas.toLocaleString('pt-BR')} vendas</b>${totalSmsReal > 0 ? ` — ${Math.round(melhor.receita_liquida / totalSmsReal * 100)}% da receita do SMS` : ''}.</span>
                     </div>` : '';
 
                 const blocoRuim = (pior && pior.receita_liquida < 0) ? `
