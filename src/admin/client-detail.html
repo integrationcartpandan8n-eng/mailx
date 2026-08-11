@@ -3803,21 +3803,50 @@
             // vem null/undefined no Email e no consolidado) — sem essa nota, quem troca o vínculo
             // não tem como saber que aquela lista específica ficou "muda" até a taxa dela aparecer
             // estranha semanas depois.
+            //
+            // <details>/<summary> nativo em vez de parede de texto sempre aberta: a primeira
+            // versão listava uma linha por lista direto na tela (visto em produção com 10 listas
+            // reais — ainda dava pra ler, mas cresce mal). Recolhido por padrão, com tabela de
+            // verdade (não divs empilhados) quando expandido — não precisa de JS de toggle, o
+            // navegador já faz.
             const standby = cs.listas_em_standby || [];
             if (standby.length > 0) {
-                const linhas = standby.map(l => {
-                    const seg = l.segmento === 'abandono' ? 'abandono' : 'compradores';
-                    const desde = l.desde
-                        ? `desde ${fmtData(l.desde)} (${l.dias_gravados} dia${l.dias_gravados === 1 ? '' : 's'} de retrato)`
-                        : 'nenhum retrato gravado ainda';
-                    return `<div><span style="color:var(--text)">${escapeHtml(l.produto)}</span> — lista de ${seg} <span style="font-family:monospace; font-size:0.68rem; opacity:0.8">${escapeHtml(l.list_id)}</span> — ${desde}</div>`;
+                const linhasTabela = standby.map(l => {
+                    const seg = l.segmento === 'abandono' ? 'Abandono' : 'Compradores';
+                    const desde = l.desde ? fmtData(l.desde) : '—';
+                    const diasTxt = l.desde ? `${l.dias_gravados} dia${l.dias_gravados === 1 ? '' : 's'}` : 'nenhum retrato';
+                    return `<tr>
+                        <td style="padding:0.3rem 0.6rem 0.3rem 0">${escapeHtml(l.produto)}</td>
+                        <td style="padding:0.3rem 0.6rem">${seg}</td>
+                        <td style="padding:0.3rem 0.6rem; font-family:monospace; font-size:0.7rem; opacity:0.8">${escapeHtml(l.list_id)}</td>
+                        <td style="padding:0.3rem 0.6rem">${desde}</td>
+                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${diasTxt}</td>
+                    </tr>`;
                 }).join('');
                 tbody.insertAdjacentHTML('beforeend', `
                     <tr>
                         <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
-                            <i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>
-                            ${standby.length} lista${standby.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico. Até lá conta como total vitalício, igual às demais.
-                            <div style="margin-top:0.45rem; display:flex; flex-direction:column; gap:0.2rem">${linhas}</div>
+                            <details>
+                                <summary style="cursor:pointer; user-select:none">
+                                    <i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>
+                                    ${standby.length} lista${standby.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico
+                                </summary>
+                                <div style="margin-top:0.5rem; overflow-x:auto">
+                                    <table style="border-collapse:collapse; width:100%; font-size:0.72rem">
+                                        <thead>
+                                            <tr style="text-align:left; color:var(--text-dim); border-bottom:1px solid var(--border)">
+                                                <th style="padding:0 0.6rem 0.3rem 0; font-weight:600">Produto</th>
+                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Segmento</th>
+                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Lista</th>
+                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Desde</th>
+                                                <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Retrato</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${linhasTabela}</tbody>
+                                    </table>
+                                </div>
+                                <div style="margin-top:0.4rem; opacity:0.85">Até lá conta como total vitalício, igual às demais.</div>
+                            </details>
                         </td>
                     </tr>
                 `);
