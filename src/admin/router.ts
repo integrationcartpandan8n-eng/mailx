@@ -326,6 +326,55 @@ async function leadsPorPeriodoViaSnapshots(
 }
 
 /**
+ * Leads de COMPRA por período, exatos, direto do webhook_logs — não do retrato.
+ *
+ * Por que existe: confirmado por amostra (5 contatos, comparando o `created` da SlickText contra
+ * o `webhook_logs.created_at` da venda correspondente) que o contato nasce na SlickText entre 40
+ * segundos e pouco mais de 1 minuto DEPOIS do nosso `order.paid` — é o n8n reagindo ao mesmo
+ * evento que a gente recebeu, quase no mesmo instante. Isso torna `webhook_logs.created_at` uma
+ * fonte EXATA (precisão de segundos, não de dia) e RETROATIVA (cobre desde sempre, não só desde
+ * que o retrato começou a rodar) de "quando essa venda virou lead de compra".
+ *
+ * LIMITE HONESTO, medido no mesmo teste: 1 dos 5 contatos da amostra tinha a última venda
+ * registrada aqui 4 dias ANTES de virar contato na SlickText — ele comprou de novo por um gateway
+ * que não ingerimos (JVZoo/BuyGoods, confirmado sem handler no nosso lado). Esta função só conta
+ * venda que NÓS recebemos; comprador que entrou na lista por outro caminho fica de fora daqui
+ * mesmo estando na lista de verdade. Por isso ela não substitui o retrato — o retrato mede o
+ * tamanho real da lista, venha o contato de onde vier, e a DIFERENÇA entre os dois números é o
+ * sinal de venda não capturada, não um erro deste cálculo.
+ *
+ * Cobre só o lado COMPRA de propósito: não existe handler de carrinho abandonado para produto
+ * vendido via Digistore (só para CartPanda) — o abandono desses produtos é tratado inteiramente
+ * pelo n8n, sem gravar nada aqui. Sem evento nosso para ancorar, o lado abandono continua
+ * dependendo do retrato.
+ */
+async function leadsDeCompraViaWebhookLogs(
+  clientId: string,
+  compraListIds: string[],
+  from: string,
+  to: string
+): Promise<{ total: number; porLista: Map<string, number> } | null> {
+  if (compraListIds.length === 0) return null;
+
+  const rows = await query<{ list_id: string; leads: string }>(
+    `SELECT lista.list_id, COUNT(*)::text AS leads
+     FROM webhook_logs w
+     JOIN kits k ON k.client_id = w.client_id AND k.platform = w.source AND k.external_id = w.product_external_id
+     CROSS JOIN LATERAL (VALUES (k.st_list_compra_id), (k.st_list_compra_id_2)) AS lista(list_id)
+     WHERE w.client_id = $1 AND w.event_type = 'order.paid'
+       AND lista.list_id = ANY($2)
+       AND w.created_at >= $3::date AND w.created_at < ($4::date + INTERVAL '1 day')
+     GROUP BY lista.list_id`,
+    [clientId, compraListIds, from, to]
+  );
+
+  if (rows.length === 0) return null;
+  const porLista = new Map(rows.map(r => [r.list_id, parseInt(r.leads)]));
+  const total = [...porLista.values()].reduce((a, b) => a + b, 0);
+  return { total, porLista };
+}
+
+/**
  * Resolve as credenciais de UMA conta específica (por accountId — null = principal), pra usar
  * em vínculos de mensagem (sms_campaign_map.st_account_id) onde só uma conta importa.
  */
@@ -1777,10 +1826,22 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // Vendas continuam vindo do nosso banco (já são exatas, é conversão real registrada).
   let abandonoLeads = 0;
   let compradorLeads = 0;
-  let leadsSource: 'slicktext_list' | 'snapshot_delta' | 'unavailable' = 'unavailable';
+  type FonteDeLeads = 'webhook_exato' | 'slicktext_list' | 'snapshot_delta' | 'unavailable';
+  let leadsSource: FonteDeLeads = 'unavailable';
+  // Fonte dos leads de COMPRA especificamente — pode divergir da do abandono (ver comentário mais
+  // abaixo, perto de onde ela é calculada).
+  let compradorLeadsSource: FonteDeLeads = 'unavailable';
   let leadsWarning: string | null = null;
   let leadsPeriodoInfo: { de: string; ate: string; janela_bate: boolean } | null = null;
+  // Janela dos leads de COMPRA especificamente — quando vem do webhook, é sempre exata (não tem
+  // folga de retrato pra estourar o período), então não pode compartilhar leadsPeriodoInfo com o
+  // abandono, que continua podendo ter janela aproximada.
+  let leadsPeriodoInfoCompra: { de: string; ate: string; janela_bate: boolean } | null = null;
   let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
+  // Contraprova: quantos leads o retrato mediu na lista de compra contra quantos a gente
+  // conseguiu explicar por venda registrada — a diferença é o tamanho do que entrou por um
+  // caminho que não capturamos (ver leadsDeCompraViaWebhookLogs).
+  let compraDivergencia: { do_retrato: number; explicado_por_venda: number; diferenca: number } | null = null;
   // Insumos da conversão POR PRODUTO (pedido 3.4 do documento: "precisa ser dividido por produto").
   let contagemPorLista = new Map<string, number>();
   let kitsComListas: Array<{ nome: string; listasAbandono: string[]; listasCompra: string[] }> = [];
@@ -1872,6 +1933,12 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const delta = periodoAtivo
           ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, period.from!, period.to!)
           : null;
+        // Independente do retrato: venda que a gente recebeu já diz, com precisão de segundos,
+        // quando o comprador virou lead. Não depende de dois retratos existirem — funciona mesmo
+        // em período retroativo a antes de o mecanismo de retrato ligar.
+        const comprasExatas = periodoAtivo
+          ? await leadsDeCompraViaWebhookLogs(clientId as string, compraIds, period.from!, period.to!)
+          : null;
 
         if (delta) {
           // A tabela por produto passa a ler daqui também — mesma fonte, mesmo universo, taxas
@@ -1906,11 +1973,37 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           leadsSource = 'slicktext_list';
         }
 
+        // compradorLeadsSource começa igual a leadsSource (mesmo texto que o abandono, valendo o
+        // aviso de vitalício quando for o caso) e só diverge quando o webhook der resposta —
+        // abandono nunca usa este caminho, porque não existe evento nosso pra ancorar aquele lado
+        // (ver comentário em leadsDeCompraViaWebhookLogs).
+        compradorLeadsSource = leadsSource;
+        leadsPeriodoInfoCompra = leadsPeriodoInfo;
+        if (comprasExatas) {
+          for (const [id, leads] of comprasExatas.porLista) contagemPorLista.set(id, leads);
+          compradorLeads = comprasExatas.total;
+          compradorLeadsSource = 'webhook_exato';
+          // Janela exata por construção — não há folga de retrato pra estourar o período pedido.
+          leadsPeriodoInfoCompra = { de: period.from!, ate: period.to!, janela_bate: true };
+
+          // O retrato também mediu este período? A diferença entre os dois é o tamanho do que
+          // entrou na lista por uma venda que NÃO foi esta (gateway não ingerido, ex.: JVZoo,
+          // BuyGoods — confirmado sem handler no nosso lado). Não decide sozinho se é problema:
+          // registra o tamanho pra quem olha decidir.
+          if (delta) {
+            compraDivergencia = {
+              do_retrato: delta.compra,
+              explicado_por_venda: comprasExatas.total,
+              diferenca: delta.compra - comprasExatas.total,
+            };
+          }
+        }
+
         const avisos: string[] = [];
         if (unmatched.length > 0) {
           avisos.push(`${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`);
         }
-        if (leadsSource === 'slicktext_list' && periodoAtivo) {
+        if (leadsSource === 'slicktext_list' && periodoAtivo && !comprasExatas) {
           avisos.push('Leads são o total atual de cada lista (vitalício) contra vendas do período — a SlickText não conta contatos por lista e por data ao mesmo tempo. A partir de agora um retrato diário é gravado, e períodos futuros passam a ter leads exatos.');
         }
         leadsWarning = avisos.length > 0 ? avisos.join(' · ') : null;
@@ -2431,7 +2524,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         taxa: null,
         leads_nao_somavel: true,
         leads_por_canal: { sms: compradorLeads, email: emailCompradorLeads },
-        leads_source: leadsSource,
+        leads_source: compradorLeadsSource,
         leads_warning: leadsWarning,
       },
     },
@@ -2476,10 +2569,14 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         vendas: smsSegSalesCount,
         vendas_fora_escopo: smsSegSalesFora,
         taxa: compradorLeads > 0 ? parseFloat(((smsSegSalesCount / compradorLeads) * 100).toFixed(2)) : 0,
-        leads_source: leadsSource,
-        leads_periodo: leadsPeriodoInfo,
+        leads_source: compradorLeadsSource,
+        leads_periodo: leadsPeriodoInfoCompra,
         leads_retratos: leadsRetratos,
         leads_warning: leadsWarning,
+        // Só preenchido quando leads_source é 'webhook_exato' E o retrato também mediu o mesmo
+        // período — é a contraprova: quanto a lista cresceu de verdade contra quanto a gente
+        // conseguiu explicar por venda registrada. Positivo = venda por gateway não capturado.
+        divergencia_retrato: compraDivergencia,
       },
       // Quais produtos ficaram fora e por quê — a nota da tela lista isso em vez de só contar.
       fora_escopo_detalhe: smsSegForaDetalhe,

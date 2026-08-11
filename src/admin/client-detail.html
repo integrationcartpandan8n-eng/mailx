@@ -3697,8 +3697,17 @@
                     const pc = seg.leads_por_canal || {};
                     return `<div class="sem-base">não somável <span class="kpi-tip" tabindex="0" data-tip="A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign — somar contaria cada uma duas vezes. SMS: ${(pc.sms ?? 0).toLocaleString('pt-BR')} · Email: ${(pc.email ?? 0).toLocaleString('pt-BR')}. Veja as tabelas por canal, onde a taxa é válida.">ⓘ</span></div>`;
                 }
-                const escopoTxt = seg.leads_source === 'snapshot_delta' ? 'leads do período' : 'leads (total da lista)';
-                return `<div class="v">${(seg.leads ?? 0).toLocaleString('pt-BR')}</div><div class="r">${escopoTxt}</div>`;
+                // webhook_exato: leads de compra contados direto da venda que recebemos, com
+                // precisão de segundos — mais preciso que o retrato, e por isso rotulado à parte
+                // dele (ver o "ⓘ" com a divergência, quando existir).
+                const escopoTxt = seg.leads_source === 'webhook_exato' ? 'leads (venda registrada)'
+                    : seg.leads_source === 'snapshot_delta' ? 'leads do período'
+                    : 'leads (total da lista)';
+                const div = seg.divergencia_retrato;
+                const tipDivergencia = div && div.diferenca > 0
+                    ? ` <span class="kpi-tip" tabindex="0" data-tip="O retrato mediu ${div.do_retrato.toLocaleString('pt-BR')} novo(s) contato(s) na lista neste período, mas só ${div.explicado_por_venda.toLocaleString('pt-BR')} têm venda registrada aqui. A diferença (${div.diferenca.toLocaleString('pt-BR')}) provavelmente entrou por um gateway que não capturamos (ex.: JVZoo, BuyGoods) — a pessoa está na lista de verdade, só não temos o evento de venda dela.">ⓘ</span>`
+                    : '';
+                return `<div class="v">${(seg.leads ?? 0).toLocaleString('pt-BR')}</div><div class="r">${escopoTxt}${tipDivergencia}</div>`;
             };
 
             // Taxa só quando a base sustenta conclusão. Com 2 leads, uma venda a mais move 50
