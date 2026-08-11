@@ -3798,38 +3798,49 @@
                 `);
             }
 
-            // Lista recém-conectada (troca de conta/lista no workflow, gateway novo, produto
-            // migrado) sem histórico suficiente ainda. Existe só no card SMS (cs.listas_em_standby
-            // vem null/undefined no Email e no consolidado) — sem essa nota, quem troca o vínculo
-            // não tem como saber que aquela lista específica ficou "muda" até a taxa dela aparecer
-            // estranha semanas depois.
+            // Status de retrato de TODA lista de produto ativo — não só a recém-conectada
+            // (standby:true), a já estabelecida também, com as datas gravadas de cada uma. Existe
+            // só no card SMS (cs.listas_retrato_status vem null/undefined no Email e no
+            // consolidado) — sem essa nota, quem troca conta/lista no workflow não tem como saber
+            // que aquela lista específica ficou "muda" até a taxa dela aparecer estranha semanas
+            // depois.
             //
             // <details>/<summary> nativo em vez de parede de texto sempre aberta: a primeira
             // versão listava uma linha por lista direto na tela (visto em produção com 10 listas
             // reais — ainda dava pra ler, mas cresce mal). Recolhido por padrão, com tabela de
             // verdade (não divs empilhados) quando expandido — não precisa de JS de toggle, o
             // navegador já faz.
-            const standby = cs.listas_em_standby || [];
-            if (standby.length > 0) {
-                const linhasTabela = standby.map(l => {
+            const retratoStatus = cs.listas_retrato_status || [];
+            if (retratoStatus.length > 0) {
+                const emStandby = retratoStatus.filter(l => l.standby).length;
+                const linhasTabela = retratoStatus.map(l => {
                     const seg = l.segmento === 'abandono' ? 'Abandono' : 'Compradores';
-                    const desde = l.desde ? fmtData(l.desde) : '—';
-                    const diasTxt = l.desde ? `${l.dias_gravados} dia${l.dias_gravados === 1 ? '' : 's'}` : 'nenhum retrato';
+                    const datasTxt = (l.datas || []).length > 0
+                        ? l.datas.map(d => fmtData(d)).join(', ')
+                        : 'nenhum retrato';
+                    const statusTxt = l.standby
+                        ? `<span style="color:var(--warning)">standby</span>`
+                        : `<span style="color:var(--success, #4ade80)">ok</span>`;
                     return `<tr>
                         <td style="padding:0.3rem 0.6rem 0.3rem 0">${escapeHtml(l.produto)}</td>
                         <td style="padding:0.3rem 0.6rem">${seg}</td>
                         <td style="padding:0.3rem 0.6rem; font-family:monospace; font-size:0.7rem; opacity:0.8">${escapeHtml(l.list_id)}</td>
-                        <td style="padding:0.3rem 0.6rem">${desde}</td>
-                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${diasTxt}</td>
+                        <td style="padding:0.3rem 0.6rem">${statusTxt}</td>
+                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${datasTxt}</td>
                     </tr>`;
                 }).join('');
+                const resumoTxt = emStandby > 0
+                    ? `${emStandby} de ${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico`
+                    : `${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} com retrato — nenhuma em standby`;
+                const icone = emStandby > 0
+                    ? `<i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>`
+                    : `<i class="fas fa-circle-check" style="color:var(--success, #4ade80); margin-right:0.35rem"></i>`;
                 tbody.insertAdjacentHTML('beforeend', `
                     <tr>
                         <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
                             <details>
                                 <summary style="cursor:pointer; user-select:none">
-                                    <i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>
-                                    ${standby.length} lista${standby.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico
+                                    ${icone}${resumoTxt}
                                 </summary>
                                 <div style="margin-top:0.5rem; overflow-x:auto">
                                     <table style="border-collapse:collapse; width:100%; font-size:0.72rem">
@@ -3838,14 +3849,14 @@
                                                 <th style="padding:0 0.6rem 0.3rem 0; font-weight:600">Produto</th>
                                                 <th style="padding:0 0.6rem 0.3rem; font-weight:600">Segmento</th>
                                                 <th style="padding:0 0.6rem 0.3rem; font-weight:600">Lista</th>
-                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Desde</th>
-                                                <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Retrato</th>
+                                                <th style="padding:0 0.6rem 0.3rem; font-weight:600">Status</th>
+                                                <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Datas gravadas</th>
                                             </tr>
                                         </thead>
                                         <tbody>${linhasTabela}</tbody>
                                     </table>
                                 </div>
-                                <div style="margin-top:0.4rem; opacity:0.85">Até lá conta como total vitalício, igual às demais.</div>
+                                <div style="margin-top:0.4rem; opacity:0.85">Lista em standby conta como total vitalício até acumular retrato suficiente.</div>
                             </details>
                         </td>
                     </tr>

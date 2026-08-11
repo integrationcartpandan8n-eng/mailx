@@ -1886,13 +1886,14 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // 9+ meses de gente acumulada contra 30 dias de venda). Produto cuja lista caia fora daqui não
   // ganha taxa nenhuma — "não calculável" é mais honesto que um número pequeno demais.
   let listasComNumeroDoPeriodo = new Set<string>();
-  // Lista recém-conectada (troca de conta/lista no workflow, gateway novo, produto migrado) que
-  // ainda não tem retrato suficiente pra entrar em cálculo de período nenhum. Sem isso, uma troca
-  // no meio do mês passa muda: a tela continua respondendo (cai no vitalício, que sempre tem
-  // número), e ninguém percebe que aquela lista específica ficou sem histórico até a taxa estranhar
-  // semanas depois. Quem troca lista/conta no workflow é o Murilo — precisa ver na hora, não
-  // descobrir por reclamação do Nicollas.
-  let listasEmStandby: Array<{ produto: string; segmento: 'abandono' | 'compra'; list_id: string; desde: string | null; dias_gravados: number }> = [];
+  // Status de retrato de CADA lista de produto ativo — não só a em standby, a Murilo pediu pra
+  // ver as datas das já estabelecidas também. Lista recém-conectada (troca de conta/lista no
+  // workflow, gateway novo, produto migrado) ainda sem retrato suficiente pra entrar em cálculo
+  // de período nenhum entra com standby:true. Sem isso, uma troca no meio do mês passa muda: a
+  // tela continua respondendo (cai no vitalício, que sempre tem número), e ninguém percebe que
+  // aquela lista ficou sem histórico até a taxa estranhar semanas depois. Quem troca lista/conta
+  // no workflow é o Murilo — precisa ver na hora, não descobrir por reclamação do Nicollas.
+  let listasRetratoStatus: Array<{ produto: string; segmento: 'abandono' | 'compra'; list_id: string; standby: boolean; desde: string | null; dias_gravados: number; datas: string[] }> = [];
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1955,18 +1956,19 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           return { nome: k.name, listasAbandono: l.abandono, listasCompra: l.compra };
         });
 
-        // Standby: quantos dias de retrato cada lista JÁ tinha antes da gravação de hoje (por
-        // isso a consulta vem antes de gravarSnapshotDeListas, e não depois) — uma lista trocada
-        // ontem tem que continuar aparecendo como nova hoje, não "resetar" porque acabou de ganhar
-        // o retrato do dia.
+        // Status de retrato de TODA lista de produto ativo — não só as em standby, o Murilo pediu
+        // pra ver as datas das já estabelecidas também. A consulta vem antes de
+        // gravarSnapshotDeListas, e não depois: uma lista trocada ontem tem que continuar
+        // aparecendo como nova hoje, não "resetar" porque acabou de ganhar o retrato do dia.
         const STANDBY_DIAS_MIN = 4; // abaixo disso a lista nunca serviu de base nem com a tolerância de 3 dias
-        const retratoPorLista = await query<{ list_id: string; primeiro: string; dias: string }>(
-          `SELECT list_id, MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias
+        const retratoPorLista = await query<{ list_id: string; primeiro: string; dias: string; datas: string[] }>(
+          `SELECT list_id, MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias,
+                  ARRAY_AGG(DISTINCT snapshot_date::text ORDER BY snapshot_date::text) AS datas
            FROM list_contact_snapshots WHERE client_id = $1 AND list_id = ANY($2)
            GROUP BY list_id`,
           [clientId, [...abandonoIds, ...compraIds]]
         ).catch(() => []);
-        const retratoPorListaMap = new Map(retratoPorLista.map(r => [r.list_id, { primeiro: r.primeiro.slice(0, 10), dias: parseInt(r.dias) }]));
+        const retratoPorListaMap = new Map(retratoPorLista.map(r => [r.list_id, { primeiro: r.primeiro.slice(0, 10), dias: parseInt(r.dias), datas: r.datas }]));
 
         // A lista é da FAMÍLIA, mas kit.name é por SKU — "M2 - NeuroMind Pro (3 Bottles)",
         // "UP1 - NeuroMind Pro (6 Bottles)" etc. apontam pra MESMA lista. Sem agrupar por
@@ -1979,27 +1981,28 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
             .replace(/\s*\(\d+\s*[Bb]ottles?\)\s*$/, '')
             .trim() || nomeSku;
 
-        const standbyPorLista = new Map<string, { segmento: 'abandono' | 'compra'; familias: Set<string>; desde: string | null; dias: number }>();
+        const retratoAgrupado = new Map<string, { segmento: 'abandono' | 'compra'; familias: Set<string>; desde: string | null; dias: number; datas: string[] }>();
         for (const k of kits) {
           const l = listasDoKit(k);
           const familia = nomeFamilia(k.name);
-          const checar = (id: string, segmento: 'abandono' | 'compra') => {
+          const juntar = (id: string, segmento: 'abandono' | 'compra') => {
             const r = retratoPorListaMap.get(id);
-            if (r && r.dias >= STANDBY_DIAS_MIN) return;
-            const atual = standbyPorLista.get(id) ?? { segmento, familias: new Set<string>(), desde: r?.primeiro ?? null, dias: r?.dias ?? 0 };
+            const atual = retratoAgrupado.get(id) ?? { segmento, familias: new Set<string>(), desde: r?.primeiro ?? null, dias: r?.dias ?? 0, datas: r?.datas ?? [] };
             atual.familias.add(familia);
-            standbyPorLista.set(id, atual);
+            retratoAgrupado.set(id, atual);
           };
-          l.abandono.forEach(id => checar(id, 'abandono'));
-          l.compra.forEach(id => checar(id, 'compra'));
+          l.abandono.forEach(id => juntar(id, 'abandono'));
+          l.compra.forEach(id => juntar(id, 'compra'));
         }
-        listasEmStandby = [...standbyPorLista.entries()]
+        listasRetratoStatus = [...retratoAgrupado.entries()]
           .map(([list_id, v]) => ({
             produto: [...v.familias].join(' / '),
             segmento: v.segmento,
             list_id,
+            standby: v.dias < STANDBY_DIAS_MIN,
             desde: v.desde,
             dias_gravados: v.dias,
+            datas: v.datas,
           }))
           .sort((a, b) => a.produto.localeCompare(b.produto));
 
@@ -2724,10 +2727,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       fora_escopo_detalhe: smsSegForaDetalhe,
       // Pedido 3.4 do documento: a mesma divisão, aberta por produto (por família, ver o bloco).
       por_produto: conversaoPorProduto,
-      // Lista trocada/adicionada há pouco tempo (conta nova, gateway novo, produto migrado) e
-      // ainda sem histórico — pra quem mexe nos vínculos do workflow não perder de vista que ela
-      // está aí, coletando, em vez de descobrir só quando a taxa aparecer estranha.
-      listas_em_standby: listasEmStandby,
+      // Status de retrato de TODA lista de produto ativo, com as datas gravadas de cada uma —
+      // não só a recém-trocada (standby:true), a já estabelecida também, pra dar visão completa
+      // de quem mexe nos vínculos do workflow.
+      listas_retrato_status: listasRetratoStatus,
     },
     conversao_por_segmento_email: {
       carrinho_abandonado: {
