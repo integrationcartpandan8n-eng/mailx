@@ -53,9 +53,12 @@
             padding: 2rem 1.5rem;
         }
 
-        /* Antes 900px: num monitor largo tudo virava um poço vertical com escuridão
-           dos lados. 1500px deixa os grids de KPI e as tabelas respirarem. */
-        .container { width: 100%; max-width: 1500px; }
+        /* Antes 900px, depois 1500px: num monitor largo tudo virava um poço vertical com
+           escuridão dos lados. 1500px ainda deixava ~25% da tela morta em monitor de 1920 —
+           medido na auditoria de layout. 1920px preenche 1080p/1440p inteiros; acima disso
+           o teto continua existindo de propósito, porque linha de tabela larga demais fica
+           difícil de seguir com o olho da esquerda pra direita. */
+        .container { width: 100%; max-width: 1920px; }
 
         /* Header */
         .page-header {
@@ -1027,9 +1030,14 @@
            esquerda, ícone num quadrado colorido, label em cima e valor grande embaixo.
            Os templates renderizam ícone → valor → label; o flex `order` inverte pra
            label ficar acima do valor sem mexer em todos os templates JS. */
+        /* --kpi-cols é preenchido pelo balancearKpiGrids() (ver JS): com auto-fit puro, o
+           número de colunas é só "quantas cabem", e o resto da divisão vira buraco no fim da
+           última fila — 10 KPIs em 7 colunas davam 7+3, com 4 vãos vazios (medido na
+           auditoria de layout). Com o número de colunas escolhido a partir da CONTAGEM, os
+           mesmos 10 viram 5+5. auto-fit fica como fallback se o JS não rodar. */
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            grid-template-columns: repeat(var(--kpi-cols, auto-fit), minmax(190px, 1fr));
             gap: 0.9rem;
         }
 
@@ -2291,6 +2299,52 @@
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
         }
+
+        // ── Balanceamento das filas de KPI ──
+        //
+        // Problema medido na auditoria de layout: .kpi-grid usava auto-fit, que só responde
+        // "quantas colunas cabem" e ignora quantos itens existem. Em 1500px cabiam 7; o card
+        // de Faturamento SMS tem 10 KPIs, então saía 7 + 3 com quatro vãos vazios na segunda
+        // fila. Mesma coisa no Envios e Créditos (4 KPIs em 3 colunas = 3 + 1 sozinho).
+        //
+        // Aqui o número de colunas sai da CONTAGEM: dado quantas caberiam, calcula quantas
+        // filas são necessárias e divide os itens igualmente entre elas — 10 em 2 filas = 5+5.
+        // Genérico de propósito (roda em TODO .kpi-grid da página, e não numa lista de ids
+        // fixos): KPI novo entra sem precisar mexer aqui de novo.
+        const KPI_MIN_PX = 190;   // igual ao minmax() do .kpi-grid
+        const KPI_GAP_PX = 14.4;  // 0.9rem em 16px
+        function balancearKpiGrids() {
+            document.querySelectorAll('.kpi-grid').forEach(grid => {
+                const itens = grid.children.length;
+                const largura = grid.clientWidth;
+                // Grid escondido (aba inativa) mede 0 — sem largura não há o que decidir, e o
+                // observer chama de novo quando a aba abrir.
+                if (itens === 0 || largura === 0) return;
+                const cabem = Math.max(1, Math.floor((largura + KPI_GAP_PX) / (KPI_MIN_PX + KPI_GAP_PX)));
+                const filas = Math.ceil(itens / cabem);
+                const colunas = Math.ceil(itens / filas);
+                // Só escreve quando muda: setProperty sempre invalida layout, e isso roda
+                // dentro de observers de resize/mutação.
+                if (grid.style.getPropertyValue('--kpi-cols') !== String(colunas)) {
+                    grid.style.setProperty('--kpi-cols', colunas);
+                }
+            });
+        }
+        // Dois gatilhos, porque as duas coisas mudam o resultado: a LARGURA (janela, abrir a
+        // aba, sidebar) e a CONTAGEM (cada re-render troca o innerHTML do grid). Observers em
+        // vez de chamar na mão em cada um dos ~10 pontos de render — um ponto esquecido seria
+        // um grid desbalanceado sem sintoma óbvio.
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => balancearKpiGrids());
+            document.addEventListener('DOMContentLoaded', () => {
+                document.querySelectorAll('.kpi-grid').forEach(g => ro.observe(g));
+            });
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const mo = new MutationObserver(() => balancearKpiGrids());
+            document.querySelectorAll('.kpi-grid').forEach(g => mo.observe(g, { childList: true }));
+            balancearKpiGrids();
+        });
 
         const CURRENCY_SYMBOL_MAP = { USD: '$', BRL: 'R$', EUR: '€' };
         function currencySymbol(code) {
