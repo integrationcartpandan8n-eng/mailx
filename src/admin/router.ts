@@ -5194,6 +5194,36 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       countByList.set(listId, perAccount.reduce((a, b) => a + b, 0));
     }));
 
+    // Quem mais usa a MESMA lista — pra tabela poder avisar em vez de deixar a pessoa somar a
+    // coluna e achar inconsistência. Achado ao auditar: com uma lista de 500 contatos usada por 3
+    // produtos, a tabela mostrava "500" em 3 linhas e o total dedupicado acima batia 500 — soma
+    // da coluna dava 1.500, os dois números "certos" no próprio universo, sem nada dizendo por
+    // quê. É a MESMA classe de erro do card de Conversão por Segmento (duas fontes divergindo na
+    // mesma tela sem legenda) — a diferença é que aqui a informação que falta é simples: dizer
+    // que a lista é compartilhada.
+    const produtosPorListaCompra = new Map<number, string[]>();
+    const produtosPorListaAbandono = new Map<number, string[]>();
+    for (const kit of kits) {
+      const l = listasDoKit(kit);
+      l.compra.forEach(id => {
+        const n = parseInt(id);
+        produtosPorListaCompra.set(n, [...(produtosPorListaCompra.get(n) ?? []), kit.name]);
+      });
+      l.abandono.forEach(id => {
+        const n = parseInt(id);
+        produtosPorListaAbandono.set(n, [...(produtosPorListaAbandono.get(n) ?? []), kit.name]);
+      });
+    }
+    const outrosProdutosDaMesmaLista = (ids: string[], mapa: Map<number, string[]>, produtoAtual: string): string[] => {
+      const outros = new Set<string>();
+      for (const id of ids) {
+        for (const nome of mapa.get(parseInt(id)) ?? []) {
+          if (nome !== produtoAtual) outros.add(nome);
+        }
+      }
+      return [...outros];
+    };
+
     const listStats = kits.map((kit) => {
       const l = listasDoKit(kit);
       const somar = (ids: string[]) => ids.reduce((t, id) => t + (countByList.get(parseInt(id)) ?? 0), 0);
@@ -5202,9 +5232,11 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         compra_list_id: kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null,
         compra_list_id_2: kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null,
         compra_contacts: somar(l.compra),
+        compra_compartilhada_com: outrosProdutosDaMesmaLista(l.compra, produtosPorListaCompra, kit.name),
         abandono_list_id: kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null,
         abandono_list_id_2: kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null,
         abandono_contacts: somar(l.abandono),
+        abandono_compartilhada_com: outrosProdutosDaMesmaLista(l.abandono, produtosPorListaAbandono, kit.name),
       };
     });
 

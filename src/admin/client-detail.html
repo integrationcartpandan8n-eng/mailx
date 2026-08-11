@@ -4400,14 +4400,30 @@
                     document.getElementById('smsListsBody').innerHTML =
                         '<tr><td colspan="4" class="empty-state"><i class="fas fa-box-open"></i> Nenhum produto com listas SMS</td></tr>';
                 } else {
+                    // Lista compartilhada entre produtos conta uma vez só nos totais do topo da
+                    // aba, mas aparece em mais de uma linha aqui (é a mesma lista, uma linha por
+                    // produto que a usa) — sem aviso, somar esta coluna dá um número maior que os
+                    // cards acima, e parece inconsistência em vez de contagem esperada.
+                    const compartilhadaTip = (nomes) => nomes && nomes.length > 0
+                        ? ` <span class="kpi-tip" tabindex="0" data-tip="Mesma lista da SlickText também usada por: ${nomes.map(escapeHtml).join(', ')}. Por isso o número se repete nas duas linhas — nos totais do topo da aba, essa lista é contada uma vez só.">ⓘ</span>`
+                        : '';
+                    const algumCompartilhado = listStats.some(l =>
+                        (l.compra_compartilhada_com?.length > 0) || (l.abandono_compartilhada_com?.length > 0));
+
                     document.getElementById('smsListsBody').innerHTML = listStats.map(l => `
                         <tr>
                             <td style="color:#fff; font-weight:600">${l.product}</td>
-                            <td><span class="tag green">${l.compra_contacts}</span></td>
-                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${l.abandono_contacts}</span></td>
+                            <td><span class="tag green">${l.compra_contacts}</span>${compartilhadaTip(l.compra_compartilhada_com)}</td>
+                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${l.abandono_contacts}</span>${compartilhadaTip(l.abandono_compartilhada_com)}</td>
                             <td style="font-weight:700">${l.compra_contacts + l.abandono_contacts}</td>
                         </tr>
-                    `).join('');
+                    `).join('') + (algumCompartilhado ? `
+                        <tr>
+                            <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                                <i class="fas fa-circle-info" style="margin-right:0.35rem"></i>
+                                Alguns produtos compartilham a mesma lista (ⓘ em cima do número) — a soma desta tabela pode ficar maior que os totais de Compradores/Carrinhos Abandonados no topo da aba, que contam cada lista uma vez só.
+                            </td>
+                        </tr>` : '');
                 }
                 clearDataLoadError('SMS');
             } catch (e) {
