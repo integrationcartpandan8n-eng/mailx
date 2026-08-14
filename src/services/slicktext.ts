@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
 
 const CTX = 'SlickText';
 
@@ -533,12 +534,13 @@ export class SlickTextClient {
    * {totals:{total,average},groups:[...]} — nada de messages/clicks/links (confirmado via
    * probe em produção com token; a resposta rica fica em getWorkflowAnalyticsById).
    *
-   * timezone default UTC (aqui e nos demais métodos de analytics com período): as janelas de
-   * data do dashboard vêm do CURRENT_DATE do Postgres (UTC) e as vendas são filtradas por
-   * created_at em UTC — a SlickText precisa interpretar start/end no MESMO fuso, senão a razão
-   * envios/venda compara janelas diferentes (o painel deles usa America/New_York, nós não).
+   * timezone = env.APP_TZ (Brasília) aqui e nos demais métodos de analytics com período: o dia do
+   * painel começa e termina nesse fuso dos DOIS lados da razão — o corte das vendas (nosso banco)
+   * e a janela pedida aqui. Pedir UTC de um lado e cortar o dia em Brasília do outro faria
+   * envios/venda comparar janelas diferentes, que é a classe de erro mais recorrente nesta base.
+   * Era UTC antes; trocado junto com o corte de dia das vendas, nunca só de um lado.
    */
-  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/workflows', {
       params: { _workflow_id: workflowId, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -597,7 +599,7 @@ export class SlickTextClient {
    * Como cada link tem a URL com o utm_campaign, dá pra somar cliques do período por
    * mensagem casando os nomes dos links (via getLinks) com os groups daqui.
    */
-  async getLinkClicksGrouped(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getLinkClicksGrouped(workflowId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/links/clicks', {
       params: { link_source: 'Workflow', _link_source_id: workflowId, group: '_link_id', start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -615,7 +617,7 @@ export class SlickTextClient {
    * {totals:{total,average},groups:[{name:'Messages',period:{...}}]}.
    * start/end "YYYY-MM-DD HH:mm:ss".
    */
-  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/messages', {
       params: { source, _source_id: sourceId, attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -632,7 +634,7 @@ export class SlickTextClient {
    * mensagens que temos vinculadas: sem ele, a soma dos vínculos não tem com o que ser comparada.
    * Sem _source_id — o filtro é só `source=Workflow`.
    */
-  async getWorkflowMessagesTotalForBrand(start: string, end: string, timezone = 'UTC'): Promise<number | null> {
+  async getWorkflowMessagesTotalForBrand(start: string, end: string, timezone = env.APP_TZ): Promise<number | null> {
     const res = await this.http.get('/analytics/messages', {
       params: { source: 'Workflow', attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -864,7 +866,7 @@ export class SlickTextClient {
    *
    * start/end no formato "YYYY-MM-DD HH:mm:ss".
    */
-  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get(`/analytics/workflows/${workflowId}/nodes/${nodeId}`, {
       params: { start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
