@@ -47,7 +47,12 @@ export interface EstadoVigia {
  * Usa MEDIANA em vez de média: uma única madrugada parada puxaria a média para cima e afrouxaria
  * o alarme justamente no cliente que vende o dia inteiro. A mediana ignora esses extremos.
  */
-async function limiteDeSilencio(clientId: number): Promise<{ limiteHoras: number; medianaMin: number | null }> {
+async function limiteDeSilencio(
+  clientId: number,
+  fonte?: string
+): Promise<{ limiteHoras: number; medianaMin: number | null }> {
+  const condicaoFonte = fonte ? ' AND source = $2' : '';
+  const params = fonte ? [clientId, fonte] : [clientId];
   const r = await queryOne<{ mediana_min: string | null }>(
     `WITH vendas AS (
        SELECT created_at,
@@ -56,12 +61,13 @@ async function limiteDeSilencio(clientId: number): Promise<{ limiteHoras: number
        WHERE client_id = $1
          AND event_type = 'order.paid'
          AND created_at >= NOW() - INTERVAL '14 days'
+         ${condicaoFonte}
      )
      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
               ORDER BY EXTRACT(EPOCH FROM (created_at - anterior)) / 60
             ) AS mediana_min
      FROM vendas WHERE anterior IS NOT NULL`,
-    [clientId]
+    params
   );
 
   const medianaMin = r?.mediana_min != null ? parseFloat(r.mediana_min) : null;
@@ -77,16 +83,45 @@ async function limiteDeSilencio(clientId: number): Promise<{ limiteHoras: number
   return { limiteHoras: Math.min(TETO_HORAS, Math.max(PISO_HORAS, Math.round(bruto))), medianaMin };
 }
 
-/** Diagnóstico de um cliente. Exportado porque o painel mostra o mesmo estado na tela. */
-export async function estadoDoCliente(clientId: number, nome: string): Promise<EstadoVigia> {
+/**
+ * Diagnóstico de um cliente. Exportado porque o painel mostra o mesmo estado na tela.
+ *
+ * `fonte` opcional filtra por webhook_logs.source (ex.: 'digistore24'). Sem ele, mede "qualquer
+ * webhook de venda" — é o que o vigia geral usa pra decidir se avisa por Telegram/ntfy, e não deve
+ * mudar de comportamento. Com ele, mede uma fonte específica — usado pra abrir/fechar janela em
+ * `janelas_sem_coleta` sem misturar a cadência de um gateway com a de outro.
+ *
+ * `apenasVendas` restringe também a `event_type = 'order.paid'`. Sem isso, um reembolso ou
+ * chargeback da MESMA fonte (conexão de IPN separada da de pagamento — a Digistore desativa cada
+ * uma independente) conta como "webhook recebido" e mascara/derruba prematuramente um silêncio que
+ * é, na prática, só da coleta de VENDAS. `limiteDeSilencio` já filtra por 'order.paid' de propósito
+ * (mede cadência de venda); sem este parâmetro a query de "último webhook" ficava inconsistente com
+ * ela — cadência calculada só com vendas, mas o "ainda vivo?" aceitando qualquer evento.
+ */
+export async function estadoDoCliente(
+  clientId: number,
+  nome: string,
+  fonte?: string,
+  apenasVendas?: boolean
+): Promise<EstadoVigia> {
+  const condicoes: string[] = [];
+  const params: (number | string)[] = [clientId];
+  if (fonte) {
+    params.push(fonte);
+    condicoes.push(`source = $${params.length}`);
+  }
+  if (apenasVendas) {
+    condicoes.push(`event_type = 'order.paid'`);
+  }
+  const condicaoExtra = condicoes.length ? ` AND ${condicoes.join(' AND ')}` : '';
   const ultimo = await queryOne<{ ultimo: string | null; horas: string | null }>(
     `SELECT MAX(created_at)::text AS ultimo,
             EXTRACT(EPOCH FROM (NOW() - MAX(created_at))) / 3600 AS horas
-     FROM webhook_logs WHERE client_id = $1`,
-    [clientId]
+     FROM webhook_logs WHERE client_id = $1${condicaoExtra}`,
+    params
   );
 
-  const { limiteHoras, medianaMin } = await limiteDeSilencio(clientId);
+  const { limiteHoras, medianaMin } = await limiteDeSilencio(clientId, fonte);
   const horas = ultimo?.horas != null ? parseFloat(ultimo.horas) : null;
 
   return {
@@ -126,6 +161,105 @@ function formatarEspera(horas: number): string {
   return `${dias} dia${dias > 1 ? 's' : ''}${resto ? ` e ${resto} horas` : ''}`;
 }
 
+const TIPO_MARCA_DIGISTORE = 'silencio_digistore24';
+
+/**
+ * Fecha o loop que o vigia geral deixava aberto: ele avisa por Telegram QUANDO um cliente fica
+ * em silêncio, mas nunca escrevia em `janelas_sem_coleta` — então o banner retroativo de "esse
+ * período tem buraco" (ver client-detail.html, renderSaudeColeta) só aparecia se alguém lembrasse
+ * de rodar o INSERT manualmente depois de investigar, como foi feito à mão pro incidente de 03/08.
+ *
+ * Só grava a janela DEPOIS que a coleta volta (inicio E fim conhecidos), nunca uma janela aberta.
+ * Isso é proposital: um cliente que simplesmente PARA de usar Digistore (trocou de gateway) fica
+ * em "silêncio" para sempre sob a métrica de cadência — se essa função abrisse a janela na hora em
+ * que detecta o silêncio, esse cliente ganharia um banner permanente de "dados subestimados" que
+ * nunca é verdade. Gravar só no fechamento significa: sem coleta voltar, sem banner novo — e quem
+ * quer ver que a coleta está parada AGORA já tem o card `coleta_agora` (ver /saude-da-coleta), que
+ * é ao vivo e não depende dessa função.
+ *
+ * Usa `estadoDoCliente(..., apenasVendas=true)`: silêncio e recuperação são medidos só por
+ * 'order.paid'. Sem isso, um reembolso/chargeback (mesma fonte, conexão de IPN separada) contaria
+ * como "voltou", fechando (ou escondendo) um silêncio de VENDA que na verdade continua — e o texto
+ * gravado no motivo ("nenhuma venda") ficaria factualmente errado pro próprio registro que criou.
+ *
+ * Usa `alertas_enviados` como marca-página do início do silêncio (chave = `chaveDoEpisodio`,
+ * mesmo formato do vigia geral, mas com tipo próprio pra não colidir nem duplicar o aviso por
+ * Telegram) — tabela já existe, evita criar mais uma. Processa TODAS as marcas pendentes desse
+ * cliente/tipo a cada tick, não só a mais recente e não só quando `estado.emSilencio` está false
+ * agora: `limiteHoras` é recalculado a cada tick numa janela MÓVEL de 14 dias, então sem venda
+ * nova ele sobe sozinho até o teto (30h) conforme vendas antigas saem da janela — o que pode fazer
+ * `emSilencio` oscilar pra false por deriva do cálculo, não por recuperação de verdade. Por isso o
+ * fechamento de cada marca é decidido só por EVIDÊNCIA (existe venda real depois do início dela?),
+ * nunca pelo `emSilencio` do tick atual, e cada marca só morre quando essa evidência aparece — uma
+ * marca sem evidência ainda fica pendente pro próximo tick, nunca é apagada em bloco junto com as
+ * que já fecharam. Isso também cobre o caso original (vigia fora do ar tempo suficiente pra um
+ * ciclo silêncio→recuperação→silêncio-de-novo passar despercebido, deixando mais de uma marca
+ * acumulada — cada uma é um buraco real e tem que virar janela, não só a mais nova). Cada marca
+ * resolve seu próprio fim independentemente (primeira venda depois do respectivo início), não o
+ * "último webhook" do momento do tick — evita inflar o fim quando uma rajada de vendas chega entre
+ * dois ticks de 30 min.
+ */
+async function sincronizarJanelaDigistore(clientId: number, nome: string): Promise<void> {
+  const estado = await estadoDoCliente(clientId, nome, 'digistore24', true);
+
+  if (estado.emSilencio) {
+    const chave = chaveDoEpisodio(estado.ultimoWebhook);
+    // Cliente sem NENHUM histórico de Digistore nunca cai aqui (emSilencio exige ultimoWebhook
+    // não-nulo), então chave nunca é 'sem-nenhum-webhook' neste ponto.
+    await query(
+      `INSERT INTO alertas_enviados (client_id, tipo, chave) VALUES ($1, $2, $3)
+       ON CONFLICT (client_id, tipo, chave) DO NOTHING`,
+      [clientId, TIPO_MARCA_DIGISTORE, chave]
+    );
+    // Sem "return" aqui: mesmo em silêncio agora, pode existir uma marca MAIS ANTIGA pendente
+    // (episódio anterior) com evidência de fechamento já disponível — o loop abaixo roda sempre.
+  }
+
+  const marcas = await query<{ id: number; chave: string }>(
+    `SELECT id, chave FROM alertas_enviados WHERE client_id = $1 AND tipo = $2 ORDER BY id ASC`,
+    [clientId, TIPO_MARCA_DIGISTORE]
+  );
+
+  for (const marca of marcas) {
+    const inicio = marca.chave.replace('silencio-desde-', '');
+
+    // Fim real deste episódio: a PRIMEIRA venda depois do início dele — não o último webhook do
+    // momento do tick (que tanto pode ser de uma venda muito mais recente, se esta marca é órfã
+    // de um episódio antigo que nenhum tick chegou a fechar no momento certo, quanto o topo de uma
+    // rajada, inflando o fim de um episódio que já tinha voltado ao normal minutos antes).
+    const primeira = await queryOne<{ fim: string | null }>(
+      `SELECT MIN(created_at)::text AS fim FROM webhook_logs
+       WHERE client_id = $1 AND source = 'digistore24' AND event_type = 'order.paid'
+         AND created_at > $2::timestamp`,
+      [clientId, inicio]
+    );
+    // Sem venda depois do início: este episódio ainda não fechou de verdade (mesmo que
+    // `estado.emSilencio` tenha lido false neste tick por deriva do limiteHoras). Mantém a marca
+    // pendente — não apaga, não força um fim inventado. Próximo tick tenta de novo.
+    if (!primeira?.fim) continue;
+
+    await query(
+      `INSERT INTO janelas_sem_coleta (client_id, fonte, inicio, fim, motivo)
+       VALUES ($1, 'digistore24', $2::timestamp, $3::timestamp, $4)
+       ON CONFLICT DO NOTHING`,
+      [
+        clientId,
+        inicio,
+        primeira.fim,
+        'Detectado automaticamente pelo vigia de webhook: nenhuma venda da Digistore nesse ' +
+          'intervalo antes de a coleta voltar ao normal. Causa não investigada — confira no ' +
+          'painel da Digistore (Settings → Integrations → IPN) se a conexão foi desativada ' +
+          'nesse período.',
+      ]
+    );
+    logger.warn(CTX, `${nome}: janela de silêncio Digistore fechada e gravada (${inicio} → ${primeira.fim})`);
+
+    // Só apaga ESTA marca, agora que virou janela de verdade — nunca em bloco (era isso que
+    // apagava marcas órfãs ainda sem evidência de fechamento junto com as que já tinham fechado).
+    await query(`DELETE FROM alertas_enviados WHERE id = $1`, [marca.id]);
+  }
+}
+
 async function verificar(): Promise<void> {
   // company_name, não name: a tabela clients nunca teve coluna `name`, e a query quebrava
   // inteira com "column c.name does not exist" — o vigia subia, anunciava que estava ativo e
@@ -144,6 +278,14 @@ async function verificar(): Promise<void> {
   let avisados = 0;
 
   for (const c of clientes) {
+    try {
+      await sincronizarJanelaDigistore(c.id, c.nome);
+    } catch (err: any) {
+      // Falha aqui não pode derrubar o aviso geral por Telegram abaixo — são mecanismos
+      // independentes; um card de histórico faltando é bem menos grave que um alerta ao vivo.
+      logger.error(CTX, `Falha sincronizando janela Digistore do cliente ${c.id}: ${err.message}`);
+    }
+
     try {
       const estado = await estadoDoCliente(c.id, c.nome);
       if (!estado.emSilencio) continue;
