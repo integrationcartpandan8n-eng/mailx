@@ -333,7 +333,11 @@ async function leadsPorPeriodoViaSnapshots(
         SQL_PONTA('base', 'DESC', FAIXA_BASE), [clientId, todas, from]
       )
     : await query<{ list_id: string; ponta: string; snapshot_date: string; created_at: string; contact_count: string }>(
-        `${SQL_PONTA('base', 'DESC', FAIXA_BASE)} UNION ALL ${SQL_PONTA('fim', 'ASC', FAIXA_FIM)}`,
+        // Cada lado precisa de parênteses: os dois SELECT têm ORDER BY próprio (exigido pelo
+        // DISTINCT ON de cada um), e Postgres rejeita ORDER BY dentro de um braço de UNION sem
+        // parênteses — "syntax error at or near UNION" em produção pra todo período que não
+        // termina hoje (a branch com liveFimCounts não passa por aqui).
+        `(${SQL_PONTA('base', 'DESC', FAIXA_BASE)}) UNION ALL (${SQL_PONTA('fim', 'ASC', FAIXA_FIM)})`,
         [clientId, todas, from, to]
       );
 
