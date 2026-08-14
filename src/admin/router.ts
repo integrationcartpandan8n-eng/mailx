@@ -257,47 +257,58 @@ async function leadsPorPeriodoViaSnapshots(
   from: string,
   to: string,
   liveFimCounts?: Map<string, number>
-): Promise<{ abandono: number; compra: number; deltaPorLista: Map<string, number>; baseDate: string; endDate: string } | null> {
+): Promise<{ abandono: number; compra: number; deltaPorLista: Map<string, number>; baseDate: string; endDate: string; cobreDe: string; cobreAte: string; horaBase: string | null; horaFim: string | null } | null> {
   const todas = [...new Set([...abandonoIds, ...compraIds])];
   if (todas.length === 0) return null;
 
-  // Quando `to` é hoje, a ponta final não pode vir do retrato: o retrato de hoje, se existir, foi
-  // gravado na primeira janela do dia e fica congelado a partir dali — filtrar "Hoje" às 18h
-  // mostraria o tamanho da lista às 9h, não agora. `liveFimCounts` é a contagem que a própria
-  // rota chamadora ACABOU de buscar na SlickText (ao vivo, pro total vitalício) — reaproveitar
-  // em vez de bater na API de novo, e sem esperar o próximo retrato existir.
+  // ── QUAL retrato é a ponta de cada lado ──
+  //
+  // O retrato é gravado no INÍCIO do dia: o job pergunta "já existe retrato de hoje?" e grava na
+  // primeira janela após a meia-noite. Então retrato(D) = tamanho da lista às 00:0x do dia D, ou
+  // seja "estado no começo de D".
+  //
+  // Logo, quem entrou DURANTE [from..to] = retrato(to + 1 dia) − retrato(from).
+  //
+  // Antes daqui pegava retrato(to) − retrato(from − 1 dia), que mede [from−1 .. to−1]: um dia
+  // atrasado. Em 30 dias o desvio é ruído e ninguém vê; num filtro de 1 dia é o número inteiro
+  // errado — foi como apareceu em produção, filtro 12→12 devolvendo os leads do dia 11 contra as
+  // vendas do dia 12.
+  //
+  // created_at entra na consulta porque a premissa "gravado logo após a meia-noite" só vale se o
+  // processo estava de pé na virada. Se o servidor subiu às 09h, o retrato daquele dia representa
+  // 09h, não 00h — e aí a janela real não é o dia inteiro. Quem chama usa a hora pra decidir se
+  // ainda pode chamar a taxa de exata.
+  const SQL_PONTA = (ponta: 'base' | 'fim', ordem: 'DESC' | 'ASC', faixa: string) => `
+    SELECT DISTINCT ON (list_id) list_id, '${ponta}' AS ponta, snapshot_date::text AS snapshot_date,
+           created_at::text AS created_at, contact_count
+    FROM list_contact_snapshots
+    WHERE client_id = $1 AND list_id = ANY($2) AND ${faixa}
+    ORDER BY list_id, snapshot_date ${ordem}`;
+
+  // base: prefere o retrato do próprio dia `from`; se faltar, cai pro anterior mais próximo
+  // (janela fica mais larga, nunca mais estreita — subcontar lead seria pior).
+  const FAIXA_BASE = `snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND $3::date`;
+  // fim: prefere o retrato do dia seguinte a `to`; se faltar, cai pro posterior mais próximo.
+  const FAIXA_FIM = `snapshot_date BETWEEN ($4::date + INTERVAL '1 day') AND ($4::date + INTERVAL '4 days')`;
+
+  // Quando `to` é hoje, o retrato do dia seguinte ainda não existe — e nem deveria esperar por
+  // ele. `liveFimCounts` é a contagem que a rota chamadora ACABOU de buscar na SlickText (ao vivo,
+  // pro total vitalício): é o estado de AGORA, que é exatamente a ponta final de um período que
+  // termina hoje. Reaproveitada em vez de bater na API de novo.
   const rows = liveFimCounts
-    ? await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
-        `SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-         FROM list_contact_snapshots
-         WHERE client_id = $1 AND list_id = ANY($2)
-           AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
-         ORDER BY list_id, snapshot_date DESC`,
-        [clientId, todas, from]
+    ? await query<{ list_id: string; ponta: string; snapshot_date: string; created_at: string; contact_count: string }>(
+        SQL_PONTA('base', 'DESC', FAIXA_BASE), [clientId, todas, from]
       )
-    : await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
-        `WITH base AS (
-           SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-           FROM list_contact_snapshots
-           WHERE client_id = $1 AND list_id = ANY($2)
-             AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
-           ORDER BY list_id, snapshot_date DESC
-         ), fim AS (
-           SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-           FROM list_contact_snapshots
-           WHERE client_id = $1 AND list_id = ANY($2)
-             AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
-           ORDER BY list_id, snapshot_date ASC
-         )
-         SELECT * FROM base UNION ALL SELECT * FROM fim`,
+    : await query<{ list_id: string; ponta: string; snapshot_date: string; created_at: string; contact_count: string }>(
+        `${SQL_PONTA('base', 'DESC', FAIXA_BASE)} UNION ALL ${SQL_PONTA('fim', 'ASC', FAIXA_FIM)}`,
         [clientId, todas, from, to]
       );
 
-  const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string }>();
+  const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string; baseAt?: string; fimAt?: string }>();
   for (const r of rows) {
     const e = porLista.get(r.list_id) ?? {};
-    if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; }
-    else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; }
+    if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; e.baseAt = r.created_at; }
+    else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; e.fimAt = r.created_at; }
     porLista.set(r.list_id, e);
   }
   if (liveFimCounts) {
@@ -306,7 +317,10 @@ async function leadsPorPeriodoViaSnapshots(
       if (count == null) continue; // sem contagem ao vivo pra essa lista — cai no "falta uma ponta" abaixo, honesto
       const e = porLista.get(id) ?? {};
       e.fim = count;
-      e.fimD = to;
+      // A ponta final é AGORA: o dia seguinte a `to` é o fim conceitual da janela (o período
+      // termina no fim de `to`), e a hora fica nula porque não é retrato, é leitura ao vivo.
+      e.fimD = diaSeguinte(to);
+      e.fimAt = null as unknown as string;
       porLista.set(id, e);
     }
   }
@@ -343,10 +357,37 @@ async function leadsPorPeriodoViaSnapshots(
   // As datas vêm como texto do SQL (snapshot_date::text) de propósito: o driver do Postgres devolve
   // DATE como objeto Date do JS, e String(date).slice(0,10) produzia "Thu Jul 30" — foi o que
   // apareceu na tela em produção, no idioma errado e sem ano.
+  //
+  // baseDate/endDate são os RETRATOS usados (o mais conservador de cada lado entre as listas);
+  // cobreDe/cobreAte são os DIAS que a conta de fato cobre — que é o que faz sentido mostrar na
+  // tela. Os dois são diferentes por um dia no fim, e confundir um com o outro foi o que deixou a
+  // legenda dizendo "entraram no período (11/08 → 12/08)" num filtro de 12→12.
   const datas = [...porLista.values()];
-  const baseDate = datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from;
-  const endDate = datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? to;
-  return { abandono, compra, deltaPorLista, baseDate: String(baseDate).slice(0, 10), endDate: String(endDate).slice(0, 10) };
+  const baseDate = String(datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from).slice(0, 10);
+  const endDate = String(datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? diaSeguinte(to)).slice(0, 10);
+  const horaBase = datas.map(d => d.baseAt).filter(Boolean).sort().pop() ?? null;
+  const horaFim = datas.map(d => d.fimAt).filter(Boolean).sort()[0] ?? null;
+  return {
+    abandono, compra, deltaPorLista, baseDate, endDate,
+    cobreDe: baseDate,
+    cobreAte: diaAnterior(endDate),
+    horaBase: horaBase ? String(horaBase) : null,
+    horaFim: horaFim ? String(horaFim) : null,
+  };
+}
+
+/** +1 dia numa data YYYY-MM-DD, em UTC (sem depender do fuso do processo). */
+function diaSeguinte(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** −1 dia numa data YYYY-MM-DD, em UTC. */
+function diaAnterior(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -2070,25 +2111,39 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           listasComNumeroDoPeriodo = new Set([...abandonoIds, ...compraIds]);
           // A janela dos leads coincide com o período pedido?
           //
-          // A busca de retratos aceita até 3 dias de folga em cada ponta, porque o retrato é gravado
-          // quando alguém abre a tela e o dia exato pode faltar. Só que quando a folga é usada, a
-          // janela dos LEADS fica maior que a das VENDAS — visto em produção: filtro de 05 a 06/08
-          // devolvendo leads de 03 a 06/08, três dias contra dois. Nesse caso a taxa tem denominador
-          // de uma janela e numerador de outra, e continuar chamando isso de "taxa exata" é pior que
-          // o vitalício rotulado, porque o vitalício ao menos anuncia que é aproximado.
+          // A busca de retratos aceita folga de alguns dias em cada ponta, porque o dia exato pode
+          // faltar (servidor fora do ar na virada). Quando a folga é usada, a janela dos LEADS fica
+          // maior que a das VENDAS — visto em produção: filtro de 05 a 06/08 devolvendo leads de 03
+          // a 06/08, três dias contra dois. Nesse caso a taxa tem denominador de uma janela e
+          // numerador de outra, e continuar chamando isso de "taxa exata" é pior que o vitalício
+          // rotulado, porque o vitalício ao menos anuncia que é aproximado.
           //
-          // O esperado para a ponta inicial é a VÉSPERA do primeiro dia do período: quem entrou no
-          // dia 05 aparece na diferença entre o retrato do dia 04 e o do dia 06.
-          const vespera = new Date(`${periodoDe}T00:00:00Z`);
-          vespera.setUTCDate(vespera.getUTCDate() - 1);
-          const esperadoDe = vespera.toISOString().slice(0, 10);
+          // Com retrato de início de dia, a janela exata é: base no PRÓPRIO `from` e fim no dia
+          // SEGUINTE a `to` (ver o comentário em leadsPorPeriodoViaSnapshots). Antes daqui esperava
+          // a véspera de `from`, que é justamente o off-by-one que fazia o filtro 12→12 medir o
+          // dia 11.
+          const esperadoFim = diaSeguinte(periodoAte!);
+          // Terceira condição, além das datas: o retrato tem que ter sido gravado PERTO da
+          // meia-noite pra representar "começo do dia". Se o processo subiu às 09h, o retrato
+          // daquele dia é de 09h e a janela real perde as primeiras 9 horas — a conta continua a
+          // melhor disponível, mas não é exata, e a tela não pode afirmar que é.
+          const TOLERANCIA_HORA_MS = 2 * 60 * 60 * 1000;
+          const pertoDaMeiaNoite = (ts: string | null): boolean => {
+            if (!ts) return true; // ponta ao vivo (Hoje) — é o instante presente, exato por construção
+            const d = new Date(ts.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(ts) ? '' : 'Z'));
+            if (isNaN(d.getTime())) return false;
+            const desdeMeiaNoite = d.getTime() - new Date(d.toISOString().slice(0, 10) + 'T00:00:00Z').getTime();
+            return desdeMeiaNoite <= TOLERANCIA_HORA_MS;
+          };
           leadsPeriodoInfo = {
-            de: delta.baseDate,
-            ate: delta.endDate,
-            // Quando false, a tela para de dizer "exata" e mostra a janela que realmente foi usada.
-            // Em "Hoje" a ponta final é sempre a contagem ao vivo (delta.endDate === periodoAte por
-            // construção), então isso só falha se a ponta inicial não achou retrato de véspera.
-            janela_bate: delta.baseDate === esperadoDe && delta.endDate === periodoAte,
+            // de/ate agora são os DIAS COBERTOS, não os retratos usados — é o que a pessoa pediu no
+            // filtro e o que ela espera ler de volta.
+            de: delta.cobreDe,
+            ate: delta.cobreAte,
+            janela_bate: delta.baseDate === periodoDe
+              && delta.endDate === esperadoFim
+              && pertoDaMeiaNoite(delta.horaBase)
+              && pertoDaMeiaNoite(delta.horaFim),
           };
         } else {
           abandonoLeads = abandonoVitalicio;
@@ -3640,7 +3695,21 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
           : 'GRAVAÇÃO OK — todas as listas ativas têm retrato.',
     },
     calculo_de_leads_por_periodo: delta
-      ? { resolve: true, leads_abandono: delta.abandono, leads_compra: delta.compra, retrato_inicial: delta.baseDate, retrato_final: delta.endDate }
+      ? {
+          resolve: true,
+          leads_abandono: delta.abandono,
+          leads_compra: delta.compra,
+          // Retrato USADO em cada ponta vs DIAS que a conta cobre — os dois, porque a diferença de
+          // um dia entre eles é exatamente onde vivia o off-by-one.
+          retrato_inicial: delta.baseDate,
+          retrato_final: delta.endDate,
+          cobre_de: delta.cobreDe,
+          cobre_ate: delta.cobreAte,
+          // A que hora cada retrato foi gravado: só representa "começo do dia" se for perto da
+          // meia-noite. Longe dela, a janela real não é o dia inteiro.
+          hora_retrato_inicial: delta.horaBase,
+          hora_retrato_final: delta.horaFim,
+        }
       : {
           resolve: false,
           motivo: !(period.from && period.to)
