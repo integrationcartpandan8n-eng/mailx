@@ -17,6 +17,7 @@
  * gravado na primeira janela em que der, e as verificações seguintes não fazem nada.
  */
 import { query } from '../db/database';
+import { env } from '../config/env';
 import { SlickTextClient } from '../services/slicktext';
 import { logger } from '../utils/logger';
 
@@ -113,7 +114,12 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
   // O que já tem retrato de hoje sai da fila antes de qualquer chamada externa: numa segunda
   // passada do dia isso zera o trabalho e não gasta uma requisição sequer.
   const jaGravadas = await query<{ client_id: number; list_id: string }>(
-    `SELECT DISTINCT client_id, list_id FROM list_contact_snapshots WHERE snapshot_date = CURRENT_DATE`
+    // Dia LOCAL (fuso do negócio), não CURRENT_DATE: CURRENT_DATE é a data em UTC, e em UTC o dia
+    // vira às 21:00 de Brasília — o retrato seria gravado no fim da tarde do dia anterior daqui,
+    // carimbado com a data de amanhã. Com o dia local, a gravação cai logo após a meia-noite de
+    // Brasília, que é o que faz retrato(D) significar "estado no começo do dia D".
+    `SELECT DISTINCT client_id, list_id FROM list_contact_snapshots
+      WHERE snapshot_date = (NOW() AT TIME ZONE '${env.APP_TZ}')::date`
   );
   const jaTem = new Set(jaGravadas.map(r => `${r.client_id}:${r.list_id}`));
   const pendentes = listas.filter(l => !jaTem.has(`${l.client_id}:${l.list_id}`));
@@ -166,7 +172,7 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
         // COALESCE no nome ao atualizar: se a segunda passada do dia não souber o nome (lista de
         // kit que não apareceu em listagem nenhuma), não apaga o que a primeira já tinha gravado.
         `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count, list_name)
-         VALUES ($1, $2, $3, CURRENT_DATE, $4, $5)
+         VALUES ($1, $2, $3, (NOW() AT TIME ZONE '${env.APP_TZ}')::date, $4, $5)
          ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
          DO UPDATE SET contact_count = EXCLUDED.contact_count,
                        list_name = COALESCE(EXCLUDED.list_name, list_contact_snapshots.list_name)`,
