@@ -317,6 +317,26 @@ export async function initDatabase(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_janelas_sem_coleta_periodo
           ON janelas_sem_coleta (client_id, inicio, fim);
 
+        -- Índice único pro vigia gravar janela sem corrida: sem isso, duas execuções concorrentes
+        -- (tick anterior ainda rodando quando o próximo dispara, ou mais de um processo) podem ler
+        -- "não existe" ao mesmo tempo e inserir a mesma janela duas vezes -- exatamente o que
+        -- alertas_enviados já evita com idx_alerta_unico. WHEN unique_violation: se por algum
+        -- motivo já existir duplicata em dados legados, não trava a subida do app -- só avisa.
+        --
+        -- O INSERT em webhook-watchdog.ts usa ON CONFLICT DO NOTHING SEM listar as colunas
+        -- (client_id, fonte, inicio) de propósito: um ON CONFLICT com alvo explícito exige que
+        -- exista EXATAMENTE essa constraint/índice, e falha (42P10) em toda inserção futura, de
+        -- qualquer cliente, se este índice não tiver sido criado (ex.: por causa do WARNING acima).
+        -- Sem alvo, o Postgres aceita não ter nenhuma constraint pra casar -- se o índice existir,
+        -- protege contra duplicata de verdade; se não existir (o caso raro que o WARNING cobre),
+        -- o INSERT segue normal em vez de quebrar a gravação de janela pra todo mundo.
+        DO $$ BEGIN
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_janela_unica
+            ON janelas_sem_coleta (client_id, fonte, inicio);
+        EXCEPTION WHEN unique_violation THEN
+          RAISE WARNING 'janelas_sem_coleta tem linhas duplicadas de (client_id, fonte, inicio) -- índice único não criado, checar manualmente';
+        END $$;
+
         -- Trava de repetição do vigia de webhook: sem isso um silêncio de dois dias vira um
         -- alerta a cada 30 minutos, e alerta que apita demais é alerta que se aprende a ignorar.
         -- Guardado em tabela, não em memória, porque pm2 restart zeraria a trava.
