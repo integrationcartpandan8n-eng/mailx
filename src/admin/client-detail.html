@@ -4440,6 +4440,11 @@
                 const r = data.revenue || {};
                 window.__smsRevenue = r;
                 renderResumoNegocioSms();
+                // /sms-stats e /sms-granular são dois fetches em paralelo (Promise.allSettled) —
+                // se o granular responder primeiro, a tabela por mensagem já renderizou usando o
+                // total do período ANTERIOR (ou nenhum). Re-renderiza agora que o oficial chegou;
+                // renderSmsGranular() não faz nada se a granular ainda não tiver dado nenhum.
+                renderSmsGranular();
                 document.getElementById('smsRevenueKpis').innerHTML = [
                     { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'FONTE: nosso banco de webhooks da Digistore — não vem da SlickText. Soma o valor dos pedidos aprovados cujo link de origem tem utm_source=mailx-sms. ESCOPO: período selecionado. A SlickText não sabe quanto uma mensagem faturou; ela sabe envio e clique. O faturamento é nosso cruzamento entre o pedido e o link que o gerou.' },
                     { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco de webhooks da Digistore. Conta pedidos aprovados (event_type=order.paid) cujo link tem utm_source=mailx-sms. ESCOPO: período selecionado. Cancelamento e reembolso NÃO saem desta contagem — aparecem separados no card de reembolso.' },
@@ -4550,7 +4555,12 @@
         }
 
         function fmtSmsPct(value, total) {
-            if (!total) return '0,0%';
+            // total < 0 acontece quando reembolsos superam vendas no canal inteiro no período —
+            // raro, mas com o total oficial (que pode ir negativo de verdade, ao contrário da soma
+            // da própria tabela) dividir por ele dá um percentual negativo pra uma linha de receita
+            // positiva. Sem total positivo não dá pra expressar "fatia de quê", então mostra 0,0%
+            // em vez de um número que confunde mais do que ajuda.
+            if (!total || total < 0) return '0,0%';
             return ((value / total) * 100).toFixed(1).replace('.', ',') + '%';
         }
 
@@ -5503,7 +5513,16 @@
 
         function renderSmsGranularMensagem(data, sym) {
             data = { ...data, rows: rowsFiltradas(data.rows) };
-            const total = data.total_receita_liquida_sms || 0;
+            // Denominador tem que ser o faturamento SMS OFICIAL (mesma regra já aplicada na frase-
+            // resumo e na "mensagem campeã" acima), não a soma da própria tabela granular. A
+            // granular só soma pedidos com utm_medium/utm_source EXATOS; quando existe mensagem em
+            // prejuízo (reembolso sem venda nova no período, ver lossRows abaixo) essa soma cai
+            // bem abaixo da receita real — e dividir a linha mais forte por um total encolhido
+            // estoura 100% (o prejuízo que a puxou pra baixo nem aparece nesta lista, só na seção
+            // de "Prejuízo no período" logo adiante, então o leitor não tem como saber por quê).
+            // Sem faturamento oficial carregado ainda (primeira pintura antes de /sms-stats
+            // responder), cai pro total granular mesmo, só pra não mostrar NaN%.
+            const total = window.__smsRevenue?.receita_sms || data.total_receita_liquida_sms || 0;
             const positiveRows = data.rows.filter(r => r.receita_liquida >= 0);
             const lossRows = data.rows.filter(r => r.receita_liquida < 0);
             const leader = smsGlobalLeader(positiveRows);
@@ -5567,7 +5586,10 @@
 
         function renderSmsGranularProduto(data, sym) {
             data = { ...data, rows: rowsFiltradas(data.rows) };
-            const total = data.total_receita_liquida_sms || 0;
+            // Mesmo motivo do total em renderSmsGranularMensagem logo acima: usar a soma da própria
+            // tabela como denominador estoura 100% quando existe produto em prejuízo (reembolso sem
+            // venda nova) puxando o total pra baixo.
+            const total = window.__smsRevenue?.receita_sms || data.total_receita_liquida_sms || 0;
             const leader = smsGlobalLeader(data.rows);
             const byProduct = new Map();
 
