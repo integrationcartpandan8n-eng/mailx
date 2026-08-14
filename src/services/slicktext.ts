@@ -513,6 +513,18 @@ export class SlickTextClient {
   }
 
   /**
+   * Resposta CRUA de /workflows, sem desembrulhar — pra sondar se existe metadado de paginação
+   * (pagingData, como em /links) que getWorkflows() estaria ignorando. getAllLinks() pagina
+   * explicitamente (offset+limit) porque /links confirmadamente pagina; getWorkflows() nunca
+   * teve essa confirmação (ver comentário dela) — se /workflows seguir a mesma convenção da
+   * API, contas com muitas automações teriam o total de envios subcontado em silêncio.
+   */
+  async rawWorkflowsResponse(params: Record<string, any> = {}): Promise<any> {
+    const res = await this.http.get('/workflows', { params });
+    return res.data;
+  }
+
+  /**
    * Get campaign analytics (all campaigns).
    */
   async getCampaignAnalytics(): Promise<any> {
