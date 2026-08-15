@@ -187,6 +187,23 @@ export async function initDatabase(): Promise<void> {
 
         CREATE INDEX IF NOT EXISTS idx_webhook_logs_metrics
           ON webhook_logs (client_id, event_type, status, created_at);
+
+        -- Achado em produção: "value too long for type character varying(255)" derrubando o
+        -- INSERT de webhook_logs (grava-primeiro-processa-depois, ver digistore24-payment.handler)
+        -- -- um payload real tinha um destes campos de texto livre vindo da Digistore/afiliado
+        -- maior que 255 caracteres, e o evento nunca chegou a ser gravado (o catch só loga e
+        -- segue, mas a venda em si desaparece). Esses campos são todos texto livre de fora do
+        -- nosso controle (utm_*, nome de produto, nome de afiliado) -- não existe razão de negócio
+        -- pra travar em 255, só o hábito de VARCHAR. ALTER COLUMN TYPE é seguro e não-destrutivo
+        -- alargando (TEXT cabe tudo que VARCHAR(255) cabia), e roda toda subida sem erro mesmo já
+        -- estando em TEXT (não precisa de IF NOT EXISTS pra isso).
+        ALTER TABLE webhook_logs ALTER COLUMN product_name TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN utm_source TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN utm_medium TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN utm_campaign TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN utm_content TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN utm_term TYPE TEXT;
+        ALTER TABLE webhook_logs ALTER COLUMN affiliate_name TYPE TEXT;
         CREATE INDEX IF NOT EXISTS idx_webhook_logs_utm_source
           ON webhook_logs (utm_source) WHERE utm_source IS NOT NULL;
 
