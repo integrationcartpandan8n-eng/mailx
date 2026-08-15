@@ -371,29 +371,6 @@ async function sincronizarNode(combo: ComboVinculado, cred: Credencial): Promise
   };
   const r = await gravarLoteDeEnvios(chave, novas.map((n) => n.msg));
 
-  // Sinal de recalibração indevida de âncora: menos linhas ENTRARAM do que as que a âncora
-  // disse serem novas — algumas já existiam no espelho e o ON CONFLICT as absorveu como
-  // duplicata. Pode ser recuperação normal de um tick anterior interrompido antes do UPDATE
-  // final (mesma janela relida, mesma âncora, linhas já gravadas), mas também é exatamente o
-  // sintoma de um `_id` mal calibrado silenciosamente varrendo envios reais pra baixo do
-  // tapete — por isso fica visível no log em vez de passar batido (r.inseridas > novas.length
-  // não serve de alarme: gravarLoteDeEnvios nunca RETURNING mais linhas do que as passadas).
-  if (anteriorAncoraId != null && r.inseridas < novas.length) {
-    logger.warn(
-      CTX,
-      `Node ${combo.workflowId}/${combo.nodeId}: só ${r.inseridas} de ${novas.length} linha(s) novas entraram — já existiam no espelho (recuperação de tick anterior, ou âncora recalibrada indevidamente)`
-    );
-  }
-
-  // cobre_desde só no PRIMEIRO lote de mensagens realmente lido — nunca um palpite na semente.
-  let cobreDesde: string | null = null;
-  if (!estado.cobre_desde && novas.length > 0) {
-    const primeiroDia = novas[0].msg.created!.slice(0, 10);
-    // +1 dia quando a semente não começou no offset 0: ela cai no meio de um dia, e servir
-    // esse dia pela metade subcontaria em silêncio. Um dia a menos de cobertura é barato.
-    cobreDesde = offsetSemente === 0 ? primeiroDia : diaSeguinte(primeiroDia);
-  }
-
   // Âncora recuada da ponta encontrada NESTE tick — nunca abaixo de onde já estávamos.
   let novaAncoraId = anteriorAncoraId;
   let novaAncoraOffset = anteriorAncoraOffset;
@@ -406,6 +383,30 @@ async function sincronizarNode(combo: ComboVinculado, cred: Credencial): Promise
     novoProximoOffset = candidata.offset + 1;
   }
   const ultimoCreated = buffer[buffer.length - 1].msg.created;
+
+  // Sinal de recalibração indevida de âncora: menos linhas ENTRARAM do que as que a âncora
+  // disse serem novas — algumas já existiam no espelho e o ON CONFLICT as absorveu como
+  // duplicata. Só é suspeito quando a marca d'água REALMENTE avançou (novoProximoOffset
+  // mudou) e mesmo assim os dados já existiam — em node de baixo volume, sem mensagem nova
+  // entre um tick e outro, a mesma janela é relida e a âncora recai no mesmo lugar de
+  // sempre (proximoOffset não muda); aí "novas" ser sempre a mesma fatia já gravada é o
+  // estado estável esperado, não um alarme (visto em produção: dois nós de baixo volume
+  // disparando isso em TODO tick sem nenhum dado se perder — ON CONFLICT já protege).
+  if (anteriorAncoraId != null && novoProximoOffset !== proximoOffset && r.inseridas < novas.length) {
+    logger.warn(
+      CTX,
+      `Node ${combo.workflowId}/${combo.nodeId}: só ${r.inseridas} de ${novas.length} linha(s) novas entraram mesmo com a marca d'água avançando — âncora pode estar mal calibrada`
+    );
+  }
+
+  // cobre_desde só no PRIMEIRO lote de mensagens realmente lido — nunca um palpite na semente.
+  let cobreDesde: string | null = null;
+  if (!estado.cobre_desde && novas.length > 0) {
+    const primeiroDia = novas[0].msg.created!.slice(0, 10);
+    // +1 dia quando a semente não começou no offset 0: ela cai no meio de um dia, e servir
+    // esse dia pela metade subcontaria em silêncio. Um dia a menos de cobertura é barato.
+    cobreDesde = offsetSemente === 0 ? primeiroDia : diaSeguinte(primeiroDia);
+  }
 
   await query(
     `UPDATE automacao_sync_estado
