@@ -4209,17 +4209,34 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   let offsetInicial = Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0);
   const N = Math.min(50, Math.max(5, parseInt(String(req.query.n ?? '30'), 10) || 30));
 
-  // O offset_inicial pedido pode vir de /analytics/messages (envios_no_periodo em
-  // diagnostico/cobertura-automacao) — mas countWorkflowNodeMessages() pagina /messages, um
-  // endpoint DIFERENTE, que pode ter um alcance/retenção diferente do agregado. Se o offset
-  // pedido já vier vazio, acha a ponta REAL por busca binária em vez de devolver "acabou a
-  // lista" sem mais informação — é exatamente esse tipo de divergência entre os dois endpoints
-  // que estamos tentando entender.
+  // A lista cresce com o tempo (a automação continua disparando) — um offset que era "a ponta"
+  // numa medição anterior vira "meio da lista" depois de tempo suficiente, então SEMPRE descobre
+  // a ponta REAL de novo, não só quando o offset pedido já vem vazio: pra isso, galopa PRA FRENTE
+  // a partir do offset pedido (dobrando o passo, igual ao galope de countWorkflowNodeMessages())
+  // até achar um offset vazio, depois busca binária entre o último cheio e o primeiro vazio. Se o
+  // offset pedido em si já vier vazio, o galope começa do zero (comportamento antigo preservado).
   let limiteRealDescoberto: number | null = null;
   const primeiraChecagem = await st.rawMessages({ ...baseParams, offset: offsetInicial, limit: 1 }).catch(() => []);
-  if (primeiraChecagem.length === 0 && offsetInicial > 0) {
-    let lo = 0;
-    let hi = offsetInicial;
+
+  let loCheio: number;
+  let hiVazio: number | null;
+  if (primeiraChecagem.length > 0) {
+    loCheio = offsetInicial;
+    hiVazio = null;
+    let passo = Math.max(1000, offsetInicial || 1000);
+    for (let tentativa = 0; tentativa < 30 && hiVazio === null; tentativa++) {
+      const candidato = loCheio + passo;
+      const item = await st.rawMessages({ ...baseParams, offset: candidato, limit: 1 }).catch(() => []);
+      if (item.length > 0) { loCheio = candidato; passo *= 2; } else { hiVazio = candidato; }
+    }
+  } else {
+    loCheio = 0;
+    hiVazio = offsetInicial > 0 ? offsetInicial : 1;
+  }
+
+  if (hiVazio !== null) {
+    let lo = loCheio;
+    let hi = hiVazio;
     while (lo < hi) {
       const mid = Math.ceil((lo + hi) / 2);
       const item = await st.rawMessages({ ...baseParams, offset: mid, limit: 1 }).catch(() => []);
@@ -4228,6 +4245,8 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     limiteRealDescoberto = lo; // último offset com item de verdade
     offsetInicial = Math.max(0, lo - N + 1);
   }
+  // hiVazio null (galope não achou o fim em 30 tentativas dobrando o passo): lista gigante demais
+  // ou crescendo mais rápido que o galope — segue com o offset pedido mesmo, sem travar a sonda.
 
   // Em lotes paralelos, não um offset de cada vez: com N até 50 + a busca binária de descoberta
   // acima, uma chamada por vez virou ~50 round-trips sequenciais pra SlickText — bateu no timeout
@@ -4282,8 +4301,8 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     offset_inicial_usado: offsetInicial,
     ultimo_offset_real_descoberto: limiteRealDescoberto,
     nota_descoberta: limiteRealDescoberto != null
-      ? `O offset pedido já vinha vazio — /messages pra este workflow/node só tem itens até o offset ${limiteRealDescoberto} (busca binária), bem menos do que o total agregado de /analytics/messages. Os dois endpoints têm alcance diferente; ajustado sozinho pra testar os últimos itens que existem de verdade.`
-      : null,
+      ? `Ponta viva descoberta por galope+busca binária: o último offset com item de verdade é ${limiteRealDescoberto}. A lista cresce com o tempo (a automação continua disparando), então o offset pedido pode virar "meio da lista" entre uma medição e outra — reamostrado a partir dali pra testar a ponta de verdade de agora.`
+      : 'Galope não achou o fim da lista em 30 tentativas dobrando o passo — lista maior que o esperado ou crescendo rápido demais. Testado com o offset pedido mesmo, sem ponta descoberta.',
     offsets_testados: itens.length,
     itens,
     violacoes_de_ordem: violacoesDeOrdem,
