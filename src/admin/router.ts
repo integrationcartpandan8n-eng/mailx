@@ -4115,6 +4115,58 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
   res.json({ contas: saida });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-workflows-paginacao - getWorkflows() pagina?
+//
+// getWorkflows() sempre fez UMA chamada sem offset/limit, com uma nota antiga admitindo que o
+// formato nunca foi confirmado contra a API real (por analogia a /campaigns). getAllLinks() pagina
+// explicitamente porque /links confirmadamente pagina (pagingData) — se /workflows seguir a mesma
+// convenção da API, toda conta com mais automações do que cabe numa página teria o total de envios
+// por automação (envios-por-automacao, diagnostico/cobertura-automacao) subcontado em silêncio,
+// porque as automações que ficaram de fora nem aparecem na lista pra somar.
+//
+// Pede a página 0 (padrão) e, se a marca tiver pelo menos 1 workflow, pede de novo com
+// offset=<quantidade devolvida> — se essa segunda chamada trouxer QUALQUER workflow a mais, a API
+// pagina de verdade e getWorkflows() está perdendo o resto. Também expõe as chaves cruas da
+// resposta (pra achar pagingData/total, se existir, sem adivinhar o nome do campo).
+adminRouter.get('/clientes/:id/diagnostico/probe-workflows-paginacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+  const saida = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const semParam = await st.rawWorkflowsResponse().catch((e: any) => ({ erro: e.message }));
+    const semParamLista: any[] = Array.isArray(semParam) ? semParam : (semParam?.data ?? []);
+    const qtd = semParamLista.length;
+
+    const comOffset = qtd > 0
+      ? await st.rawWorkflowsResponse({ offset: qtd, limit: 100 }).catch((e: any) => ({ erro: e.message }))
+      : null;
+    const comOffsetLista: any[] = Array.isArray(comOffset) ? comOffset : (comOffset?.data ?? []);
+
+    const idsPrimeiraChamada = new Set(semParamLista.map((w: any) => w?.workflow_id ?? w?.id));
+    const idsNovosNoOffset = comOffsetLista.filter((w: any) => !idsPrimeiraChamada.has(w?.workflow_id ?? w?.id));
+
+    saida.push({
+      conta: acc.label,
+      workflows_na_primeira_chamada: qtd,
+      chaves_da_resposta_crua: semParam && typeof semParam === 'object' && !Array.isArray(semParam)
+        ? Object.keys(semParam) : '(resposta é array puro, sem envelope)',
+      metadado_de_paginacao: semParam?.pagingData ?? semParam?.paging ?? semParam?.meta ?? null,
+      segunda_chamada_com_offset: comOffset && !('erro' in (comOffset as any))
+        ? { workflows_devolvidos: comOffsetLista.length, workflows_NOVOS_nao_vistos_na_primeira: idsNovosNoOffset.length }
+        : { erro: (comOffset as any)?.erro ?? 'não testado (zero workflows na primeira chamada)' },
+      veredito: idsNovosNoOffset.length > 0
+        ? `PAGINA DE VERDADE — offset=${qtd} devolveu ${idsNovosNoOffset.length} workflow(s) que a chamada sem offset não trouxe. getWorkflows() está perdendo automação(ões) hoje.`
+        : qtd === 0
+          ? 'Zero workflows na conta — nada a testar.'
+          : 'offset não trouxe nada novo — ou a API não pagina /workflows, ou esta conta tem poucos workflows pra provar (tente de novo numa conta com muitas automações).',
+    });
+  }
+
+  res.json({ contas: saida });
+}));
+
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
 // CRÉDITO?
 //
