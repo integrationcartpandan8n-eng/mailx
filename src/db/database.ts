@@ -366,6 +366,146 @@ export async function initDatabase(): Promise<void> {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_alerta_unico
           ON alertas_enviados (client_id, tipo, chave);
+
+        -- ─────────────────────────────────────────────────────────────────────────────
+        -- ESPELHO LOCAL DE ENVIOS POR MENSAGEM DE AUTOMAÇÃO
+        --
+        -- Por que existe: a SlickText não tem endpoint que filtre mensagens individuais por NODE
+        -- e por PERÍODO ao mesmo tempo. O único caminho hoje é countWorkflowNodeMessages(), busca
+        -- binária sobre GET /messages?offset=N — e foi MEDIDO em produção que /messages fica mais
+        -- lenta conforme o offset cresce (paginação por OFFSET escaneia os N registros por baixo).
+        -- Em offsets de ~77 mil e ~135 mil isso derrubou a requisição no timeout do nginx (502/504),
+        -- mesmo com sondas em paralelo e orçamento de tempo. O botão "Calcular" dos Créditos por
+        -- Automação dispara uma dessas contagens POR MENSAGEM do grupo, sequencialmente — o risco
+        -- de estouro multiplica pelo número de mensagens do fluxo.
+        --
+        -- Mesmo desenho de list_contact_snapshots: em vez de perguntar à API toda vez, o servidor
+        -- grava o que a API já respondeu. A diferença é o grão — lá é um TOTAL por dia, aqui é o
+        -- EVENTO individual, porque crédito por período exige somar message_credits um a um.
+        --
+        -- Vale só DAQUI PRA FRENTE, de propósito: não há backfill histórico. Semear uma automação
+        -- de 135 mil mensagens custaria justamente as centenas de requisições em offset alto que
+        -- este espelho existe pra evitar. Período anterior à cobertura continua caindo no caminho
+        -- ao vivo de hoje — zero regressão, e a cobertura cresce sozinha todo dia.
+        CREATE TABLE IF NOT EXISTS automacao_envios (
+          id BIGSERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          -- NULL = conta principal. SEM REFERENCES de propósito, igual list_contact_snapshots:
+          -- sms_campaign_map.st_account_id é ON DELETE SET NULL, e um FK igual aqui faria as linhas
+          -- de uma conta apagada MIGRAREM em silêncio para o balde da conta principal, misturando
+          -- envios de duas marcas diferentes num número só.
+          st_account_id INTEGER,
+          workflow_id INTEGER NOT NULL,
+          node_id INTEGER NOT NULL,
+          -- Campo _id do item de /messages (a sonda de ordem já confirma que ele é estável no
+          -- mesmo offset entre chamadas). É o que torna a re-inserção idempotente.
+          slicktext_message_id VARCHAR(64) NOT NULL,
+          -- TIMESTAMP SEM FUSO, gravado com a STRING de created exatamente como veio.
+          --
+          -- Não é preguiça: countWorkflowNodeMessages compara created como TEXTO contra
+          -- "YYYY-MM-DD 00:00:00"/"YYYY-MM-DD 23:59:59". Enquanto o fuso de created não estiver
+          -- confirmado, QUALQUER conversão aqui faria o espelho e o caminho ao vivo devolverem
+          -- números diferentes pro mesmo período, sem erro nenhum — e ninguém saberia qual dos dois
+          -- está certo. Gravando cru e comparando cru, os dois caminhos concordam por construção.
+          enviado_em TIMESTAMP NOT NULL,
+          -- A string original. Custa ~30 bytes e é o que permite descobrir o fuso de created
+          -- depois (e recalcular) sem ter que buscar tudo de novo na API.
+          created_raw VARCHAR(40) NOT NULL,
+          -- message_credits. NUMERIC e não INTEGER: o caminho ao vivo soma o valor CRU (credits +=
+          -- item.message_credits), então arredondar aqui criaria divergência contra ele. NULL =
+          -- campo ausente no payload; a leitura aplica o mesmo default de 1 que o ao vivo aplica.
+          creditos NUMERIC(8,2),
+          -- Capturados porque vêm de graça no mesmo payload. NÃO entram em nenhuma contagem (o
+          -- caminho ao vivo conta toda linha que /messages devolve, e paridade vem antes de
+          -- refinamento) — existem pra responder depois, sem re-espelhar, se "envio" deveria ter
+          -- excluído entregas falhas ou mensagens de entrada.
+          status VARCHAR(32),
+          direcao VARCHAR(16),
+          criado_em TIMESTAMP DEFAULT NOW()
+        );
+
+        -- Deploy parcial anterior pode ter criado a tabela sem alguma coluna — CREATE TABLE IF NOT
+        -- EXISTS não conserta tabela existente, só pula.
+        DO $$ BEGIN
+          ALTER TABLE automacao_envios ADD COLUMN IF NOT EXISTS created_raw VARCHAR(40);
+          ALTER TABLE automacao_envios ADD COLUMN IF NOT EXISTS creditos NUMERIC(8,2);
+          ALTER TABLE automacao_envios ADD COLUMN IF NOT EXISTS status VARCHAR(32);
+          ALTER TABLE automacao_envios ADD COLUMN IF NOT EXISTS direcao VARCHAR(16);
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+
+        -- COALESCE no st_account_id pelo mesmo motivo de idx_list_snapshot_unique: NULL não colide
+        -- com NULL em UNIQUE comum, e o ON CONFLICT DO NOTHING deixaria de deduplicar exatamente
+        -- nas contas principais (que são a maioria).
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automacao_envios_unico
+          ON automacao_envios (client_id, COALESCE(st_account_id, 0), workflow_id, node_id, slicktext_message_id);
+
+        -- Índice de LEITURA: é ele que faz a pergunta "quantos envios/créditos deste node entre duas
+        -- datas" custar milissegundos. INCLUDE (creditos) deixa a soma sair index-only, sem tocar a
+        -- heap — a diferença aparece quando a tabela tiver milhões de linhas.
+        CREATE INDEX IF NOT EXISTS idx_automacao_envios_periodo
+          ON automacao_envios (client_id, COALESCE(st_account_id, 0), workflow_id, node_id, enviado_em)
+          INCLUDE (creditos);
+
+        -- Marca d'água da sincronização, uma linha por (cliente, conta, workflow, node).
+        --
+        -- A âncora (ancora_message_id/ancora_offset) é o que impede o erro silencioso: offset é
+        -- POSIÇÃO, não identidade. Se a lista escorregar sob o pé — empate de created no mesmo
+        -- segundo desempatado de forma diferente entre duas chamadas, ou uma mensagem removida lá
+        -- atrás — avançar o offset às cegas PULA mensagem sem devolver erro nenhum. A cada tick o
+        -- job relê a janela de sobreposição e procura a âncora: achou, recalibra o offset por onde
+        -- ela realmente caiu; não achou, marca degradado e a leitura volta pro ao vivo.
+        CREATE TABLE IF NOT EXISTS automacao_sync_estado (
+          id SERIAL PRIMARY KEY,
+          client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+          st_account_id INTEGER,
+          workflow_id INTEGER NOT NULL,
+          node_id INTEGER NOT NULL,
+
+          -- ── semente (uma vez por node) ──
+          offset_semente INTEGER,
+          -- Retomada do galope entre ticks: um node de altíssimo volume pode não achar a ponta
+          -- dentro do orçamento de um tick só. Sem isto, ele recomeçaria do zero pra sempre.
+          semente_progresso_offset INTEGER,
+          semente_em TIMESTAMP,
+          -- PRIMEIRO DIA INTEIRO coberto. É o dia da primeira mensagem espelhada + 1 quando a
+          -- semente não começou no offset 0: a semente cai no meio de um dia, e servir esse dia
+          -- pela metade subcontaria sem avisar. Um dia a menos de cobertura é barato.
+          cobre_desde DATE,
+          -- totals.messages do node no instante da semente (getWorkflowNodeAnalytics, vitalício).
+          -- É a régua independente: (vitalício de agora − este) deve bater com linhas_totais.
+          vitalicio_na_semente INTEGER,
+
+          -- ── marca d'água ──
+          proximo_offset INTEGER NOT NULL DEFAULT 0,
+          ancora_message_id VARCHAR(64),
+          ancora_offset INTEGER,
+          ultimo_created TIMESTAMP,
+
+          -- ── saúde ──
+          situacao VARCHAR(20) NOT NULL DEFAULT 'semente_pendente', -- semente_pendente|ativo|degradado
+          motivo_degradado TEXT,
+          ultima_sync_em TIMESTAMP,
+          ultima_falha_em TIMESTAMP,
+          ultima_falha TEXT,
+          requisicoes_ultimo_tick INTEGER,
+          ms_ultimo_tick INTEGER,
+          deriva_ultimo_tick INTEGER,   -- quanto a âncora se moveu; != 0 é sinal de lista instável
+          linhas_totais INTEGER NOT NULL DEFAULT 0,
+          criado_em TIMESTAMP DEFAULT NOW(),
+          atualizado_em TIMESTAMP DEFAULT NOW()
+        );
+
+        DO $$ BEGIN
+          ALTER TABLE automacao_sync_estado ADD COLUMN IF NOT EXISTS semente_progresso_offset INTEGER;
+          ALTER TABLE automacao_sync_estado ADD COLUMN IF NOT EXISTS vitalicio_na_semente INTEGER;
+          ALTER TABLE automacao_sync_estado ADD COLUMN IF NOT EXISTS deriva_ultimo_tick INTEGER;
+          ALTER TABLE automacao_sync_estado ADD COLUMN IF NOT EXISTS motivo_degradado TEXT;
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automacao_sync_estado_unico
+          ON automacao_sync_estado (client_id, COALESCE(st_account_id, 0), workflow_id, node_id);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');

@@ -10,6 +10,7 @@ import { adminRouter } from './admin/router';
 import { logger } from './utils/logger';
 import { startListSnapshotJob } from './jobs/list-snapshots';
 import { startWebhookWatchdog } from './jobs/webhook-watchdog';
+import { startAutomacaoEnviosSync } from './jobs/automacao-envios-sync';
 
 const CTX = 'Server';
 
@@ -100,6 +101,7 @@ async function main() {
   // é perdido para sempre — não dá pra saber depois quantos contatos uma lista tinha ontem.
   startListSnapshotJob();
   startWebhookWatchdog();
+  startAutomacaoEnviosSync();
 
   app.listen(env.PORT, () => {
     logger.info(CTX, `🚀 MailX server running on port ${env.PORT}`);
