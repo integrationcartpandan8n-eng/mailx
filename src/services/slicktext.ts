@@ -27,6 +27,37 @@ export interface SlickTextAnalytics {
   campaigns?: any;
 }
 
+export interface MensagemDeNode {
+  messageId: string | null;   // `_id`, com fallback pra `id`
+  created: string | null;     // já normalizado ("YYYY-MM-DD HH:MM:SS")
+  createdRaw: string | null;  // string original, pra investigar fuso depois sem rebuscar
+  credits: number | null;     // message_credits quando for número; null quando ausente
+  status: string | null;
+  direction: string | null;
+}
+
+/**
+ * `created` da SlickText → "YYYY-MM-DD HH:MM:SS" (ou null se não reconhecer o formato).
+ *
+ * NÃO devolve Date de propósito. O espelho local (automacao_envios.enviado_em) é TIMESTAMP
+ * sem fuso, e passar um Date pro driver do pg converteria pelo fuso do processo — mangling
+ * silencioso. Passando a string, o Postgres grava literalmente o que a SlickText disse, que é
+ * a única forma de o espelho concordar com a comparação de TEXTO que countWorkflowNodeMessages
+ * já faz hoje (created comparado contra "YYYY-MM-DD 00:00:00"/"YYYY-MM-DD 23:59:59").
+ *
+ * Estrito de propósito: formato inesperado devolve null e a linha NÃO é gravada (o node vai
+ * pra 'degradado' e a leitura cai no ao vivo). Gravar uma data adivinhada seria pior — viraria
+ * contagem errada com cara de contagem certa.
+ */
+export function normalizarCreated(created: unknown): string | null {
+  if (typeof created !== 'string') return null;
+  // Âncora nas duas pontas (^...$): um sufixo depois dos segundos (fração, "Z", offset de fuso)
+  // faz isso devolver null em vez de truncar em silêncio — vira "formato inesperado" no chamador
+  // (node degradado, leitura cai pro ao vivo) em vez de uma divergência de fronteira que ninguém vê.
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(created.trim());
+  return m ? `${m[1]} ${m[2]}` : null;
+}
+
 /**
  * Semáforo por marca: limita requests simultâneos à SlickText por brand. Achado da
  * auditoria: várias contagens por período disparadas juntas (cada uma com ~35 sondas)
@@ -478,6 +509,127 @@ export class SlickTextClient {
   }
 
   /**
+   * Um LOTE de mensagens de (workflow, node) a partir de um offset, na ordem em que a API
+   * devolve (crescente por `created`, confirmado pela sonda de ordem/estabilidade).
+   *
+   * limit=100 e não 1 de propósito: o custo de /messages?offset=N é dominado pelo
+   * escaneamento dos N registros, não pelo tamanho da resposta (achado medindo produção —
+   * ver comentário de automacao-envios-sync.ts). Uma requisição de 100 itens paga esse
+   * escaneamento UMA vez pra 100 linhas; a busca binária de countWorkflowNodeMessages paga
+   * ~2×log2(N) vezes pra UMA linha cada. É essa razão que torna a sincronização incremental
+   * viável onde a contagem ao vivo estoura o timeout.
+   */
+  async lerMensagensDoNode(
+    workflowId: number,
+    nodeId: number,
+    offset: number,
+    limit = 100,
+    opts: { timeoutMs?: number } = {}
+  ): Promise<MensagemDeNode[]> {
+    const itens = await this.rawMessages(
+      { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId, offset, limit },
+      opts
+    );
+    return itens.map((m: any) => ({
+      messageId: m?._id != null ? String(m._id) : (m?.id != null ? String(m.id) : null),
+      created: normalizarCreated(m?.created),
+      createdRaw: typeof m?.created === 'string' ? m.created.slice(0, 40) : null,
+      credits: typeof m?.message_credits === 'number' ? m.message_credits : null,
+      status: typeof m?.status === 'string' ? m.status.slice(0, 32) : null,
+      direction: typeof m?.direction === 'string' ? m.direction.slice(0, 16) : null,
+    }));
+  }
+
+  /**
+   * Acha um offset PERTO DA PONTA de (workflow, node), pra semear o espelho local de envios
+   * (ver automacao-envios-sync.ts). "Perto" e não "exato" de propósito, e SEMPRE por baixo.
+   *
+   * Errar pra menos custa só espelhar um pouco de história a mais (ganho, não perda) e
+   * algumas requisições de 100 itens; errar pra mais deixaria o node espelhando NADA até a
+   * lista alcançar o offset, anunciando uma cobertura que não existe de verdade. Por isso o
+   * retorno é `loCheio` (o maior offset em que um item foi CONFIRMADO), nunca o primeiro
+   * vazio: numa automação de mais de 100 mil mensagens, convergir no vazio exato custaria
+   * dezenas de sondas em offsets onde uma única requisição já derrubou a rota em produção
+   * (502/504 medidos — ver probe-ordem-mensagens em router.ts). Aqui o galope pode parar no
+   * meio do caminho (exato:false) e a sincronização incremental completa o resto ao longo dos
+   * ticks seguintes, retomando de `retomarDe` em vez de recomeçar do zero.
+   */
+  async descobrirPontaDeMensagens(
+    workflowId: number,
+    nodeId: number,
+    opts: {
+      retomarDe?: number;
+      orcamentoMs?: number;
+      maxRequisicoes?: number;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<{
+    loCheio: number | null;
+    hiVazio: number | null;
+    exato: boolean;
+    requisicoes: number;
+    ms: number;
+  }> {
+    const inicio = Date.now();
+    const orcamentoMs = opts.orcamentoMs ?? 60_000;
+    const maxRequisicoes = opts.maxRequisicoes ?? 12;
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+    const baseParams = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId };
+    let requisicoes = 0;
+
+    const temItem = async (offset: number): Promise<boolean> => {
+      requisicoes++;
+      const itens = await this.rawMessages({ ...baseParams, offset, limit: 1 }, { timeoutMs }).catch(() => []);
+      return itens.length > 0;
+    };
+    const dentroDoOrcamento = () => Date.now() - inicio < orcamentoMs && requisicoes < maxRequisicoes;
+
+    const offsetInicial = Math.max(0, opts.retomarDe ?? 0);
+    const primeiraChecagem = await temItem(offsetInicial);
+
+    let loCheio: number | null;
+    let hiVazio: number | null;
+    if (primeiraChecagem) {
+      let base = offsetInicial;
+      let vazioEm: number | null = null;
+      let passo = Math.max(1000, offsetInicial || 1000);
+      while (vazioEm === null && dentroDoOrcamento()) {
+        const candidato = base + passo;
+        if (await temItem(candidato)) { base = candidato; passo *= 2; } else { vazioEm = candidato; }
+      }
+      loCheio = base;
+      hiVazio = vazioEm;
+    } else if (offsetInicial === 0) {
+      loCheio = null; // node sem nenhuma mensagem
+      hiVazio = 0;
+    } else {
+      // retomando um galope anterior e o offset já não tem item — a lista pode ter encolhido,
+      // ou a semente anterior avançou demais. Devolve sem convicção; quem chama decide.
+      loCheio = null;
+      hiVazio = offsetInicial;
+    }
+
+    if (hiVazio !== null && loCheio !== null) {
+      let lo = loCheio;
+      let hi = hiVazio;
+      while (lo < hi - 1 && dentroDoOrcamento()) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (await temItem(mid)) lo = mid; else hi = mid;
+      }
+      loCheio = lo;
+      hiVazio = (hi === lo + 1) ? hi : null; // só "exato" se a busca convergiu de vez
+    }
+
+    return {
+      loCheio,
+      hiVazio,
+      exato: hiVazio !== null && loCheio !== null && hiVazio === loCheio + 1,
+      requisicoes,
+      ms: Date.now() - inicio,
+    };
+  }
+
+  /**
    * Message credit analytics — endpoint /analytics/message/credits returns 404.
    * Use getBrandUsage() instead for credit totals.
    */
@@ -681,8 +833,11 @@ export class SlickTextClient {
    * mensagem). Se o endpoint aceitar filtro por link, dá pra contar envios das mensagens que usam
    * link MANUAL, que é o único caso sem contagem hoje — e sem precisar do node.
    */
-  async rawMessages(params: Record<string, any>): Promise<any[]> {
-    const res = await this.http.get('/messages', { params });
+  async rawMessages(params: Record<string, any>, opts: { timeoutMs?: number } = {}): Promise<any[]> {
+    const res = await this.http.get('/messages', {
+      params,
+      ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}),
+    });
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 

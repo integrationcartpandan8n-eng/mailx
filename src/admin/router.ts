@@ -10,6 +10,7 @@ import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
 import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
 import { estadoDoCliente } from '../jobs/webhook-watchdog';
+import { enviosDoEspelho } from '../services/espelho-envios';
 import { conferirInvariantes } from './invariantes';
 import { canaisConfigurados } from '../services/notificador';
 import { env, METRICS_ONLY } from '../config/env';
@@ -4349,6 +4350,132 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
               : offsetInicial === 0
                 ? 'Ordem crescente confirmada e lista estável em 3s nesta amostra — mas offset_inicial=0 é a ponta MAIS ANTIGA, sem risco de escrita concorrente. Repita com ?offset_inicial=<perto do total vitalício> pra testar a ponta viva.'
                 : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra, incluindo perto da ponta viva.',
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/espelho-automacao?utm_campaign=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+//   (ou &workflow_id=X&node_id=Y no lugar de utm_campaign, pra testar um node ainda sem vínculo)
+//
+// Compara o espelho local (automacao_envios/automacao_sync_estado) contra o caminho ao vivo
+// (countWorkflowNodeMessages) pro MESMO período — é o teste de aceitação do espelho: sem esta
+// rota não tem como provar que ele bate com a API antes de servir número pra usuário de verdade.
+// Também compara contra o vitalício (getWorkflowNodeAnalytics) como terceira régua independente.
+adminRouter.get('/clientes/:id/diagnostico/espelho-automacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientIdNum = parseInt(req.params.id as string, 10);
+  const from = String(req.query.from ?? '');
+  const to = String(req.query.to ?? '');
+  if (!Number.isFinite(clientIdNum)) {
+    res.status(400).json({ error: 'ID de cliente inválido' });
+    return;
+  }
+  if (!DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from/to obrigatórios, formato YYYY-MM-DD' });
+    return;
+  }
+  const clientId = String(clientIdNum);
+
+  let workflowId: number | null = null;
+  let nodeId: number | null = null;
+  let stAccountId: number | null = null;
+
+  const utmCampaign = req.query.utm_campaign as string | undefined;
+  if (utmCampaign) {
+    const mapping = await queryOne<{ slicktext_campaign_id: number | null; workflow_node_id: number | null; st_account_id: number | null }>(
+      `SELECT slicktext_campaign_id, workflow_node_id, st_account_id FROM sms_campaign_map
+       WHERE client_id = $1 AND utm_campaign = $2 AND source_type = 'Workflow'`,
+      [clientId, utmCampaign]
+    );
+    if (!mapping || mapping.slicktext_campaign_id == null || mapping.workflow_node_id == null) {
+      res.status(404).json({ error: `Sem vínculo Workflow+node pra utm_campaign="${utmCampaign}"` });
+      return;
+    }
+    workflowId = mapping.slicktext_campaign_id;
+    nodeId = mapping.workflow_node_id;
+    stAccountId = mapping.st_account_id;
+  } else {
+    workflowId = parseInt(String(req.query.workflow_id ?? ''), 10) || null;
+    nodeId = parseInt(String(req.query.node_id ?? ''), 10) || null;
+    // "|| null" trata NaN (st_account_id não-numérico na query string) e 0 igual — mesmo
+    // sentinel de "conta principal" usado em todo COALESCE(st_account_id, 0) deste arquivo.
+    stAccountId = req.query.st_account_id != null && req.query.st_account_id !== ''
+      ? (parseInt(String(req.query.st_account_id), 10) || null) : null;
+    if (!workflowId || !nodeId) {
+      res.status(400).json({ error: 'utm_campaign, ou workflow_id+node_id (opcionalmente st_account_id), são obrigatórios' });
+      return;
+    }
+  }
+
+  const chave = { clientId: clientIdNum, stAccountId, workflowId, nodeId };
+
+  const [espelho, estadoRow, credenciais] = await Promise.all([
+    enviosDoEspelho(chave, from, to),
+    queryOne<{
+      situacao: string; motivo_degradado: string | null; offset_semente: number | null;
+      proximo_offset: number; ancora_offset: number | null; cobre_desde: string | null;
+      vitalicio_na_semente: number | null; linhas_totais: number; ultima_sync_em: string | null;
+      requisicoes_ultimo_tick: number | null; ms_ultimo_tick: number | null; deriva_ultimo_tick: number | null;
+    }>(
+      `SELECT situacao, motivo_degradado, offset_semente, proximo_offset, ancora_offset,
+              cobre_desde::text, vitalicio_na_semente, linhas_totais, ultima_sync_em::text,
+              requisicoes_ultimo_tick, ms_ultimo_tick, deriva_ultimo_tick
+       FROM automacao_sync_estado
+       WHERE client_id = $1 AND COALESCE(st_account_id, 0) = COALESCE($2::int, 0)
+         AND workflow_id = $3 AND node_id = $4`,
+      [clientId, stAccountId, workflowId, nodeId]
+    ).catch(() => null),
+    getSlickTextAccountById(clientId, stAccountId),
+  ]);
+
+  let aoVivo: { count: number | null; credits: number | null; pages: number | null; ms: number; erro: string | null };
+  let vitalicioAgora: number | null = null;
+  if (!credenciais) {
+    aoVivo = { count: null, credits: null, pages: null, ms: 0, erro: 'Credenciais da conta SlickText não encontradas' };
+  } else {
+    const st = new SlickTextClient(credenciais.st_api_token, credenciais.st_brand_id);
+    const inicioAoVivo = Date.now();
+    try {
+      const contado = await st.countWorkflowNodeMessages(workflowId, nodeId, from, to);
+      aoVivo = { count: contado.count, credits: contado.credits, pages: contado.pages, ms: Date.now() - inicioAoVivo, erro: null };
+    } catch (err: any) {
+      // Timeout aqui É DADO, não é bug — é a prova exata do problema que o espelho resolve.
+      aoVivo = { count: null, credits: null, pages: null, ms: Date.now() - inicioAoVivo, erro: err.message };
+    }
+    vitalicioAgora = await st.getWorkflowNodeAnalytics(workflowId, nodeId, '2000-01-01', '2100-01-01')
+      .then((d: any) => (typeof d?.totals?.messages === 'number' ? d.totals.messages : null))
+      .catch(() => null);
+  }
+
+  const divergencia = espelho.ok && aoVivo.count != null
+    ? { envios: espelho.envios - aoVivo.count, creditos: aoVivo.credits != null ? espelho.creditos - aoVivo.credits : null }
+    : null;
+
+  const esperadoDesdeASemente = vitalicioAgora != null && estadoRow?.vitalicio_na_semente != null
+    ? vitalicioAgora - estadoRow.vitalicio_na_semente : null;
+
+  res.json({
+    chave: { client_id: chave.clientId, st_account_id: chave.stAccountId, workflow_id: workflowId, node_id: nodeId },
+    periodo: { from, to },
+    estado: estadoRow,
+    espelho,
+    ao_vivo: aoVivo,
+    divergencia,
+    regua_vitalicia: {
+      vitalicio_na_semente: estadoRow?.vitalicio_na_semente ?? null,
+      vitalicio_agora: vitalicioAgora,
+      esperado_desde_a_semente: esperadoDesdeASemente,
+      linhas_no_espelho: estadoRow?.linhas_totais ?? null,
+      diferenca: esperadoDesdeASemente != null && estadoRow?.linhas_totais != null
+        ? esperadoDesdeASemente - estadoRow.linhas_totais : null,
+    },
+    veredito: !estadoRow
+      ? 'Node ainda não apareceu na enumeração do job (rode de novo em alguns minutos).'
+      : divergencia && divergencia.envios === 0 && (divergencia.creditos === null || divergencia.creditos === 0)
+        ? 'ESPELHO BATE COM O AO VIVO — envios e créditos idênticos no período.'
+        : divergencia
+          ? `DIVERGÊNCIA — envios ${divergencia.envios > 0 ? '+' : ''}${divergencia.envios}, créditos ${divergencia.creditos ?? 'n/d'}.`
+          : espelho.ok
+            ? 'Espelho respondeu; ao vivo não respondeu neste período (timeout ou erro — ver ao_vivo.erro). Sem contra-prova possível, mas é exatamente o cenário que motivou o espelho.'
+            : `Espelho não respondeu (${espelho.motivo}: ${espelho.detalhe}) — caindo pro ao vivo, como a rota real faria.`,
   });
 }));
 

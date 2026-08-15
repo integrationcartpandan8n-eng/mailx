@@ -48,6 +48,22 @@ export const env = {
    */
   DB_TZ: optional('DB_TZ', 'UTC'),
 
+  /**
+   * Liga/desliga a GRAVAÇÃO do espelho local de envios por automação (job
+   * automacao-envios-sync). 'off' = o job nem sobe; nenhuma linha nova entra em
+   * automacao_envios/automacao_sync_estado. Independente de ESPELHO_ENVIOS_LEITURA de
+   * propósito: dá pra parar de coletar sem parar de servir o que já foi coletado, e vice-versa.
+   */
+  ESPELHO_ENVIOS: optional('ESPELHO_ENVIOS', 'on'),
+
+  /**
+   * Liga/desliga a LEITURA do espelho em /sms-campaign-sends. 'off' = a rota volta a usar
+   * 100% o caminho ao vivo (countWorkflowNodeMessages), como se o espelho não existisse —
+   * botão de emergência caso o espelho algum dia devolva número errado, sem precisar reverter
+   * código nem parar a coleta de rodar em segundo plano.
+   */
+  ESPELHO_ENVIOS_LEITURA: optional('ESPELHO_ENVIOS_LEITURA', 'on'),
+
   // ActiveCampaign (global fallback — per-client credentials are in DB)
   AC_API_URL: optional('AC_API_URL', ''),
   AC_API_KEY: optional('AC_API_KEY', ''),
