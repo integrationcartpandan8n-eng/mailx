@@ -41,18 +41,47 @@ export interface EstadoVigia {
   emSilencio: boolean;
 }
 
+/** Divide o dia em 4 faixas de 6h — madrugada/manhã/tarde/noite — pra comparar cadência
+ * dentro da mesma faixa, não com o dia inteiro misturado. */
+const TAMANHO_FAIXA_HORAS = 6;
+
+function faixaDaHora(hora: number): { inicio: number; fim: number } {
+  const inicio = Math.floor(hora / TAMANHO_FAIXA_HORAS) * TAMANHO_FAIXA_HORAS;
+  return { inicio, fim: inicio + TAMANHO_FAIXA_HORAS };
+}
+
 /**
  * Calcula o limite de silêncio de um cliente a partir do intervalo médio entre vendas.
  *
  * Usa MEDIANA em vez de média: uma única madrugada parada puxaria a média para cima e afrouxaria
  * o alarme justamente no cliente que vende o dia inteiro. A mediana ignora esses extremos.
+ *
+ * A mediana é calculada só com vendas cujo intervalo COMEÇOU na mesma faixa de 6h do dia que
+ * `horaReferencia` (a hora do último webhook) — não com os 14 dias inteiros misturados. Visto em
+ * produção: um cliente que vende bem de dia e quase nada de madrugada disparava alarme às 9h da
+ * manhã depois de 4h30 de silêncio começado às 4h45, porque a mediana do dia inteiro (que inclui
+ * as vendas do horário de pico) ficava pequena demais pra madrugada — 8x uma mediana de "dia
+ * inteiro" estourava num intervalo de madrugada perfeitamente normal para aquele cliente, com o
+ * IPN da Digistore confirmado ativo o tempo todo. Comparar madrugada com madrugada evita isso sem
+ * perder a proteção contra o incidente original (um site realmente fora do ar por dias fica sem
+ * venda em TODAS as faixas, não só numa).
  */
 async function limiteDeSilencio(
   clientId: number,
-  fonte?: string
+  fonte?: string,
+  horaReferencia?: number | null
 ): Promise<{ limiteHoras: number; medianaMin: number | null }> {
   const condicaoFonte = fonte ? ' AND source = $2' : '';
-  const params = fonte ? [clientId, fonte] : [clientId];
+  const params: (number | string)[] = fonte ? [clientId, fonte] : [clientId];
+
+  let condicaoFaixa = '';
+  if (horaReferencia != null) {
+    const { inicio, fim } = faixaDaHora(horaReferencia);
+    // inicio/fim são inteiros calculados aqui mesmo (múltiplos de 6, nunca entrada de usuário) —
+    // seguro embutir como literal, sem precisar de mais um placeholder posicional.
+    condicaoFaixa = ` AND EXTRACT(HOUR FROM anterior) >= ${inicio} AND EXTRACT(HOUR FROM anterior) < ${fim}`;
+  }
+
   const r = await queryOne<{ mediana_min: string | null }>(
     `WITH vendas AS (
        SELECT created_at,
@@ -66,15 +95,16 @@ async function limiteDeSilencio(
      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (
               ORDER BY EXTRACT(EPOCH FROM (created_at - anterior)) / 60
             ) AS mediana_min
-     FROM vendas WHERE anterior IS NOT NULL`,
+     FROM vendas WHERE anterior IS NOT NULL${condicaoFaixa}`,
     params
   );
 
   const medianaMin = r?.mediana_min != null ? parseFloat(r.mediana_min) : null;
 
-  // Sem histórico suficiente não dá pra saber a cadência — usa o teto, que só dispara em
-  // silêncio longo o bastante para ser inequívoco. Chutar um limite apertado aqui geraria
-  // alarme falso em cliente novo, e alarme falso no primeiro uso mata a confiança no aviso.
+  // Sem histórico suficiente NESSA FAIXA não dá pra saber a cadência — usa o teto, que só
+  // dispara em silêncio longo o bastante para ser inequívoco em qualquer faixa. Chutar um limite
+  // apertado aqui geraria alarme falso em cliente novo (ou em faixa de horário rara), e alarme
+  // falso no primeiro uso mata a confiança no aviso.
   if (medianaMin == null || !isFinite(medianaMin)) {
     return { limiteHoras: TETO_HORAS, medianaMin: null };
   }
@@ -121,7 +151,10 @@ export async function estadoDoCliente(
     params
   );
 
-  const { limiteHoras, medianaMin } = await limiteDeSilencio(clientId, fonte);
+  // Hora do último webhook (0-23), extraída por string pra não depender de fuso de Date do JS —
+  // ultimo.ultimo já vem como texto "YYYY-MM-DD HH:MM:SS" da mesma sessão/fuso que grava created_at.
+  const horaUltimo = ultimo?.ultimo ? parseInt(ultimo.ultimo.slice(11, 13), 10) : null;
+  const { limiteHoras, medianaMin } = await limiteDeSilencio(clientId, fonte, horaUltimo);
   const horas = ultimo?.horas != null ? parseFloat(ultimo.horas) : null;
 
   return {
