@@ -4202,9 +4202,15 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   const baseParams: Record<string, any> = { source: 'Workflow', source_id: workflowId };
   if (nodeId) baseParams._sub_source_id = nodeId;
 
+  // offset_inicial: por padrão 0, que é a ponta MAIS ANTIGA da lista (ordem crescente) — dados
+  // parados, sem chance nenhuma de flagrar instabilidade. Pra testar de verdade a ponta VIVA
+  // (onde a automação escreve agora e onde a busca binária realmente opera pra período recente),
+  // passe ?offset_inicial=<perto do total vitalício do workflow/node>.
+  const offsetInicial = Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0);
   const N = Math.min(50, Math.max(5, parseInt(String(req.query.n ?? '30'), 10) || 30));
   const itens: Array<{ offset: number; created: string | null; id: any }> = [];
-  for (let offset = 0; offset < N; offset++) {
+  for (let i = 0; i < N; i++) {
+    const offset = offsetInicial + i;
     const linha = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
     if (linha.length === 0) break;
     itens.push({ offset, created: linha[0]?.created ?? null, id: linha[0]?._id ?? linha[0]?.id ?? null });
@@ -4219,13 +4225,15 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     }
   }
 
-  // Estabilidade: repete o primeiro e o offset do meio depois de uma pausa — se a automação
-  // deste workflow dispara com frequência, é aqui que aparece.
-  const offsetsParaRepetir = [...new Set([0, Math.floor(itens.length / 2)])].filter(o => o < itens.length);
+  // Estabilidade: repete o primeiro e o offset do meio (por VALOR de offset, não por posição no
+  // array) depois de uma pausa — se a automação deste workflow dispara com frequência, é aqui
+  // que aparece.
+  const offsetsParaRepetir = [...new Set([itens[0]?.offset, itens[Math.floor(itens.length / 2)]?.offset])]
+    .filter((o): o is number => o != null);
   await new Promise(r => setTimeout(r, 3000));
   const instabilidades: Array<{ offset: number; item_antes: any; item_depois: any; created_antes: string | null; created_depois: string | null }> = [];
   for (const offset of offsetsParaRepetir) {
-    const antes = itens[offset];
+    const antes = itens.find(x => x.offset === offset)!;
     const repetida = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
     const depoisId = repetida[0]?._id ?? repetida[0]?.id ?? null;
     if (antes.id != null && depoisId != null && antes.id !== depoisId) {
@@ -4236,6 +4244,7 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   res.json({
     workflow_id: workflowId,
     node_id: nodeId ?? null,
+    offset_inicial: offsetInicial,
     offsets_testados: itens.length,
     itens,
     violacoes_de_ordem: violacoesDeOrdem,
@@ -4245,8 +4254,10 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
       : instabilidades.length > 0
         ? 'ORDEM ok, mas a lista MUDOU sob o pé em 3s — automação ativa disparando durante a sonda. Uma busca binária em andamento (que leva vários segundos) corre risco real de fronteira inconsistente aqui.'
         : itens.length < N
-          ? 'Poucos itens neste workflow/node pra testar de verdade (lista curta) — tente um workflow com mais volume.'
-          : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra. Repita num workflow bem ativo pra maior confiança.',
+          ? `Só ${itens.length} item(ns) a partir do offset_inicial=${offsetInicial} (acabou a lista) — tente um offset_inicial menor, ou este workflow/node não tem tanto volume.`
+          : offsetInicial === 0
+            ? 'Ordem crescente confirmada e lista estável em 3s nesta amostra — mas offset_inicial=0 é a ponta MAIS ANTIGA, sem risco de escrita concorrente. Repita com ?offset_inicial=<perto do total vitalício> pra testar a ponta viva.'
+            : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra, incluindo perto da ponta viva.',
   });
 }));
 
