@@ -4206,8 +4206,29 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   // parados, sem chance nenhuma de flagrar instabilidade. Pra testar de verdade a ponta VIVA
   // (onde a automação escreve agora e onde a busca binária realmente opera pra período recente),
   // passe ?offset_inicial=<perto do total vitalício do workflow/node>.
-  const offsetInicial = Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0);
+  let offsetInicial = Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0);
   const N = Math.min(50, Math.max(5, parseInt(String(req.query.n ?? '30'), 10) || 30));
+
+  // O offset_inicial pedido pode vir de /analytics/messages (envios_no_periodo em
+  // diagnostico/cobertura-automacao) — mas countWorkflowNodeMessages() pagina /messages, um
+  // endpoint DIFERENTE, que pode ter um alcance/retenção diferente do agregado. Se o offset
+  // pedido já vier vazio, acha a ponta REAL por busca binária em vez de devolver "acabou a
+  // lista" sem mais informação — é exatamente esse tipo de divergência entre os dois endpoints
+  // que estamos tentando entender.
+  let limiteRealDescoberto: number | null = null;
+  const primeiraChecagem = await st.rawMessages({ ...baseParams, offset: offsetInicial, limit: 1 }).catch(() => []);
+  if (primeiraChecagem.length === 0 && offsetInicial > 0) {
+    let lo = 0;
+    let hi = offsetInicial;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const item = await st.rawMessages({ ...baseParams, offset: mid, limit: 1 }).catch(() => []);
+      if (item.length > 0) lo = mid; else hi = mid - 1;
+    }
+    limiteRealDescoberto = lo; // último offset com item de verdade
+    offsetInicial = Math.max(0, lo - N + 1);
+  }
+
   const itens: Array<{ offset: number; created: string | null; id: any }> = [];
   for (let i = 0; i < N; i++) {
     const offset = offsetInicial + i;
@@ -4244,7 +4265,12 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   res.json({
     workflow_id: workflowId,
     node_id: nodeId ?? null,
-    offset_inicial: offsetInicial,
+    offset_inicial_pedido: Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0),
+    offset_inicial_usado: offsetInicial,
+    ultimo_offset_real_descoberto: limiteRealDescoberto,
+    nota_descoberta: limiteRealDescoberto != null
+      ? `O offset pedido já vinha vazio — /messages pra este workflow/node só tem itens até o offset ${limiteRealDescoberto} (busca binária), bem menos do que o total agregado de /analytics/messages. Os dois endpoints têm alcance diferente; ajustado sozinho pra testar os últimos itens que existem de verdade.`
+      : null,
     offsets_testados: itens.length,
     itens,
     violacoes_de_ordem: violacoesDeOrdem,
