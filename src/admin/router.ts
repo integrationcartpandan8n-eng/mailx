@@ -4215,7 +4215,18 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   // a partir do offset pedido (dobrando o passo, igual ao galope de countWorkflowNodeMessages())
   // até achar um offset vazio, depois busca binária entre o último cheio e o primeiro vazio. Se o
   // offset pedido em si já vier vazio, o galope começa do zero (comportamento antigo preservado).
+  //
+  // Orçamento de tempo, não só de passos: achado em produção (504 do nginx) que /messages?offset=N
+  // pode ficar mais lenta quanto MAIOR o offset (paginação por OFFSET costuma escanear os N
+  // registros por baixo dos panos) — um número fixo de passos não protege contra isso, porque
+  // passos em offsets grandes podem ser bem mais caros que os primeiros. Corta a descoberta com
+  // base em tempo decorrido, e usa a melhor fronteira encontrada até ali (aproximada, não exata).
+  const inicioDaSonda = Date.now();
+  const ORCAMENTO_DESCOBERTA_MS = 15000;
+  const dentroDoOrcamento = () => Date.now() - inicioDaSonda < ORCAMENTO_DESCOBERTA_MS;
+
   let limiteRealDescoberto: number | null = null;
+  let descobertaParcial = false;
   const primeiraChecagem = await st.rawMessages({ ...baseParams, offset: offsetInicial, limit: 1 }).catch(() => []);
 
   let loCheio: number;
@@ -4224,11 +4235,12 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     loCheio = offsetInicial;
     hiVazio = null;
     let passo = Math.max(1000, offsetInicial || 1000);
-    for (let tentativa = 0; tentativa < 30 && hiVazio === null; tentativa++) {
+    for (let tentativa = 0; tentativa < 30 && hiVazio === null && dentroDoOrcamento(); tentativa++) {
       const candidato = loCheio + passo;
       const item = await st.rawMessages({ ...baseParams, offset: candidato, limit: 1 }).catch(() => []);
       if (item.length > 0) { loCheio = candidato; passo *= 2; } else { hiVazio = candidato; }
     }
+    if (hiVazio === null) descobertaParcial = true; // saiu do galope por orçamento/tentativas, nunca achou o vazio
   } else {
     loCheio = 0;
     hiVazio = offsetInicial > 0 ? offsetInicial : 1;
@@ -4237,25 +4249,33 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
   if (hiVazio !== null) {
     let lo = loCheio;
     let hi = hiVazio;
-    while (lo < hi) {
+    while (lo < hi && dentroDoOrcamento()) {
       const mid = Math.ceil((lo + hi) / 2);
       const item = await st.rawMessages({ ...baseParams, offset: mid, limit: 1 }).catch(() => []);
       if (item.length > 0) lo = mid; else hi = mid - 1;
     }
-    limiteRealDescoberto = lo; // último offset com item de verdade
+    if (lo < hi) descobertaParcial = true; // saiu por orçamento, não por convergência da busca
+    limiteRealDescoberto = lo; // melhor fronteira encontrada até o orçamento acabar
     offsetInicial = Math.max(0, lo - N + 1);
   }
-  // hiVazio null (galope não achou o fim em 30 tentativas dobrando o passo): lista gigante demais
-  // ou crescendo mais rápido que o galope — segue com o offset pedido mesmo, sem travar a sonda.
 
   // Em lotes paralelos, não um offset de cada vez: com N até 50 + a busca binária de descoberta
   // acima, uma chamada por vez virou ~50 round-trips sequenciais pra SlickText — bateu no timeout
   // do nginx (502) em produção. Cada offset é independente (não depende do anterior), então lotes
   // de 10 em paralelo cortam o tempo de parede em ~10x sem mudar o que é medido.
+  //
+  // Orçamento total (descoberta + amostragem), não só da descoberta: se ofsets grandes forem
+  // individualmente lentos (ver comentário acima), a amostragem perto da ponta viva sofre do
+  // mesmo jeito. Pára de pedir lotes novos quando o tempo acabar, devolvendo o que já tem em vez
+  // de arriscar outro 502/504.
+  const ORCAMENTO_TOTAL_MS = 25000;
+  const dentroDoOrcamentoTotal = () => Date.now() - inicioDaSonda < ORCAMENTO_TOTAL_MS;
   const LOTE = 10;
   const itens: Array<{ offset: number; created: string | null; id: any }> = [];
+  let amostragemParcial = false;
   buscaDeItens:
   for (let base = 0; base < N; base += LOTE) {
+    if (!dentroDoOrcamentoTotal()) { amostragemParcial = true; break; }
     const tamanhoDoLote = Math.min(LOTE, N - base);
     const respostas = await Promise.all(
       Array.from({ length: tamanhoDoLote }, (_, k) =>
@@ -4280,17 +4300,22 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
 
   // Estabilidade: repete o primeiro e o offset do meio (por VALOR de offset, não por posição no
   // array) depois de uma pausa — se a automação deste workflow dispara com frequência, é aqui
-  // que aparece.
-  const offsetsParaRepetir = [...new Set([itens[0]?.offset, itens[Math.floor(itens.length / 2)]?.offset])]
-    .filter((o): o is number => o != null);
-  await new Promise(r => setTimeout(r, 3000));
+  // que aparece. Pulado se o orçamento já estiver apertado, pra não estourar timeout por causa só
+  // da checagem extra.
   const instabilidades: Array<{ offset: number; item_antes: any; item_depois: any; created_antes: string | null; created_depois: string | null }> = [];
-  for (const offset of offsetsParaRepetir) {
-    const antes = itens.find(x => x.offset === offset)!;
-    const repetida = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
-    const depoisId = repetida[0]?._id ?? repetida[0]?.id ?? null;
-    if (antes.id != null && depoisId != null && antes.id !== depoisId) {
-      instabilidades.push({ offset, item_antes: antes.id, item_depois: depoisId, created_antes: antes.created, created_depois: repetida[0]?.created ?? null });
+  let estabilidadeTestada = false;
+  if (itens.length > 0 && dentroDoOrcamentoTotal()) {
+    estabilidadeTestada = true;
+    const offsetsParaRepetir = [...new Set([itens[0]?.offset, itens[Math.floor(itens.length / 2)]?.offset])]
+      .filter((o): o is number => o != null);
+    await new Promise(r => setTimeout(r, 3000));
+    for (const offset of offsetsParaRepetir) {
+      const antes = itens.find(x => x.offset === offset)!;
+      const repetida = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
+      const depoisId = repetida[0]?._id ?? repetida[0]?.id ?? null;
+      if (antes.id != null && depoisId != null && antes.id !== depoisId) {
+        instabilidades.push({ offset, item_antes: antes.id, item_depois: depoisId, created_antes: antes.created, created_depois: repetida[0]?.created ?? null });
+      }
     }
   }
 
@@ -4300,9 +4325,13 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     offset_inicial_pedido: Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0),
     offset_inicial_usado: offsetInicial,
     ultimo_offset_real_descoberto: limiteRealDescoberto,
+    descoberta_parcial_por_orcamento: descobertaParcial,
+    amostragem_parcial_por_orcamento: amostragemParcial,
+    estabilidade_testada: estabilidadeTestada,
+    tempo_total_ms: Date.now() - inicioDaSonda,
     nota_descoberta: limiteRealDescoberto != null
-      ? `Ponta viva descoberta por galope+busca binária: o último offset com item de verdade é ${limiteRealDescoberto}. A lista cresce com o tempo (a automação continua disparando), então o offset pedido pode virar "meio da lista" entre uma medição e outra — reamostrado a partir dali pra testar a ponta de verdade de agora.`
-      : 'Galope não achou o fim da lista em 30 tentativas dobrando o passo — lista maior que o esperado ou crescendo rápido demais. Testado com o offset pedido mesmo, sem ponta descoberta.',
+      ? `Ponta viva descoberta por galope+busca binária: o último offset com item de verdade é ${limiteRealDescoberto}${descobertaParcial ? ' (aproximado — o orçamento de tempo acabou antes de convergir de vez, ver descoberta_parcial_por_orcamento)' : ''}. A lista cresce com o tempo (a automação continua disparando), então o offset pedido pode virar "meio da lista" entre uma medição e outra — reamostrado a partir dali pra testar a ponta de verdade de agora.`
+      : 'Galope não achou o fim da lista no orçamento de tempo — lista gigante, ou /messages fica mais lenta em offsets grandes (achado real: já causou 502/504 aqui). Testado com o offset pedido mesmo, sem ponta descoberta.',
     offsets_testados: itens.length,
     itens,
     violacoes_de_ordem: violacoesDeOrdem,
@@ -4311,11 +4340,15 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
       ? `ORDEM QUEBRADA — ${violacoesDeOrdem.length} inversão(ões) encontradas. countWorkflowNodeMessages() pode devolver contagem/crédito errados pra este workflow/node.`
       : instabilidades.length > 0
         ? 'ORDEM ok, mas a lista MUDOU sob o pé em 3s — automação ativa disparando durante a sonda. Uma busca binária em andamento (que leva vários segundos) corre risco real de fronteira inconsistente aqui.'
-        : itens.length < N
-          ? `Só ${itens.length} item(ns) a partir do offset_inicial=${offsetInicial} (acabou a lista) — tente um offset_inicial menor, ou este workflow/node não tem tanto volume.`
-          : offsetInicial === 0
-            ? 'Ordem crescente confirmada e lista estável em 3s nesta amostra — mas offset_inicial=0 é a ponta MAIS ANTIGA, sem risco de escrita concorrente. Repita com ?offset_inicial=<perto do total vitalício> pra testar a ponta viva.'
-            : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra, incluindo perto da ponta viva.',
+        : itens.length === 0
+          ? 'Nenhum item testado — orçamento de tempo acabou antes da amostragem (ver amostragem_parcial_por_orcamento) ou este workflow/node não tem volume no offset alcançado.'
+          : itens.length < N
+            ? `Só ${itens.length} item(ns) a partir do offset_inicial=${offsetInicial} (acabou a lista, ou orçamento de tempo esgotado — ver amostragem_parcial_por_orcamento).`
+            : !estabilidadeTestada
+              ? 'Ordem crescente confirmada nesta amostra, mas a checagem de estabilidade foi pulada (orçamento de tempo apertado) — sem conclusão sobre escrita concorrente.'
+              : offsetInicial === 0
+                ? 'Ordem crescente confirmada e lista estável em 3s nesta amostra — mas offset_inicial=0 é a ponta MAIS ANTIGA, sem risco de escrita concorrente. Repita com ?offset_inicial=<perto do total vitalício> pra testar a ponta viva.'
+                : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra, incluindo perto da ponta viva.',
   });
 }));
 
