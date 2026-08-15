@@ -4167,6 +4167,89 @@ adminRouter.get('/clientes/:id/diagnostico/probe-workflows-paginacao', asyncHand
   res.json({ contas: saida });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-ordem-mensagens?workflow_id=X&node_id=Y - A ordem de
+// /messages por offset é mesmo crescente por `created`, e estável entre chamadas?
+//
+// countWorkflowNodeMessages() (usada por sms-campaign-sends, que alimenta Créditos por Automação)
+// faz busca binária sobre /messages?offset=N assumindo ORDEM CRESCENTE de `created` conforme o
+// offset sobe — o próprio código admite que isso foi "verificado de leve" durante o galope. Se a
+// ordem não for estritamente crescente, ou se a lista mudar sob o pé da busca (automação disparando
+// em paralelo, deslocando offsets), a busca binária devolve fronteira errada SEM erro nenhum —
+// silenciosamente conta mensagem/crédito de menos ou de mais.
+//
+// Duas checagens, com dado real:
+//   1. Ordem: varre offsets consecutivos (0..N) e confirma que `created` nunca RETROCEDE.
+//   2. Estabilidade: pede o MESMO offset duas vezes com uma pausa de 3s no meio — se o item mudar,
+//      a lista se moveu sob concorrência, exatamente o cenário que quebraria uma busca binária em
+//      andamento (que already faz várias chamadas espalhadas ao longo de vários segundos).
+adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const workflowId = parseInt(String(req.query.workflow_id ?? ''), 10);
+  const nodeId = req.query.node_id != null && req.query.node_id !== '' ? parseInt(String(req.query.node_id), 10) : undefined;
+  if (!workflowId) {
+    res.status(400).json({ error: 'workflow_id é obrigatório — use ?workflow_id=123 (opcionalmente &node_id=456)' });
+    return;
+  }
+
+  const contas = await getSlickTextAccounts(clientId);
+  const acc = contas[0];
+  if (!acc) {
+    res.status(404).json({ error: 'Nenhuma conta SlickText configurada para este cliente.' });
+    return;
+  }
+  const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+
+  const baseParams: Record<string, any> = { source: 'Workflow', source_id: workflowId };
+  if (nodeId) baseParams._sub_source_id = nodeId;
+
+  const N = Math.min(50, Math.max(5, parseInt(String(req.query.n ?? '30'), 10) || 30));
+  const itens: Array<{ offset: number; created: string | null; id: any }> = [];
+  for (let offset = 0; offset < N; offset++) {
+    const linha = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
+    if (linha.length === 0) break;
+    itens.push({ offset, created: linha[0]?.created ?? null, id: linha[0]?._id ?? linha[0]?.id ?? null });
+  }
+
+  const violacoesDeOrdem: Array<{ offset_anterior: number; created_anterior: string; offset: number; created: string }> = [];
+  for (let i = 1; i < itens.length; i++) {
+    const anterior = itens[i - 1].created;
+    const atual = itens[i].created;
+    if (anterior && atual && atual < anterior) {
+      violacoesDeOrdem.push({ offset_anterior: itens[i - 1].offset, created_anterior: anterior, offset: itens[i].offset, created: atual });
+    }
+  }
+
+  // Estabilidade: repete o primeiro e o offset do meio depois de uma pausa — se a automação
+  // deste workflow dispara com frequência, é aqui que aparece.
+  const offsetsParaRepetir = [...new Set([0, Math.floor(itens.length / 2)])].filter(o => o < itens.length);
+  await new Promise(r => setTimeout(r, 3000));
+  const instabilidades: Array<{ offset: number; item_antes: any; item_depois: any; created_antes: string | null; created_depois: string | null }> = [];
+  for (const offset of offsetsParaRepetir) {
+    const antes = itens[offset];
+    const repetida = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
+    const depoisId = repetida[0]?._id ?? repetida[0]?.id ?? null;
+    if (antes.id != null && depoisId != null && antes.id !== depoisId) {
+      instabilidades.push({ offset, item_antes: antes.id, item_depois: depoisId, created_antes: antes.created, created_depois: repetida[0]?.created ?? null });
+    }
+  }
+
+  res.json({
+    workflow_id: workflowId,
+    node_id: nodeId ?? null,
+    offsets_testados: itens.length,
+    itens,
+    violacoes_de_ordem: violacoesDeOrdem,
+    instabilidades_sob_3s: instabilidades,
+    veredito: violacoesDeOrdem.length > 0
+      ? `ORDEM QUEBRADA — ${violacoesDeOrdem.length} inversão(ões) encontradas. countWorkflowNodeMessages() pode devolver contagem/crédito errados pra este workflow/node.`
+      : instabilidades.length > 0
+        ? 'ORDEM ok, mas a lista MUDOU sob o pé em 3s — automação ativa disparando durante a sonda. Uma busca binária em andamento (que leva vários segundos) corre risco real de fronteira inconsistente aqui.'
+        : itens.length < N
+          ? 'Poucos itens neste workflow/node pra testar de verdade (lista curta) — tente um workflow com mais volume.'
+          : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra. Repita num workflow bem ativo pra maior confiança.',
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
 // CRÉDITO?
 //

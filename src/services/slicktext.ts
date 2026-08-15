@@ -498,13 +498,34 @@ export class SlickTextClient {
   /**
    * Lista os workflows cadastrados na marca (id + nome) — confirmado que é onde as
    * automações do MailX (carrinho abandonado, upsell) realmente vivem, não em Campaigns.
-   * Endpoint/formato ainda best-effort (por analogia a /campaigns) — não confirmado
-   * contra a API real. Se retornar 404, o dropdown do dashboard cai pro modo manual.
+   * Se retornar 404, o dropdown do dashboard cai pro modo manual.
+   *
+   * Pagina com offset+limit, igual getAllLinks() logo abaixo — antes fazia UMA chamada sem
+   * offset/limit, com uma nota admitindo que o formato nunca tinha sido confirmado contra a API
+   * real. CONFIRMADO via sonda em produção (probe-workflows-paginacao, client 4, contas de
+   * 5–7 workflows): a resposta traz `pagingData.hasMore` no MESMO formato que /links usa (mesmo
+   * nome de campo), e pedir offset além do fim da lista devolve vazio em vez de erro — os dois
+   * sinais de que é a mesma convenção de paginação, offset/limit funcionando de verdade. As contas
+   * testadas tinham poucos workflows (hasMore sempre false, nunca provou uma SEGUNDA página real),
+   * mas o risco de subcontagem silenciosa numa conta maior é real o bastante pra corrigir antes de
+   * alguém esbarrar nele: sem isso, a conta que ultrapassar o tamanho da página perderia o resto
+   * das automações sem nenhum aviso, e o total de envios/automação (e Créditos por Automação, que
+   * depende dele) ficaria sistematicamente subcontado sem ninguém saber.
    */
-  async getWorkflows(): Promise<{ workflow_id: number; name: string; status?: string; created?: string }[]> {
-    const res = await this.http.get('/workflows');
-    const raw = res.data?.data || res.data || [];
-    return raw.map((w: any) => ({
+  async getWorkflows(maxPages = 40): Promise<{ workflow_id: number; name: string; status?: string; created?: string }[]> {
+    const all: any[] = [];
+    let offset = 0;
+    const limit = 100;
+    for (let page = 0; page < maxPages; page++) {
+      const res = await this.http.get('/workflows', { params: { offset, limit } });
+      const raw: any[] = res.data?.data || res.data || [];
+      if (raw.length === 0) break;
+      all.push(...raw);
+      if (res.data?.pagingData?.hasMore === false) break;
+      if (raw.length < limit) break;
+      offset += limit;
+    }
+    return all.map((w: any) => ({
       workflow_id: w.workflow_id ?? w.id,
       name: w.name,
       status: w.status,
