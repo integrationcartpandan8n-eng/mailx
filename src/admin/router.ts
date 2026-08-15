@@ -4229,12 +4229,25 @@ adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(
     offsetInicial = Math.max(0, lo - N + 1);
   }
 
+  // Em lotes paralelos, não um offset de cada vez: com N até 50 + a busca binária de descoberta
+  // acima, uma chamada por vez virou ~50 round-trips sequenciais pra SlickText — bateu no timeout
+  // do nginx (502) em produção. Cada offset é independente (não depende do anterior), então lotes
+  // de 10 em paralelo cortam o tempo de parede em ~10x sem mudar o que é medido.
+  const LOTE = 10;
   const itens: Array<{ offset: number; created: string | null; id: any }> = [];
-  for (let i = 0; i < N; i++) {
-    const offset = offsetInicial + i;
-    const linha = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
-    if (linha.length === 0) break;
-    itens.push({ offset, created: linha[0]?.created ?? null, id: linha[0]?._id ?? linha[0]?.id ?? null });
+  buscaDeItens:
+  for (let base = 0; base < N; base += LOTE) {
+    const tamanhoDoLote = Math.min(LOTE, N - base);
+    const respostas = await Promise.all(
+      Array.from({ length: tamanhoDoLote }, (_, k) =>
+        st.rawMessages({ ...baseParams, offset: offsetInicial + base + k, limit: 1 }).catch(() => [])
+      )
+    );
+    for (let k = 0; k < respostas.length; k++) {
+      const linha = respostas[k];
+      if (linha.length === 0) break buscaDeItens;
+      itens.push({ offset: offsetInicial + base + k, created: linha[0]?.created ?? null, id: linha[0]?._id ?? linha[0]?.id ?? null });
+    }
   }
 
   const violacoesDeOrdem: Array<{ offset_anterior: number; created_anterior: string; offset: number; created: string }> = [];
