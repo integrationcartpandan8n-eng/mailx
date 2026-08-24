@@ -64,6 +64,16 @@ export const env = {
    */
   ESPELHO_ENVIOS_LEITURA: optional('ESPELHO_ENVIOS_LEITURA', 'on'),
 
+  /**
+   * Token secreto no caminho da URL de postback de afiliado da Digistore24 (skill99).
+   *
+   * Não existe sha_sign do lado de afiliado (confirmado com o suporte da Digistore) -- só do lado
+   * de vendedor. Sem assinatura pra validar, o segredo da própria URL é a única defesa -- por isso
+   * fica SEM valor padrão aqui: um handler que aceita qualquer token vazio quando ninguém configurou
+   * nada é pior que recusar tudo (fail closed, mesmo espírito do DS24_IPN_PASSPHRASE ausente).
+   */
+  DIGISTORE24_AFILIADO_TOKEN: optional('DIGISTORE24_AFILIADO_TOKEN', ''),
+
   // ActiveCampaign (global fallback — per-client credentials are in DB)
   AC_API_URL: optional('AC_API_URL', ''),
   AC_API_KEY: optional('AC_API_KEY', ''),

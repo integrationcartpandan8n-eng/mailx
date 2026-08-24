@@ -11,6 +11,7 @@ import { ActiveCampaignClient } from '../services/activecampaign';
 import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
 import { estadoDoCliente } from '../jobs/webhook-watchdog';
 import { enviosDoEspelho } from '../services/espelho-envios';
+import { cardsDeAfiliadoDoCliente } from '../services/afiliado';
 import { conferirInvariantes } from './invariantes';
 import { canaisConfigurados } from '../services/notificador';
 import { env, METRICS_ONLY } from '../config/env';
@@ -4477,6 +4478,29 @@ adminRouter.get('/clientes/:id/diagnostico/espelho-automacao', asyncHandler(asyn
             ? 'Espelho respondeu; ao vivo não respondeu neste período (timeout ou erro — ver ao_vivo.erro). Sem contra-prova possível, mas é exatamente o cenário que motivou o espelho.'
             : `Espelho não respondeu (${espelho.motivo}: ${espelho.detalhe}) — caindo pro ao vivo, como a rota real faria.`,
   });
+}));
+
+// GET /admin/clientes/:id/afiliado-cards?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// Os 5 cards de comissão de afiliado (skill99) pra ESTE cliente — quanto a MailX ganhou na
+// operação dele. Fonte: afiliado_eventos (postback S2S da Digistore24, ver
+// digistore24-afiliado.handler.ts), cruzado com clients.digistore24_merchant_id. Cliente sem
+// merchant_id mapeado ainda devolve ok:false/motivo:'sem-vinculo' — a tela mostra "sem vínculo
+// configurado", nunca um card zerado com cara de zero de verdade.
+adminRouter.get('/clientes/:id/afiliado-cards', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string, 10);
+  const from = String(req.query.from ?? '');
+  const to = String(req.query.to ?? '');
+  if (!Number.isFinite(clientId)) {
+    res.status(400).json({ error: 'ID de cliente inválido' });
+    return;
+  }
+  if (!DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from/to obrigatórios, formato YYYY-MM-DD' });
+    return;
+  }
+  const resultado = await cardsDeAfiliadoDoCliente(clientId, from, to);
+  res.json(resultado);
 }));
 
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
