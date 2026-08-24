@@ -6,42 +6,13 @@
     <title>MailX — Detalhes do Cliente</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/public/admin.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root {
-            /* Paleta clareada: fundo deixa de ser preto puro e os textos secundários sobem
-               2-3 tons — o contraste antigo (#6b7a99/#3d4f6f sobre #000) cansava o olho. */
-            --bg: #070a12;
-            --surface: #0d1322;
-            --surface-2: #121a2c;
-            --surface-3: #182238;
-            --border: #223050;
-            --border-light: #2e3f66;
-            --accent: #004de8;
-            --accent-light: #4b8df8;
-            --accent-glow: rgba(0, 77, 232, 0.25);
-            --accent-subtle: rgba(0, 77, 232, 0.1);
-            --text: #f2f5fa;
-            --text-soft: #cdd8ec;
-            --text-dim: #a3b1cc;
-            --text-muted: #6e7f9e;
-            --success: #00d68f;
-            --success-bg: rgba(0, 214, 143, 0.1);
-            --warning: #ffb020;
-            --warning-bg: rgba(255, 176, 32, 0.1);
-            --danger: #ff4d6a;
-            --danger-bg: rgba(255, 77, 106, 0.1);
-            --purple: #8b5cf6;
-            --radius: 14px;
-            --radius-sm: 8px;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        /* Escala tipográfica: 17px base em desktop sobe TODOS os tamanhos em rem ~6% —
-           "mais perto do olho" sem retocar centenas de regras. */
-        html { font-size: 17px; }
-        @media (max-width: 768px) { html { font-size: 16px; } }
+        /* :root (tokens), reset (*), escala tipográfica (html), .modal-*, .period-* e o
+           sistema .dash-grid agora vivem em /public/admin.css, compartilhado com
+           dashboard.html. O que fica aqui é só o que é (ou ainda é) específico desta
+           página. */
 
         body {
             font-family: 'Inter', -apple-system, sans-serif;
@@ -144,9 +115,6 @@
 
         .card-title i { color: var(--accent-light); font-size: 0.85rem; }
 
-        .period-control { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; flex-wrap:wrap; }
-        .period-control .pc-label { font-size:0.72rem; color:var(--text-dim); }
-
         .global-period-bar {
             display: flex; justify-content: space-between; align-items: center;
             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -231,13 +199,6 @@
             font-size: 0.76rem; padding: 0.4rem 0.9rem; border-radius: 7px; cursor: pointer; font-family: inherit; font-weight: 600;
         }
         .gp-pill.active { background: var(--accent-subtle); color: var(--accent-light); border-color: var(--accent-light); }
-        .period-pill { border:1px solid rgba(255,255,255,0.08); background:transparent; color:var(--text-dim);
-            border-radius:6px; padding:0.25rem 0.6rem; font-size:0.72rem; cursor:pointer; }
-        .period-pill.active { background:rgba(59,130,246,0.15); color:#60a5fa; border-color:rgba(59,130,246,0.35); }
-        .period-custom { display:none; gap:0.4rem; align-items:center; }
-        .period-custom.open { display:flex; }
-        .period-custom input[type=date] { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08);
-            color:#fff; border-radius:6px; padding:0.25rem 0.4rem; font-size:0.72rem; color-scheme:dark; }
 
         .card-body { padding: 1.25rem; }
 
@@ -970,11 +931,7 @@
         }
 
         .inline-form.show { display: block; }
-
-        @keyframes fadeUp {
-            from { opacity: 0; transform: translateY(5px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        /* @keyframes fadeUp está em admin.css (usado aqui e pelo .modal). */
 
         .inline-form .form-row {
             display: grid;
@@ -1110,11 +1067,9 @@
         .kpi-card .kpi-icon.red { background: var(--danger-bg); color: var(--danger); }
         .kpi-card .kpi-icon.orange { background: var(--warning-bg); color: var(--warning); }
 
-        /* Dados de conta (vitalícios) lado a lado em telas largas — não competem em altura
-           com as métricas de período. */
-        .sms-account-grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
-        .sms-account-grid .card { margin-bottom: 0; }
-        @media (min-width: 1000px) { .sms-account-grid { grid-template-columns: 1fr 1fr; } }
+        /* .sms-account-grid foi removido: o trio Contatos/Envios/Selo-de-Origem na aba SMS
+           agora usa .dash-grid + .col-4 (admin.css), que já resolve o mesmo "lado a lado em
+           telas largas, empilhado em estreitas" e ainda sobra espaço pro 3º item. */
 
         /* Card colapsável (Listas por Produto) */
         .card-header.collapsible { cursor: pointer; user-select: none; }
@@ -1188,30 +1143,7 @@
 
         /* Cabeçalhos de seção da aba SMS: só agrupam visualmente cards que já existiam —
            nenhum id/estrutura interna de card muda, é puro rótulo entre grupos. */
-        .sms-section-title {
-            display: flex; align-items: center; gap: 0.6rem;
-            margin: 1.75rem 0 0.75rem;
-            font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-            color: var(--text-muted);
-        }
-        .sms-section-title:first-child { margin-top: 0; }
-        .sms-section-title i { font-size: 0.8rem; }
-        .sms-section-title .rule { flex: 1 1 auto; height: 1px; background: var(--border); }
-
-        /* Espaço reservado pra funcionalidade sem UI ainda (backend pronto ou parcial).
-           Borda pontilhada + "em breve" deixam claro que não há dado real ali — nunca deve
-           parecer um card de verdade. */
-        .reserved-slot {
-            display: flex; align-items: flex-start; gap: 0.75rem;
-            border: 1px dashed var(--border-light); border-radius: var(--radius);
-            padding: 0.9rem 1.1rem; color: var(--text-dim); font-size: 0.78rem; line-height: 1.5;
-        }
-        .reserved-slot i { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.15rem; }
-        .tag-em-breve {
-            font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
-            color: var(--text-muted); background: var(--surface-3); padding: 2px 7px; border-radius: 999px;
-            vertical-align: middle;
-        }
+        /* .sms-section-title / .reserved-slot / .tag-em-breve agora vivem em admin.css. */
 
         /* Activity Chart */
         .chart-wrap-sm {
@@ -1305,33 +1237,8 @@
         .copy-btn:hover { border-color: var(--accent); color: var(--accent-light); }
 
         /* Modal */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.85);
-            backdrop-filter: blur(8px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-
-        .modal-overlay.show { display: flex; }
-
-        .modal {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 2rem;
-            width: 450px;
-            max-width: 90%;
-            animation: fadeUp 0.3s ease;
-        }
-
-        .modal h3 { font-size: 1rem; margin-bottom: 0.5rem; }
-        .modal p { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; }
-        .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
-        .modal-actions .btn { flex: 1; padding: 0.6rem; font-size: 0.85rem; }
+        /* .modal-overlay / .modal / .modal-actions agora vivem em admin.css
+           (inset:0 aqui vs top/left/right/bottom:0 lá são visualmente idênticos). */
 
         @media (max-width: 700px) {
             .info-grid { grid-template-columns: 1fr; }
@@ -1810,14 +1717,19 @@
 
         <!-- ═══ TAB: SMS (SlickText metrics) ═══ -->
         <div id="tab-content-sms" style="display:none">
-            <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
-                ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
-            </div>
-
             <!-- Reframe da aba (mapeamento aprovado item a item com o Murilo): os cards abaixo
                  são os MESMOS de antes — nenhum id, classe interna ou comportamento de JS mudou.
-                 O que muda é só o agrupamento visual (.sms-section-title) e a ordem de alguns
-                 blocos, pra virar 4 seções em vez de uma pilha plana de ~10 cards. -->
+                 O que muda é o agrupamento visual (.sms-section-title), a ordem de alguns blocos,
+                 e agora o layout — .dash-grid substitui a coluna única por um grid de 12 colunas;
+                 todo item é largura cheia por padrão (span 12), só os dois trios abaixo (gráficos;
+                 Contatos/Envios/Selo-de-Origem) usam .col-4 pra dividir a linha em 3. Cards densos
+                 (Faturamento SMS, Conversão por Segmento, o bloco de Automações inteiro) ficam sem
+                 classe .col-*, então nunca dividem linha com vizinho, em nenhuma largura de tela. -->
+            <div class="dash-grid">
+
+            <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); font-size:0.78rem; color:var(--text-dim)">
+                ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
+            </div>
 
             <!-- Saúde da coleta. Fica ACIMA de qualquer número porque muda como todos eles devem
                  ser lidos: se a coleta esteve parada no período, os totais abaixo estão
@@ -1839,7 +1751,7 @@
                  (GET /admin/clientes/:id/afiliado-cards) — o formato real de retorno é um
                  conjunto de ~5 cards (card1..card5 + naoExplicado), não um número só, então a
                  reserva já é do tamanho de um mini-cluster, não de 1 tile. -->
-            <div class="reserved-slot" style="margin-bottom:1.25rem">
+            <div class="reserved-slot">
                 <i class="fas fa-handshake"></i>
                 <div>
                     <strong style="color:var(--text-soft)">Comissão de Afiliado</strong> <span class="tag-em-breve">em breve</span>
@@ -1858,7 +1770,7 @@
                     </div>
                 </div>
             </div>
-            <div class="card" style="margin-bottom:1.25rem">
+            <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-filter"></i> Conversão por Segmento (SMS)</div>
                     <!-- Preenchido por renderLegendaLeadsSms: os leads podem ser do período (via
@@ -1884,35 +1796,38 @@
                  A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
                  mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
                  coincidiriam e o gráfico deixaria de responder "quanto disso é nosso".
-                 Subiram pra dentro de "Desempenho no Período" (antes ficavam no fim da aba) — são
-                 lidos junto com os KPIs de faturamento na mesma passada, não depois da tabela de
-                 automações. -->
-            <div class="grid-2">
-                <div class="card" style="margin-bottom:0">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
-                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
-                    </div>
-                    <div class="card-body">
-                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
-                        <div style="height:220px; position:relative"><canvas id="chartAutoCampSms"></canvas></div>
-                    </div>
+                 Trio .col-4 (grid aprovado): os 3 cabem de sobra numa coluna de 1/3, inclusive em
+                 largura de notebook — só caem pra empilhado abaixo de 1100px (breakpoint do
+                 .dash-grid). Antes eram um grid-2 fixo (2 gráficos) + o de reembolso solto embaixo;
+                 agora os 3 dividem a mesma linha. -->
+            <div class="card col-4">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
                 </div>
-                <div class="card" style="margin-bottom:0">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
-                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
-                    </div>
-                    <div class="card-body">
-                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
-                        <div style="height:220px; position:relative"><canvas id="chartRecUpsellSms"></canvas></div>
-                    </div>
+                <div class="card-body">
+                    <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
+                    <div style="height:220px; position:relative"><canvas id="chartAutoCampSms"></canvas></div>
                 </div>
             </div>
-            <div class="card">
+            <div class="card col-4">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
+                </div>
+                <div class="card-body">
+                    <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
+                    <div style="height:220px; position:relative"><canvas id="chartRecUpsellSms"></canvas></div>
+                </div>
+            </div>
+            <div class="card col-4">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
-                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS — a taxa é DESTE canal, não a do cliente</span>
+                    <!-- Aviso "taxa é deste canal" preservado por completo — só encurtado na
+                         largura de 1/3 de coluna pra não quebrar linha no card-header, mesmo
+                         tratamento já aplicado ao Selo de Origem. Ícone/tooltip em vez de texto
+                         truncado sem aviso nenhum. -->
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS <span class="kpi-tip" data-tip="A taxa mostrada é DESTE canal (SMS), não a taxa de aprovação/reembolso do cliente inteiro.">ⓘ</span></span>
                 </div>
                 <div class="card-body">
                     <div style="height:220px; position:relative"><canvas id="chartRefundSms"></canvas></div>
@@ -1973,7 +1888,7 @@
                  coluna de ativar/desativar (nem em client_slicktext_accounts, nem específica em
                  clients.status) — é lacuna de schema, não só de tela, então o controle abaixo é
                  só reserva visual e fica desabilitado até a migração existir. -->
-            <div class="reserved-slot" style="margin-bottom:1.25rem; align-items:center">
+            <div class="reserved-slot" style="align-items:center">
                 <label style="display:inline-flex; align-items:center; opacity:0.6; cursor:not-allowed">
                     <input type="checkbox" disabled>
                 </label>
@@ -1983,39 +1898,42 @@
                 </div>
             </div>
 
-            <div class="sms-account-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
-                    </div>
-                    <div class="card-body">
-                        <div class="kpi-grid" id="smsContactKpis">
-                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
-                        </div>
-                    </div>
+            <!-- Trio .col-4 (grid aprovado): Contatos SMS / Envios e Créditos / Selo de Origem
+                 dividem a linha em 3 — as 3 métricas de Contatos e as 4 de Envios e Créditos
+                 continuam intactas nas mini-grids internas de cada card, sem corte. Substitui o
+                 .sms-account-grid fixo de 2 colunas (que não tinha onde pôr um 3º item). -->
+            <div class="card col-4">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
                 </div>
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
-                    </div>
-                    <div class="card-body">
-                        <div class="kpi-grid" id="smsSendKpis">
-                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
-                        </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="smsContactKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
                     </div>
                 </div>
             </div>
-
+            <div class="card col-4">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
+                </div>
+                <div class="card-body">
+                    <div class="kpi-grid" id="smsSendKpis">
+                        <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                    </div>
+                </div>
+            </div>
             <!-- Espaço reservado: selo de origem do dado (espelho local vs. SlickText ao vivo),
-                 principalmente pro card "Envios e Créditos" acima. O mecanismo mais próximo hoje
+                 principalmente pro card "Envios e Créditos" ao lado. O mecanismo mais próximo hoje
                  (espelho de envios) só está ligado num endpoint de diagnóstico — a rota de
                  produção (/sms-campaign-sends) ainda lê a SlickText direto — então o selo depende
-                 dessa troca de rota primeiro, não é só CSS. -->
-            <div class="reserved-slot" style="margin-bottom:1.25rem">
+                 dessa troca de rota primeiro, não é só CSS. Texto encurtado pra caber no terço da
+                 linha (mesmo texto completo de antes fica no title, não sumiu, só não é mais o
+                 texto visível por padrão nessa largura de coluna). -->
+            <div class="reserved-slot col-4" title="Espelho local vs. SlickText ao vivo, nos cards de envio/crédito ao lado. Depende da rota de produção passar a ler o espelho — hoje ela lê a SlickText direto.">
                 <i class="fas fa-tag"></i>
                 <div>
                     <strong style="color:var(--text-soft)">Selo de Origem do Dado</strong> <span class="tag-em-breve">em breve</span>
-                    <div style="margin-top:2px">Espelho local vs. SlickText ao vivo, nos cards de envio/crédito acima. Depende da rota de produção passar a ler o espelho — hoje ela lê a SlickText direto.</div>
+                    <div style="margin-top:2px">Espelho local vs. SlickText ao vivo, nos cards ao lado.</div>
                 </div>
             </div>
 
@@ -2040,6 +1958,8 @@
                     </table>
                 </div>
             </div>
+
+            </div><!-- end .dash-grid -->
         </div><!-- end tab-content-sms -->
 
         <!-- ═══ ABA CONFIGURAÇÃO ═══

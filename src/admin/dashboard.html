@@ -6,42 +6,14 @@
     <title>MailX — Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/public/admin.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
-        :root {
-            /* Paleta clareada — mesma do client-detail (aprovada pelo Murilo): fundo deixa de
-               ser preto puro e os textos secundários sobem 2-3 tons pra leitura confortável. */
-            --bg: #070a12;
-            --bg-subtle: #0a0e18;
-            --surface: #0d1322;
-            --surface-2: #121a2c;
-            --surface-3: #182238;
-            --border: #223050;
-            --border-light: #2e3f66;
-            --accent: #004de8;
-            --accent-light: #4b8df8;
-            --accent-glow: rgba(0, 77, 232, 0.25);
-            --accent-subtle: rgba(0, 77, 232, 0.1);
-            --text: #f2f5fa;
-            --text-soft: #cdd8ec;
-            --text-dim: #a3b1cc;
-            --text-muted: #6e7f9e;
-            --success: #00d68f;
-            --success-bg: rgba(0, 214, 143, 0.1);
-            --warning: #ffb020;
-            --warning-bg: rgba(255, 176, 32, 0.1);
-            --danger: #ff4d6a;
-            --danger-bg: rgba(255, 77, 106, 0.1);
-            --purple: #8b5cf6;
-            --radius: 14px;
-            --radius-sm: 8px;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        /* Mesma escala tipográfica do client-detail: tudo ~6% maior em desktop. */
-        html { font-size: 17px; }
-        @media (max-width: 768px) { html { font-size: 16px; } }
+        /* :root (tokens), reset (*), escala tipográfica (html), .modal-* e .period-* agora
+           vivem em /public/admin.css, compartilhado com client-detail.html. .btn, .kpi-card,
+           .tabs e os grids desta página continuam aqui — divergem o bastante das versões do
+           client-detail (tamanhos, DOM, nomes) pra unificar exigir uma decisão de design de
+           verdade, não só mover CSS; fica pra uma passada futura. */
 
         body {
             font-family: 'Inter', -apple-system, sans-serif;
@@ -455,15 +427,7 @@
             font-weight: 600;
         }
 
-        .period-control { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; flex-wrap:wrap; }
-        .period-control .pc-label { font-size:0.72rem; color:var(--text-dim); }
-        .period-pill { border:1px solid rgba(255,255,255,0.08); background:transparent; color:var(--text-dim);
-            border-radius:6px; padding:0.25rem 0.6rem; font-size:0.72rem; cursor:pointer; }
-        .period-pill.active { background:rgba(59,130,246,0.15); color:#60a5fa; border-color:rgba(59,130,246,0.35); }
-        .period-custom { display:none; gap:0.4rem; align-items:center; }
-        .period-custom.open { display:flex; }
-        .period-custom input[type=date] { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08);
-            color:#fff; border-radius:6px; padding:0.25rem 0.4rem; font-size:0.72rem; color-scheme:dark; }
+        /* .period-control / .period-pill / .period-custom agora vivem em admin.css. */
 
         .chart-wrap {
             position: relative;
@@ -676,34 +640,11 @@
         .feed-dot.processing { background: var(--warning); }
         .feed-dot.failed { background: var(--danger); box-shadow: 0 0 6px rgba(255, 77, 106, 0.4); }
 
-        /* ── Modal ── */
-        .modal-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.85);
-            backdrop-filter: blur(8px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-
-        .modal-overlay.show { display: flex; }
-
-        .modal {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 2rem;
-            width: 450px;
-            max-width: 90%;
-            animation: fadeUp 0.3s ease;
-        }
-
-        .modal h3 { font-size: 1rem; margin-bottom: 0.5rem; }
-        .modal p { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; }
-        .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
-        .modal-actions .btn { flex: 1; padding: 0.6rem; font-size: 0.85rem; }
+        /* .modal-overlay / .modal / .modal-actions agora vivem em admin.css. .modal usa
+           "animation: fadeUp" — o @keyframes fadeUp LOCAL desta página (8px, pro
+           .tab-content) continua valendo pro .modal também, igual sempre foi; não é o
+           mesmo fadeUp (5px) do admin.css/client-detail.html, e isso já era assim antes
+           desta migração — não é uma divergência nova. */
 
         /* ── Responsive ── */
         @media (max-width: 1100px) {
