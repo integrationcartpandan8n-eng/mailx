@@ -1186,6 +1186,33 @@
             opacity: 1;
         }
 
+        /* Cabeçalhos de seção da aba SMS: só agrupam visualmente cards que já existiam —
+           nenhum id/estrutura interna de card muda, é puro rótulo entre grupos. */
+        .sms-section-title {
+            display: flex; align-items: center; gap: 0.6rem;
+            margin: 1.75rem 0 0.75rem;
+            font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .sms-section-title:first-child { margin-top: 0; }
+        .sms-section-title i { font-size: 0.8rem; }
+        .sms-section-title .rule { flex: 1 1 auto; height: 1px; background: var(--border); }
+
+        /* Espaço reservado pra funcionalidade sem UI ainda (backend pronto ou parcial).
+           Borda pontilhada + "em breve" deixam claro que não há dado real ali — nunca deve
+           parecer um card de verdade. */
+        .reserved-slot {
+            display: flex; align-items: flex-start; gap: 0.75rem;
+            border: 1px dashed var(--border-light); border-radius: var(--radius);
+            padding: 0.9rem 1.1rem; color: var(--text-dim); font-size: 0.78rem; line-height: 1.5;
+        }
+        .reserved-slot i { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.15rem; }
+        .tag-em-breve {
+            font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--text-muted); background: var(--surface-3); padding: 2px 7px; border-radius: 999px;
+            vertical-align: middle;
+        }
+
         /* Activity Chart */
         .chart-wrap-sm {
             height: 120px;
@@ -1787,15 +1814,40 @@
                 ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
             </div>
 
+            <!-- Reframe da aba (mapeamento aprovado item a item com o Murilo): os cards abaixo
+                 são os MESMOS de antes — nenhum id, classe interna ou comportamento de JS mudou.
+                 O que muda é só o agrupamento visual (.sms-section-title) e a ordem de alguns
+                 blocos, pra virar 4 seções em vez de uma pilha plana de ~10 cards. -->
+
+            <!-- Saúde da coleta. Fica ACIMA de qualquer número porque muda como todos eles devem
+                 ser lidos: se a coleta esteve parada no período, os totais abaixo estão
+                 subestimados e uma queda na tela pode não ter acontecido na vida real.
+                 Rótulo da seção deixa explícito que isto é sobre o pipeline de VENDA/webhook do
+                 Digistore — mora na aba SMS porque a receita SMS depende dele, mas o conteúdo do
+                 alerta nunca fala de envio de mensagem parar, só de venda parar de chegar. -->
+            <div class="sms-section-title"><i class="fas fa-heart-pulse"></i> Coleta de Vendas (Digistore) <span class="rule"></span></div>
+            <div id="smsSaudeColeta"></div>
+
             <!-- Resumo de negócio. Entra ACIMA de tudo e não remove nada: quem já conhece a tela
                  continua com os mesmos cards abaixo, e quem abre pela primeira vez entende sem
                  precisar ler card nenhum. A fonte de cada número aparece ESCRITA, não em tooltip —
                  quem não conhece o sistema não passa o mouse procurando procedência. -->
-            <!-- Saúde da coleta. Fica ACIMA de qualquer número porque muda como todos eles devem
-                 ser lidos: se a coleta esteve parada no período, os totais abaixo estão
-                 subestimados e uma queda na tela pode não ter acontecido na vida real. -->
-            <div id="smsSaudeColeta"></div>
+            <div class="sms-section-title"><i class="fas fa-chart-simple"></i> Resumo do Negócio <span class="rule"></span></div>
             <div id="smsResumoNegocio"></div>
+
+            <!-- Espaço reservado: comissão de afiliado (skill99) por cliente. Backend pronto
+                 (GET /admin/clientes/:id/afiliado-cards) — o formato real de retorno é um
+                 conjunto de ~5 cards (card1..card5 + naoExplicado), não um número só, então a
+                 reserva já é do tamanho de um mini-cluster, não de 1 tile. -->
+            <div class="reserved-slot" style="margin-bottom:1.25rem">
+                <i class="fas fa-handshake"></i>
+                <div>
+                    <strong style="color:var(--text-soft)">Comissão de Afiliado</strong> <span class="tag-em-breve">em breve</span>
+                    <div style="margin-top:2px">Backend já pronto — vai entrar aqui como um conjunto de ~5 cards (visão geral + itens não explicados), ainda sem UI.</div>
+                </div>
+            </div>
+
+            <div class="sms-section-title"><i class="fas fa-sack-dollar"></i> Desempenho no Período <span class="rule"></span></div>
             <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
@@ -1826,83 +1878,15 @@
                 <div id="convSegmentoSmsPorProduto"></div>
             </div>
 
-            <div class="section-block" id="sms-granular-section" style="display:none;">
-                <div class="sms-granular-header">
-                    <div>
-                        <h3>Desempenho por Mensagem de Automação</h3>
-                        <div class="sms-granular-sub" id="sms-granular-subtitle">Receita líquida atribuída via UTM · SMS</div>
-                    </div>
-                    <div class="sms-granular-controls">
-                        <button type="button" class="btn btn-outline" id="autoLinkBtn" onclick="autoLinkSmsCampaigns()" style="font-size:0.72rem; padding:0.4rem 0.8rem" title="Cruza automaticamente cada mensagem com o workflow/mensagem da SlickText pelo utm_campaign dos links — sem digitar ID nenhum."><i class="fas fa-wand-magic-sparkles"></i> Auto-vincular</button>
-                        <div class="period-tabs" id="sms-granular-view">
-                            <button type="button" class="period-btn active" data-view="mensagem">Por Mensagem</button>
-                            <button type="button" class="period-btn" data-view="produto">Por Produto</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="sms-granular-loading" style="display:none;">Carregando...</div>
-                <div id="sms-granular-empty" style="display:none;">Nenhuma venda SMS com rastreio de mensagem neste período.</div>
-
-                <div id="sms-granular-content" style="display:none;">
-                    <div id="sms-filtro-produto"></div>
-                    <div class="summary-strip" id="sms-granular-summary"></div>
-                    <div id="sms-granular-body"></div>
-                    <div id="envios-automacao-block"></div>
-                    <div id="creditos-automacao-block"></div>
-                </div>
-            </div>
-
-            <div class="sms-account-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
-                    </div>
-                    <div class="card-body">
-                        <div class="kpi-grid" id="smsContactKpis">
-                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
-                        </div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
-                    </div>
-                    <div class="card-body">
-                        <div class="kpi-grid" id="smsSendKpis">
-                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="card-header collapsible" id="smsListsHeader" onclick="toggleSmsListsCard()">
-                    <div class="card-title"><i class="fas fa-list"></i> Listas por Produto</div>
-                    <i class="fas fa-chevron-down chevron"></i>
-                </div>
-                <div class="card-body" id="smsListsCardBody" style="padding:0; display:none">
-                    <table class="kit-table" id="smsListsTable">
-                        <thead>
-                            <tr>
-                                <th>Produto</th>
-                                <th>Compradores</th>
-                                <th>Carrinhos Abandonados</th>
-                                <th>Total</th>
-                            </tr>
-                        </thead>
-                        <tbody id="smsListsBody">
-                            <tr><td colspan="4" class="empty-state"><i class="fas fa-sms"></i> Carregando...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
             <!-- Os mesmos três gráficos da Visão Geral, escopados a este canal. Pedido do Nicollas:
                  sem isso, a única leitura possível era a do cliente inteiro, e não dava pra saber
                  se um pico de recuperação veio do SMS ou do email.
                  A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
                  mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
-                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso". -->
+                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso".
+                 Subiram pra dentro de "Desempenho no Período" (antes ficavam no fim da aba) — são
+                 lidos junto com os KPIs de faturamento na mesma passada, não depois da tabela de
+                 automações. -->
             <div class="grid-2">
                 <div class="card" style="margin-bottom:0">
                     <div class="card-header">
@@ -1932,6 +1916,128 @@
                 </div>
                 <div class="card-body">
                     <div style="height:220px; position:relative"><canvas id="chartRefundSms"></canvas></div>
+                </div>
+            </div>
+
+            <div class="sms-section-title"><i class="fas fa-wand-magic-sparkles"></i> Automações de SMS <span class="rule"></span></div>
+            <div class="section-block" id="sms-granular-section" style="display:none;">
+                <div class="sms-granular-header">
+                    <div>
+                        <h3>Desempenho por Mensagem de Automação</h3>
+                        <div class="sms-granular-sub" id="sms-granular-subtitle">Receita líquida atribuída via UTM · SMS</div>
+                    </div>
+                    <div class="sms-granular-controls">
+                        <button type="button" class="btn btn-outline" id="autoLinkBtn" onclick="autoLinkSmsCampaigns()" style="font-size:0.72rem; padding:0.4rem 0.8rem" title="Cruza automaticamente cada mensagem com o workflow/mensagem da SlickText pelo utm_campaign dos links — sem digitar ID nenhum."><i class="fas fa-wand-magic-sparkles"></i> Auto-vincular</button>
+                        <div class="period-tabs" id="sms-granular-view">
+                            <button type="button" class="period-btn active" data-view="mensagem">Por Mensagem</button>
+                            <button type="button" class="period-btn" data-view="produto">Por Produto</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="sms-granular-loading" style="display:none;">Carregando...</div>
+                <div id="sms-granular-empty" style="display:none;">Nenhuma venda SMS com rastreio de mensagem neste período.</div>
+
+                <div id="sms-granular-content" style="display:none;">
+                    <div id="sms-filtro-produto"></div>
+                    <div class="summary-strip" id="sms-granular-summary"></div>
+                    <div id="sms-granular-body"></div>
+                    <div id="envios-automacao-block"></div>
+                    <div id="creditos-automacao-block"></div>
+                </div>
+            </div>
+
+            <!-- Espaço reservado: retrato diário de ENVIOS por automação (só esta metade — ver
+                 aprovação do Murilo em 2026-08-24). automacao_envios já grava timestamp por envio,
+                 então isto sai de um GROUP BY sem tabela nova, por isso entra como reserva já.
+                 "Cliques diário" fica de fora de propósito: não tem armazenamento nenhum hoje (só
+                 consulta ao vivo na SlickText), é uma entrega maior e separada — não faz sentido
+                 travar a parte barata esperando a cara. Colapsado por padrão, mesmo padrão de
+                 "Listas por Produto" (consulta ocasional, não precisa competir por atenção). -->
+            <div class="card">
+                <div class="card-header collapsible" id="smsDailySendsHeader" onclick="toggleReservedCard('smsDailySendsBody','smsDailySendsHeader')">
+                    <div class="card-title"><i class="fas fa-calendar-days"></i> Retrato Diário de Envios por Automação <span class="tag-em-breve">em breve</span></div>
+                    <i class="fas fa-chevron-down chevron"></i>
+                </div>
+                <div class="card-body" id="smsDailySendsBody" style="display:none">
+                    <div class="reserved-slot" style="border:none; border-radius:0">
+                        <i class="fas fa-database"></i>
+                        <div>Histórico dia-a-dia de envios por automação — o dado já existe em <code>automacao_envios</code>, falta a consulta/UI. "Cliques diário" é uma entrega separada: hoje não há armazenamento nenhum, só consulta ao vivo na SlickText.</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sms-section-title"><i class="fas fa-address-book"></i> Conta SMS <span class="rule"></span></div>
+
+            <!-- Espaço reservado: toggle de conta SlickText por cliente. Não existe hoje nenhuma
+                 coluna de ativar/desativar (nem em client_slicktext_accounts, nem específica em
+                 clients.status) — é lacuna de schema, não só de tela, então o controle abaixo é
+                 só reserva visual e fica desabilitado até a migração existir. -->
+            <div class="reserved-slot" style="margin-bottom:1.25rem; align-items:center">
+                <label style="display:inline-flex; align-items:center; opacity:0.6; cursor:not-allowed">
+                    <input type="checkbox" disabled>
+                </label>
+                <div>
+                    <strong style="color:var(--text-soft)">Conta SlickText ativa</strong> <span class="tag-em-breve">em breve</span>
+                    <div style="margin-top:2px">Vai mudar o que "total vitalício/atual" significa em todo card desta seção. Falta a coluna no banco — não é só front.</div>
+                </div>
+            </div>
+
+            <div class="sms-account-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-sms"></i> Contatos SMS <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">total atual da conta</span></div>
+                    </div>
+                    <div class="card-body">
+                        <div class="kpi-grid" id="smsContactKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-paper-plane"></i> Envios e Créditos <span style="font-size:0.75rem; color:var(--text-dim); font-weight:400; text-transform:none; letter-spacing:0; margin-left:0.4rem">plano atual</span></div>
+                    </div>
+                    <div class="card-body">
+                        <div class="kpi-grid" id="smsSendKpis">
+                            <div class="kpi-card"><div class="kpi-value">--</div><div class="kpi-label">Carregando...</div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Espaço reservado: selo de origem do dado (espelho local vs. SlickText ao vivo),
+                 principalmente pro card "Envios e Créditos" acima. O mecanismo mais próximo hoje
+                 (espelho de envios) só está ligado num endpoint de diagnóstico — a rota de
+                 produção (/sms-campaign-sends) ainda lê a SlickText direto — então o selo depende
+                 dessa troca de rota primeiro, não é só CSS. -->
+            <div class="reserved-slot" style="margin-bottom:1.25rem">
+                <i class="fas fa-tag"></i>
+                <div>
+                    <strong style="color:var(--text-soft)">Selo de Origem do Dado</strong> <span class="tag-em-breve">em breve</span>
+                    <div style="margin-top:2px">Espelho local vs. SlickText ao vivo, nos cards de envio/crédito acima. Depende da rota de produção passar a ler o espelho — hoje ela lê a SlickText direto.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header collapsible" id="smsListsHeader" onclick="toggleSmsListsCard()">
+                    <div class="card-title"><i class="fas fa-list"></i> Listas por Produto</div>
+                    <i class="fas fa-chevron-down chevron"></i>
+                </div>
+                <div class="card-body" id="smsListsCardBody" style="padding:0; display:none">
+                    <table class="kit-table" id="smsListsTable">
+                        <thead>
+                            <tr>
+                                <th>Produto</th>
+                                <th>Compradores</th>
+                                <th>Carrinhos Abandonados</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody id="smsListsBody">
+                            <tr><td colspan="4" class="empty-state"><i class="fas fa-sms"></i> Carregando...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div><!-- end tab-content-sms -->
@@ -4735,6 +4841,17 @@
             const open = body.style.display === 'none';
             body.style.display = open ? '' : 'none';
             header.classList.toggle('open', open);
+        }
+
+        // Mesmo padrão do toggleSmsListsCard, generalizado — usado pelos placeholders de
+        // "espaço reservado" colapsáveis (ex: retrato diário de envios por automação) pra
+        // não duplicar a função a cada novo item sem UI ainda.
+        function toggleReservedCard(bodyId, headerId) {
+            const body = document.getElementById(bodyId);
+            const header = document.getElementById(headerId);
+            const open = body.style.display === 'none';
+            body.style.display = open ? '' : 'none';
+            if (header) header.classList.toggle('open', open);
         }
 
         // FILA SEQUENCIAL pros recarregamentos em massa (troca de período, auto-vínculo):
