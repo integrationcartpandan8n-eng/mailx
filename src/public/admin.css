@@ -1,0 +1,138 @@
+/* Shared CSS for the MailX admin pages (dashboard.html, client-detail.html, ...).
+   Extraction scope is deliberately conservative: only rules that were verified
+   BYTE-IDENTICAL across the pages before this file existed. .btn, .card,
+   .kpi-card, badges and table skeletons still diverge in real ways between
+   pages (sizing, DOM order, naming) and are left where they are — unifying
+   those needs an actual reconciliation decision, not just a copy/paste move.
+   Their BASE definitions stay page-local on purpose; this file only ever
+   references them through higher-specificity compound selectors (.dash-grid
+   > .card, .modal-actions .btn, .dash-grid > .kpi-card:hover, ...) scoped to
+   the grid/modal context, which is a different thing from redefining the
+   class and is not shadowed by the page-local base rule either way. */
+
+:root {
+    /* Paleta clareada — mesma em todas as páginas (aprovada pelo Murilo): fundo
+       deixa de ser preto puro e os textos secundários sobem 2-3 tons pra leitura
+       confortável. */
+    --bg: #070a12;
+    --bg-subtle: #0a0e18;
+    --surface: #0d1322;
+    --surface-2: #121a2c;
+    --surface-3: #182238;
+    --border: #223050;
+    --border-light: #2e3f66;
+    --accent: #004de8;
+    --accent-light: #4b8df8;
+    --accent-glow: rgba(0, 77, 232, 0.25);
+    --accent-subtle: rgba(0, 77, 232, 0.1);
+    --text: #f2f5fa;
+    --text-soft: #cdd8ec;
+    --text-dim: #a3b1cc;
+    --text-muted: #6e7f9e;
+    --success: #00d68f;
+    --success-bg: rgba(0, 214, 143, 0.1);
+    --warning: #ffb020;
+    --warning-bg: rgba(255, 176, 32, 0.1);
+    --danger: #ff4d6a;
+    --danger-bg: rgba(255, 77, 106, 0.1);
+    --purple: #8b5cf6;
+    --radius: 14px;
+    --radius-sm: 8px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Escala tipográfica: 17px base em desktop, ~6% maior que o default do browser. */
+html { font-size: 17px; }
+@media (max-width: 768px) { html { font-size: 16px; } }
+
+/* ── Modal ── */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(8px);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2rem;
+    width: 450px;
+    max-width: 90%;
+    animation: fadeUp 0.3s ease;
+}
+.modal h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+.modal p { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; }
+.modal-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+.modal-actions .btn { flex: 1; padding: 0.6rem; font-size: 0.85rem; }
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Period control (period pills + custom date range) ── */
+.period-control { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.75rem; flex-wrap:wrap; }
+.period-control .pc-label { font-size:0.72rem; color:var(--text-dim); }
+.period-pill { border:1px solid rgba(255,255,255,0.08); background:transparent; color:var(--text-dim);
+    border-radius:6px; padding:0.25rem 0.6rem; font-size:0.72rem; cursor:pointer; }
+.period-pill.active { background:rgba(59,130,246,0.15); color:#60a5fa; border-color:rgba(59,130,246,0.35); }
+.period-custom { display:none; gap:0.4rem; align-items:center; }
+.period-custom.open { display:flex; }
+.period-custom input[type=date] { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08);
+    color:#fff; border-radius:6px; padding:0.25rem 0.4rem; font-size:0.72rem; color-scheme:dark; }
+
+/* ── Dashboard grid system ──
+   12 colunas, cards ocupam a linha inteira por padrão (.col-12 nem precisa ser
+   escrito) e só dividem espaço quando explicitamente marcados .col-6/.col-4.
+   Um único breakpoint: abaixo de 1100px tudo cai pro empilhado de sempre — não
+   existe estado intermediário de "2 colunas espremidas" que ninguém testou. */
+.dash-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1.25rem; }
+.dash-grid > * { grid-column: span 12; }
+.dash-grid > .col-6 { grid-column: span 6; }
+.dash-grid > .col-4 { grid-column: span 4; }
+/* .card já traz margin-bottom:1.25rem pro fluxo empilhado normal — dentro do
+   grid isso somaria com o gap (spacing dobrado). O gap já resolve o espaçamento
+   entre itens do grid, então zera aqui; fora do .dash-grid o .card continua com
+   seu margin-bottom de sempre. */
+.dash-grid > .card { margin-bottom: 0; }
+@media (max-width: 1100px) {
+    .dash-grid > .col-6, .dash-grid > .col-4 { grid-column: span 12; }
+}
+/* Cards lado a lado podem ter tooltip (.kpi-tip/data-tip) que ultrapassa a borda
+   do próprio card — sem isso o vizinho na mesma linha desenha por cima e corta o
+   balão visualmente. Mesmo problema (e mesma correção) que .kpi-card já tinha
+   pro card ABAIXO no fluxo empilhado; aqui vale também pro vizinho AO LADO. */
+.dash-grid > .card:hover, .dash-grid > .card:focus-within,
+.dash-grid > .kpi-card:hover, .dash-grid > .kpi-card:focus-within { z-index: 5; }
+
+/* ── Section headers + reserved-space placeholders (usado hoje só na aba SMS do
+   client-detail.html, mas são primitivas genéricas — não amarradas a SMS; o
+   nome de classe ficou de quando só existia ali). ── */
+.sms-section-title {
+    display: flex; align-items: center; gap: 0.6rem;
+    margin: 1.75rem 0 0.75rem;
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-muted);
+}
+.sms-section-title:first-child { margin-top: 0; }
+.dash-grid > .sms-section-title { margin: 0; }
+.sms-section-title i { font-size: 0.8rem; }
+.sms-section-title .rule { flex: 1 1 auto; height: 1px; background: var(--border); }
+
+.reserved-slot {
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    border: 1px dashed var(--border-light); border-radius: var(--radius);
+    padding: 0.9rem 1.1rem; color: var(--text-dim); font-size: 0.78rem; line-height: 1.5;
+}
+.reserved-slot i { color: var(--text-muted); font-size: 0.95rem; margin-top: 0.15rem; }
+.tag-em-breve {
+    font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); background: var(--surface-3); padding: 2px 7px; border-radius: 999px;
+    vertical-align: middle;
+}
