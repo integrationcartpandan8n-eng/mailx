@@ -1,9 +1,14 @@
 /* Shared CSS for the MailX admin pages (dashboard.html, client-detail.html, ...).
    Extraction scope is deliberately conservative: only rules that were verified
-   BYTE-IDENTICAL across the pages before this file existed. .btn, .kpi-card,
-   badges and table skeletons still diverge in real ways between pages (sizing,
-   DOM order, naming) and are left where they are — unifying those needs an
-   actual reconciliation decision, not just a copy/paste move. */
+   BYTE-IDENTICAL across the pages before this file existed. .btn, .card,
+   .kpi-card, badges and table skeletons still diverge in real ways between
+   pages (sizing, DOM order, naming) and are left where they are — unifying
+   those needs an actual reconciliation decision, not just a copy/paste move.
+   Their BASE definitions stay page-local on purpose; this file only ever
+   references them through higher-specificity compound selectors (.dash-grid
+   > .card, .modal-actions .btn, .dash-grid > .kpi-card:hover, ...) scoped to
+   the grid/modal context, which is a different thing from redefining the
+   class and is not shadowed by the page-local base rule either way. */
 
 :root {
     /* Paleta clareada — mesma em todas as páginas (aprovada pelo Murilo): fundo
