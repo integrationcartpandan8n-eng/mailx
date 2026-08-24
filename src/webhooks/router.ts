@@ -4,6 +4,7 @@ import { handleAbandonedCart } from './abandoned-cart.handler';
 import { handleCardDeclined } from './card-declined.handler';
 import { handleDS24Payment } from './digistore24-payment.handler';
 import { handleDS24Refund } from './digistore24-refund.handler';
+import { handleDS24Afiliado } from './digistore24-afiliado.handler';
 import { handleClickBankPayment } from './clickbank-payment.handler';
 import { handleClickBankRefund } from './clickbank-refund.handler';
 import { logger } from '../utils/logger';
@@ -58,6 +59,11 @@ webhookRouter.post('/cartpanda/card-declined', handleCardDeclined);
 // ── Digistore24 IPN webhook routes ──
 webhookRouter.post('/digistore24/payment', handleDS24Payment);
 webhookRouter.post('/digistore24/refund', handleDS24Refund);
+
+// ── Digistore24 Affiliate S2S Postback (conta skill99) ──
+// GET, não POST: é a Digistore substituindo placeholders na URL de postback que a gente definiu,
+// não um payload form-encoded como o IPN do produtor acima.
+webhookRouter.get('/digistore24-afiliado/:token', handleDS24Afiliado);
 
 // ── ClickBank INS webhook routes ──
 webhookRouter.post('/clickbank/payment', handleClickBankPayment);

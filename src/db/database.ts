@@ -506,6 +506,61 @@ export async function initDatabase(): Promise<void> {
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_automacao_sync_estado_unico
           ON automacao_sync_estado (client_id, COALESCE(st_account_id, 0), workflow_id, node_id);
+
+        -- COMISSÃO DE AFILIADO (skill99) POR CLIENTE
+        --
+        -- Card "quanto a MailX ganhou NESTE cliente" que o Nicollas pediu, dentro da mesma tela
+        -- que ele já usa por cliente -- não é um total global solto. A Digistore24 não tem API de
+        -- leitura pro lado de afiliado (confirmado com o suporte deles) -- só S2S Postback, que é
+        -- ELES empurrando um evento por GET a cada payment/refund/chargeback da conta skill99, pra
+        -- uma URL com um token secreto nosso (sem assinatura -- não existe sha_sign do lado do
+        -- afiliado, só do lado de vendedor). Grava-primeiro-processa-depois, mesmo espírito do
+        -- handler de webhook do produtor: um erro nosso não pode fazer a Digistore desistir de
+        -- reenviar (e mais grave ainda aqui, já que não existe backfill automático -- só reenvio
+        -- manual pelo suporte deles se pedirmos a tempo).
+        --
+        -- merchant_id vem em TODO evento (é o vendor ID da conta de produtor do cliente) -- é o que
+        -- liga esse evento a um cliente nosso, via clients.digistore24_merchant_id (preenchido
+        -- manualmente uma vez por cliente, mesmo padrão do sms_campaign_map). O cruzamento é feito
+        -- NA LEITURA, nunca gravado aqui -- um cliente mapeado depois enxerga na hora todo o
+        -- histórico que já tinha chegado, sem precisar reprocessar nada.
+        CREATE TABLE IF NOT EXISTS afiliado_eventos (
+          id BIGSERIAL PRIMARY KEY,
+          transaction_id VARCHAR(64) NOT NULL,
+          order_id VARCHAR(64) NOT NULL,
+          transaction_type VARCHAR(20) NOT NULL,
+          amount_affiliate NUMERIC(12,2),
+          amount_brutto NUMERIC(12,2),
+          amount_netto NUMERIC(12,2),
+          currency VARCHAR(10),
+          product_id VARCHAR(50),
+          product_name TEXT,
+          merchant_id VARCHAR(50),
+          merchant_name TEXT,
+          affiliate_name VARCHAR(100),
+          billing_status VARCHAR(30),
+          order_type VARCHAR(30),
+          is_test BOOLEAN NOT NULL DEFAULT FALSE,
+          evento_em TIMESTAMP,
+          criado_em TIMESTAMP DEFAULT NOW()
+        );
+        -- Dedup: a Digistore reenvia o MESMO transaction_id se a nossa resposta não vier 200 a
+        -- tempo -- sem alvo explícito (ver comentário de idx_janela_unica em janelas_sem_coleta)
+        -- pra nunca travar o INSERT se por algum motivo este índice não existir.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_afiliado_eventos_unico
+          ON afiliado_eventos (transaction_id);
+        -- Leitura dos cards 1/2/5 (soma por tipo/período) e do cruzamento de order_id pros cards 3/4.
+        CREATE INDEX IF NOT EXISTS idx_afiliado_eventos_merchant_periodo
+          ON afiliado_eventos (merchant_id, transaction_type, evento_em)
+          INCLUDE (amount_affiliate, amount_brutto, order_id, is_test);
+        CREATE INDEX IF NOT EXISTS idx_afiliado_eventos_order
+          ON afiliado_eventos (order_id, transaction_type, evento_em);
+
+        -- Vendor ID da conta de produtor de CADA cliente na Digistore24 -- é o campo merchant_id
+        -- que chega em afiliado_eventos. Nullable: nem todo cliente vende pela Digistore24, e
+        -- mesmo quem vende pode não ter sido mapeado ainda (a tela mostra "sem vínculo
+        -- configurado" nesse caso, nunca um número inventado).
+        ALTER TABLE clients ADD COLUMN IF NOT EXISTS digistore24_merchant_id VARCHAR(50);
       `);
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
