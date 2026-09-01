@@ -17,6 +17,7 @@
  * gravado na primeira janela em que der, e as verificações seguintes não fazem nada.
  */
 import { query } from '../db/database';
+import { env } from '../config/env';
 import { SlickTextClient } from '../services/slicktext';
 import { logger } from '../utils/logger';
 
@@ -53,26 +54,78 @@ async function contasComSlickText(): Promise<ContaSt[]> {
 export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinham: number; falhas: number }> {
   const resultado = { gravadas: 0, jaTinham: 0, falhas: 0 };
 
-  const listas = await query<{ client_id: number; list_id: string }>(
+  // TODAS as listas de TODAS as contas, não só as vinculadas a um produto.
+  //
+  // Antes o retrato só cobria lista vinculada, e isso criou um ponto cego que custou caro: em
+  // 10/08/2026 a lista de compradores do NeuroMind apareceu congelada em 19.706 por 11 dias. A
+  // causa era que o fluxo tinha migrado para outra conta da SlickText, onde existe uma lista
+  // homônima com 20.095 contatos — que o painel nunca olhou porque ninguém a vinculou.
+  //
+  // Ou seja: exatamente a lista que responderia "qual está viva?" era a que não tinha retrato. E
+  // sem série histórica não há como decidir por medição — só por chute pelo tamanho, que é o que
+  // esta função existe para evitar. Contar lista não vinculada é barato (uma requisição por lista,
+  // uma vez por dia) e é o que permite descobrir a migração sozinho na próxima vez.
+  const vinculadas = await query<{ client_id: number; list_id: string }>(
     `SELECT DISTINCT k.client_id, x.list_id
      FROM kits k
      CROSS JOIN LATERAL (VALUES (k.st_list_compra_id), (k.st_list_abandono_id)) AS x(list_id)
      JOIN clients c ON c.id = k.client_id
      WHERE k.enabled = true AND x.list_id IS NOT NULL AND c.status <> 'paused'`
   );
+
+  // O inventário vem da própria SlickText, conta por conta. Falha em uma conta não impede as
+  // outras: metade dos retratos é melhor que nenhum, e a falha aparece no contador.
+  const contas = await contasComSlickText();
+  const inventario: { client_id: number; list_id: string }[] = [];
+  // Dono conhecido de cada lista. Listar já diz em qual conta a lista está, e isso dispensa
+  // perguntar o tamanho dela nas outras contas do cliente — com três contas, sondar todas seria
+  // três vezes mais requisição para dois erros esperados e uma resposta.
+  const contaDaLista = new Map<string, number | null>();
+  // Nome por lista, para o retrato dizer o que é sem precisar de outra chamada depois.
+  const nomeDaLista = new Map<string, string>();
+  for (const conta of contas) {
+    try {
+      const st = new SlickTextClient(conta.token, conta.brandId);
+      for (const l of await st.getLists()) {
+        const id = String(l.contact_list_id);
+        inventario.push({ client_id: conta.clientId, list_id: id });
+        const chave = `${conta.clientId}:${id}`;
+        if (!contaDaLista.has(chave)) contaDaLista.set(chave, conta.accountId);
+        if (l.name && !nomeDaLista.has(chave)) nomeDaLista.set(chave, String(l.name).slice(0, 255));
+      }
+    } catch (err: any) {
+      logger.warn(CTX, `Não consegui listar as listas da conta ${conta.brandId}: ${err.message}`);
+      resultado.falhas++;
+    }
+  }
+
+  // Dedup por cliente+lista, e NÃO por cliente+conta+lista: quem lê os retratos consulta só
+  // client_id e list_id (ver leadsPorPeriodoViaSnapshots), então gravar a mesma lista duas vezes
+  // sob contas diferentes deixaria a leitura escolhendo uma das duas por ordem de data.
+  const vistas = new Set<string>();
+  const listas = [...vinculadas, ...inventario].filter(l => {
+    const k = `${l.client_id}:${l.list_id}`;
+    if (vistas.has(k)) return false;
+    vistas.add(k);
+    return true;
+  });
   if (listas.length === 0) return resultado;
 
   // O que já tem retrato de hoje sai da fila antes de qualquer chamada externa: numa segunda
   // passada do dia isso zera o trabalho e não gasta uma requisição sequer.
   const jaGravadas = await query<{ client_id: number; list_id: string }>(
-    `SELECT DISTINCT client_id, list_id FROM list_contact_snapshots WHERE snapshot_date = CURRENT_DATE`
+    // Dia LOCAL (fuso do negócio), não CURRENT_DATE: CURRENT_DATE é a data em UTC, e em UTC o dia
+    // vira às 21:00 de Brasília — o retrato seria gravado no fim da tarde do dia anterior daqui,
+    // carimbado com a data de amanhã. Com o dia local, a gravação cai logo após a meia-noite de
+    // Brasília, que é o que faz retrato(D) significar "estado no começo do dia D".
+    `SELECT DISTINCT client_id, list_id FROM list_contact_snapshots
+      WHERE snapshot_date = (NOW() AT TIME ZONE '${env.APP_TZ}')::date`
   );
   const jaTem = new Set(jaGravadas.map(r => `${r.client_id}:${r.list_id}`));
   const pendentes = listas.filter(l => !jaTem.has(`${l.client_id}:${l.list_id}`));
   resultado.jaTinham = listas.length - pendentes.length;
   if (pendentes.length === 0) return resultado;
 
-  const contas = await contasComSlickText();
   const porCliente = new Map<number, ContaSt[]>();
   for (const c of contas) {
     const arr = porCliente.get(c.clientId) ?? [];
@@ -81,15 +134,26 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
   }
 
   for (const lista of pendentes) {
-    const doCliente = porCliente.get(lista.client_id);
-    if (!doCliente || doCliente.length === 0) continue;
+    const todasDoCliente = porCliente.get(lista.client_id);
+    if (!todasDoCliente || todasDoCliente.length === 0) continue;
+
+    // Se o inventário disse de qual conta a lista é, pergunta só a ela. Só cai na sondagem de
+    // todas quando a lista vem de kit e não apareceu em listagem nenhuma — caso em que não se
+    // sabe o dono e não perguntar significaria perder o retrato do dia.
+    const chave = `${lista.client_id}:${lista.list_id}`;
+    const dono = contaDaLista.has(chave)
+      ? todasDoCliente.filter(c => c.accountId === contaDaLista.get(chave))
+      : [];
+    const doCliente = dono.length > 0 ? dono : todasDoCliente;
 
     let melhor = { count: 0, accountId: null as number | null };
     for (const conta of doCliente) {
       try {
         const st = new SlickTextClient(conta.token, conta.brandId);
         const count = await st.getListContactCount(parseInt(lista.list_id));
-        if (count > melhor.count) melhor = { count, accountId: conta.accountId };
+        // null = falha real (não "esta conta não tem essa lista", que já é o catch abaixo) —
+        // não pode virar candidato a "melhor" nem disputar com uma conta que respondeu de verdade.
+        if (count != null && count > melhor.count) melhor = { count, accountId: conta.accountId };
       } catch {
         // Conta que não tem essa lista responde erro — esperado, não é falha do job.
       }
@@ -105,11 +169,14 @@ export async function gravarRetratosDeHoje(): Promise<{ gravadas: number; jaTinh
 
     try {
       await query(
-        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count)
-         VALUES ($1, $2, $3, CURRENT_DATE, $4)
+        // COALESCE no nome ao atualizar: se a segunda passada do dia não souber o nome (lista de
+        // kit que não apareceu em listagem nenhuma), não apaga o que a primeira já tinha gravado.
+        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count, list_name)
+         VALUES ($1, $2, $3, (NOW() AT TIME ZONE '${env.APP_TZ}')::date, $4, $5)
          ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
-         DO UPDATE SET contact_count = EXCLUDED.contact_count`,
-        [lista.client_id, melhor.accountId, lista.list_id, melhor.count]
+         DO UPDATE SET contact_count = EXCLUDED.contact_count,
+                       list_name = COALESCE(EXCLUDED.list_name, list_contact_snapshots.list_name)`,
+        [lista.client_id, melhor.accountId, lista.list_id, melhor.count, nomeDaLista.get(chave) ?? null]
       );
       resultado.gravadas++;
     } catch (err: any) {

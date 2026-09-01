@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { logger } from '../utils/logger';
+import { env } from '../config/env';
 
 const CTX = 'SlickText';
 
@@ -24,6 +25,37 @@ export interface SlickTextAnalytics {
   messages?: any;
   credits?: any;
   campaigns?: any;
+}
+
+export interface MensagemDeNode {
+  messageId: string | null;   // `_id`, com fallback pra `id`
+  created: string | null;     // já normalizado ("YYYY-MM-DD HH:MM:SS")
+  createdRaw: string | null;  // string original, pra investigar fuso depois sem rebuscar
+  credits: number | null;     // message_credits quando for número; null quando ausente
+  status: string | null;
+  direction: string | null;
+}
+
+/**
+ * `created` da SlickText → "YYYY-MM-DD HH:MM:SS" (ou null se não reconhecer o formato).
+ *
+ * NÃO devolve Date de propósito. O espelho local (automacao_envios.enviado_em) é TIMESTAMP
+ * sem fuso, e passar um Date pro driver do pg converteria pelo fuso do processo — mangling
+ * silencioso. Passando a string, o Postgres grava literalmente o que a SlickText disse, que é
+ * a única forma de o espelho concordar com a comparação de TEXTO que countWorkflowNodeMessages
+ * já faz hoje (created comparado contra "YYYY-MM-DD 00:00:00"/"YYYY-MM-DD 23:59:59").
+ *
+ * Estrito de propósito: formato inesperado devolve null e a linha NÃO é gravada (o node vai
+ * pra 'degradado' e a leitura cai no ao vivo). Gravar uma data adivinhada seria pior — viraria
+ * contagem errada com cara de contagem certa.
+ */
+export function normalizarCreated(created: unknown): string | null {
+  if (typeof created !== 'string') return null;
+  // Âncora nas duas pontas (^...$): um sufixo depois dos segundos (fração, "Z", offset de fuso)
+  // faz isso devolver null em vez de truncar em silêncio — vira "formato inesperado" no chamador
+  // (node degradado, leitura cai pro ao vivo) em vez de uma divergência de fronteira que ninguém vê.
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(created.trim());
+  return m ? `${m[1]} ${m[2]}` : null;
 }
 
 /**
@@ -244,16 +276,23 @@ export class SlickTextClient {
   }
 
   /**
-   * Get contact count for a list.
+   * Contagem de contatos de uma lista. Retorna null (não 0) quando a falha NÃO é o 404 esperado
+   * de "esta lista pertence a outra conta" — 0 de verdade e "não consegui checar" são coisas
+   * diferentes, e até aqui as duas viravam 0 do mesmo jeito. Achado ao auditar a aba SMS: um
+   * timeout ou token vencido bem na hora de alguém abrir o painel fazia uma lista de 30 mil
+   * contatos aparecer como "0" — indistinguível de a lista estar realmente vazia. Quem chama
+   * decide o que fazer com null (normalmente: não deixar entrar como se fosse zero real).
    */
-  async getListContactCount(listId: number): Promise<number> {
+  async getListContactCount(listId: number): Promise<number | null> {
     try {
       const res = await this.http.get(`/lists/${listId}/contacts/count`);
       // Endpoint returns a bare number (e.g. 228), not an object
       if (typeof res.data === 'number') return res.data;
       return res.data?.count ?? res.data?.total ?? 0;
-    } catch {
-      return 0;
+    } catch (err: any) {
+      if (err.response?.status === 404) return 0; // lista não existe nesta conta — esperado
+      logger.warn(CTX, `getListContactCount falhou pra lista ${listId} (não é 404 — pode ser falha real, não lista vazia): ${err.message}`);
+      return null;
     }
   }
 
@@ -470,6 +509,127 @@ export class SlickTextClient {
   }
 
   /**
+   * Um LOTE de mensagens de (workflow, node) a partir de um offset, na ordem em que a API
+   * devolve (crescente por `created`, confirmado pela sonda de ordem/estabilidade).
+   *
+   * limit=100 e não 1 de propósito: o custo de /messages?offset=N é dominado pelo
+   * escaneamento dos N registros, não pelo tamanho da resposta (achado medindo produção —
+   * ver comentário de automacao-envios-sync.ts). Uma requisição de 100 itens paga esse
+   * escaneamento UMA vez pra 100 linhas; a busca binária de countWorkflowNodeMessages paga
+   * ~2×log2(N) vezes pra UMA linha cada. É essa razão que torna a sincronização incremental
+   * viável onde a contagem ao vivo estoura o timeout.
+   */
+  async lerMensagensDoNode(
+    workflowId: number,
+    nodeId: number,
+    offset: number,
+    limit = 100,
+    opts: { timeoutMs?: number } = {}
+  ): Promise<MensagemDeNode[]> {
+    const itens = await this.rawMessages(
+      { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId, offset, limit },
+      opts
+    );
+    return itens.map((m: any) => ({
+      messageId: m?._id != null ? String(m._id) : (m?.id != null ? String(m.id) : null),
+      created: normalizarCreated(m?.created),
+      createdRaw: typeof m?.created === 'string' ? m.created.slice(0, 40) : null,
+      credits: typeof m?.message_credits === 'number' ? m.message_credits : null,
+      status: typeof m?.status === 'string' ? m.status.slice(0, 32) : null,
+      direction: typeof m?.direction === 'string' ? m.direction.slice(0, 16) : null,
+    }));
+  }
+
+  /**
+   * Acha um offset PERTO DA PONTA de (workflow, node), pra semear o espelho local de envios
+   * (ver automacao-envios-sync.ts). "Perto" e não "exato" de propósito, e SEMPRE por baixo.
+   *
+   * Errar pra menos custa só espelhar um pouco de história a mais (ganho, não perda) e
+   * algumas requisições de 100 itens; errar pra mais deixaria o node espelhando NADA até a
+   * lista alcançar o offset, anunciando uma cobertura que não existe de verdade. Por isso o
+   * retorno é `loCheio` (o maior offset em que um item foi CONFIRMADO), nunca o primeiro
+   * vazio: numa automação de mais de 100 mil mensagens, convergir no vazio exato custaria
+   * dezenas de sondas em offsets onde uma única requisição já derrubou a rota em produção
+   * (502/504 medidos — ver probe-ordem-mensagens em router.ts). Aqui o galope pode parar no
+   * meio do caminho (exato:false) e a sincronização incremental completa o resto ao longo dos
+   * ticks seguintes, retomando de `retomarDe` em vez de recomeçar do zero.
+   */
+  async descobrirPontaDeMensagens(
+    workflowId: number,
+    nodeId: number,
+    opts: {
+      retomarDe?: number;
+      orcamentoMs?: number;
+      maxRequisicoes?: number;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<{
+    loCheio: number | null;
+    hiVazio: number | null;
+    exato: boolean;
+    requisicoes: number;
+    ms: number;
+  }> {
+    const inicio = Date.now();
+    const orcamentoMs = opts.orcamentoMs ?? 60_000;
+    const maxRequisicoes = opts.maxRequisicoes ?? 12;
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+    const baseParams = { source: 'Workflow', source_id: workflowId, _sub_source_id: nodeId };
+    let requisicoes = 0;
+
+    const temItem = async (offset: number): Promise<boolean> => {
+      requisicoes++;
+      const itens = await this.rawMessages({ ...baseParams, offset, limit: 1 }, { timeoutMs }).catch(() => []);
+      return itens.length > 0;
+    };
+    const dentroDoOrcamento = () => Date.now() - inicio < orcamentoMs && requisicoes < maxRequisicoes;
+
+    const offsetInicial = Math.max(0, opts.retomarDe ?? 0);
+    const primeiraChecagem = await temItem(offsetInicial);
+
+    let loCheio: number | null;
+    let hiVazio: number | null;
+    if (primeiraChecagem) {
+      let base = offsetInicial;
+      let vazioEm: number | null = null;
+      let passo = Math.max(1000, offsetInicial || 1000);
+      while (vazioEm === null && dentroDoOrcamento()) {
+        const candidato = base + passo;
+        if (await temItem(candidato)) { base = candidato; passo *= 2; } else { vazioEm = candidato; }
+      }
+      loCheio = base;
+      hiVazio = vazioEm;
+    } else if (offsetInicial === 0) {
+      loCheio = null; // node sem nenhuma mensagem
+      hiVazio = 0;
+    } else {
+      // retomando um galope anterior e o offset já não tem item — a lista pode ter encolhido,
+      // ou a semente anterior avançou demais. Devolve sem convicção; quem chama decide.
+      loCheio = null;
+      hiVazio = offsetInicial;
+    }
+
+    if (hiVazio !== null && loCheio !== null) {
+      let lo = loCheio;
+      let hi = hiVazio;
+      while (lo < hi - 1 && dentroDoOrcamento()) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (await temItem(mid)) lo = mid; else hi = mid;
+      }
+      loCheio = lo;
+      hiVazio = (hi === lo + 1) ? hi : null; // só "exato" se a busca convergiu de vez
+    }
+
+    return {
+      loCheio,
+      hiVazio,
+      exato: hiVazio !== null && loCheio !== null && hiVazio === loCheio + 1,
+      requisicoes,
+      ms: Date.now() - inicio,
+    };
+  }
+
+  /**
    * Message credit analytics — endpoint /analytics/message/credits returns 404.
    * Use getBrandUsage() instead for credit totals.
    */
@@ -490,18 +650,51 @@ export class SlickTextClient {
   /**
    * Lista os workflows cadastrados na marca (id + nome) — confirmado que é onde as
    * automações do MailX (carrinho abandonado, upsell) realmente vivem, não em Campaigns.
-   * Endpoint/formato ainda best-effort (por analogia a /campaigns) — não confirmado
-   * contra a API real. Se retornar 404, o dropdown do dashboard cai pro modo manual.
+   * Se retornar 404, o dropdown do dashboard cai pro modo manual.
+   *
+   * Pagina com offset+limit, igual getAllLinks() logo abaixo — antes fazia UMA chamada sem
+   * offset/limit, com uma nota admitindo que o formato nunca tinha sido confirmado contra a API
+   * real. CONFIRMADO via sonda em produção (probe-workflows-paginacao, client 4, contas de
+   * 5–7 workflows): a resposta traz `pagingData.hasMore` no MESMO formato que /links usa (mesmo
+   * nome de campo), e pedir offset além do fim da lista devolve vazio em vez de erro — os dois
+   * sinais de que é a mesma convenção de paginação, offset/limit funcionando de verdade. As contas
+   * testadas tinham poucos workflows (hasMore sempre false, nunca provou uma SEGUNDA página real),
+   * mas o risco de subcontagem silenciosa numa conta maior é real o bastante pra corrigir antes de
+   * alguém esbarrar nele: sem isso, a conta que ultrapassar o tamanho da página perderia o resto
+   * das automações sem nenhum aviso, e o total de envios/automação (e Créditos por Automação, que
+   * depende dele) ficaria sistematicamente subcontado sem ninguém saber.
    */
-  async getWorkflows(): Promise<{ workflow_id: number; name: string; status?: string; created?: string }[]> {
-    const res = await this.http.get('/workflows');
-    const raw = res.data?.data || res.data || [];
-    return raw.map((w: any) => ({
+  async getWorkflows(maxPages = 40): Promise<{ workflow_id: number; name: string; status?: string; created?: string }[]> {
+    const all: any[] = [];
+    let offset = 0;
+    const limit = 100;
+    for (let page = 0; page < maxPages; page++) {
+      const res = await this.http.get('/workflows', { params: { offset, limit } });
+      const raw: any[] = res.data?.data || res.data || [];
+      if (raw.length === 0) break;
+      all.push(...raw);
+      if (res.data?.pagingData?.hasMore === false) break;
+      if (raw.length < limit) break;
+      offset += limit;
+    }
+    return all.map((w: any) => ({
       workflow_id: w.workflow_id ?? w.id,
       name: w.name,
       status: w.status,
       created: w.created,
     }));
+  }
+
+  /**
+   * Resposta CRUA de /workflows, sem desembrulhar — pra sondar se existe metadado de paginação
+   * (pagingData, como em /links) que getWorkflows() estaria ignorando. getAllLinks() pagina
+   * explicitamente (offset+limit) porque /links confirmadamente pagina; getWorkflows() nunca
+   * teve essa confirmação (ver comentário dela) — se /workflows seguir a mesma convenção da
+   * API, contas com muitas automações teriam o total de envios subcontado em silêncio.
+   */
+  async rawWorkflowsResponse(params: Record<string, any> = {}): Promise<any> {
+    const res = await this.http.get('/workflows', { params });
+    return res.data;
   }
 
   /**
@@ -526,12 +719,13 @@ export class SlickTextClient {
    * {totals:{total,average},groups:[...]} — nada de messages/clicks/links (confirmado via
    * probe em produção com token; a resposta rica fica em getWorkflowAnalyticsById).
    *
-   * timezone default UTC (aqui e nos demais métodos de analytics com período): as janelas de
-   * data do dashboard vêm do CURRENT_DATE do Postgres (UTC) e as vendas são filtradas por
-   * created_at em UTC — a SlickText precisa interpretar start/end no MESMO fuso, senão a razão
-   * envios/venda compara janelas diferentes (o painel deles usa America/New_York, nós não).
+   * timezone = env.APP_TZ (Brasília) aqui e nos demais métodos de analytics com período: o dia do
+   * painel começa e termina nesse fuso dos DOIS lados da razão — o corte das vendas (nosso banco)
+   * e a janela pedida aqui. Pedir UTC de um lado e cortar o dia em Brasília do outro faria
+   * envios/venda comparar janelas diferentes, que é a classe de erro mais recorrente nesta base.
+   * Era UTC antes; trocado junto com o corte de dia das vendas, nunca só de um lado.
    */
-  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getWorkflowAnalytics(workflowId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/workflows', {
       params: { _workflow_id: workflowId, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -590,7 +784,7 @@ export class SlickTextClient {
    * Como cada link tem a URL com o utm_campaign, dá pra somar cliques do período por
    * mensagem casando os nomes dos links (via getLinks) com os groups daqui.
    */
-  async getLinkClicksGrouped(workflowId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getLinkClicksGrouped(workflowId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/links/clicks', {
       params: { link_source: 'Workflow', _link_source_id: workflowId, group: '_link_id', start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -608,7 +802,7 @@ export class SlickTextClient {
    * {totals:{total,average},groups:[{name:'Messages',period:{...}}]}.
    * start/end "YYYY-MM-DD HH:mm:ss".
    */
-  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getMessageAnalyticsForSource(source: 'Workflow' | 'Campaign', sourceId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get('/analytics/messages', {
       params: { source, _source_id: sourceId, attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -625,7 +819,7 @@ export class SlickTextClient {
    * mensagens que temos vinculadas: sem ele, a soma dos vínculos não tem com o que ser comparada.
    * Sem _source_id — o filtro é só `source=Workflow`.
    */
-  async getWorkflowMessagesTotalForBrand(start: string, end: string, timezone = 'UTC'): Promise<number | null> {
+  async getWorkflowMessagesTotalForBrand(start: string, end: string, timezone = env.APP_TZ): Promise<number | null> {
     const res = await this.http.get('/analytics/messages', {
       params: { source: 'Workflow', attempted: 1, start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });
@@ -639,8 +833,11 @@ export class SlickTextClient {
    * mensagem). Se o endpoint aceitar filtro por link, dá pra contar envios das mensagens que usam
    * link MANUAL, que é o único caso sem contagem hoje — e sem precisar do node.
    */
-  async rawMessages(params: Record<string, any>): Promise<any[]> {
-    const res = await this.http.get('/messages', { params });
+  async rawMessages(params: Record<string, any>, opts: { timeoutMs?: number } = {}): Promise<any[]> {
+    const res = await this.http.get('/messages', {
+      params,
+      ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}),
+    });
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 
@@ -655,6 +852,20 @@ export class SlickTextClient {
     });
     const items = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     return items[0] ?? null;
+  }
+
+  /**
+   * Registros crus de /lists/{id}/contacts — pra descobrir se a SlickText devolve, por contato, a
+   * data em que ele ENTROU NA LISTA (não a data de criação do contato em geral, que pode ser bem
+   * anterior). Se esse campo existir, dá pra contar leads exatos de qualquer período sem depender
+   * de retrato diário — inclusive retroativo, cobrindo período de antes de o retrato existir.
+   *
+   * offset/limit livres de propósito: primeira chamada é só pra ver os NOMES dos campos; depois
+   * o diagnóstico decide se vale paginar a lista inteira.
+   */
+  async rawListContacts(listId: number, params: Record<string, any> = {}): Promise<any[]> {
+    const res = await this.http.get(`/lists/${listId}/contacts`, { params });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 
   /**
@@ -843,7 +1054,7 @@ export class SlickTextClient {
    *
    * start/end no formato "YYYY-MM-DD HH:mm:ss".
    */
-  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = 'UTC'): Promise<any> {
+  async getWorkflowNodeAnalytics(workflowId: number, nodeId: number, start: string, end: string, timezone = env.APP_TZ): Promise<any> {
     const res = await this.http.get(`/analytics/workflows/${workflowId}/nodes/${nodeId}`, {
       params: { start, end, compare: '', frequency: '', timezone, noCache: 0 },
     });

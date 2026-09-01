@@ -12,6 +12,7 @@ import { METRICS_ONLY } from '../config/env';
 import { lookupStore, extractDS24Identifier, resolveDS24StoreBySignature } from './store-lookup';
 import { upsertProduct, extractDS24ProductId } from './product-upsert';
 import { extractDS24Metrics } from './metrics-extract';
+import { marcarEnriquecimento } from './webhook-status';
 
 const CTX = 'Webhook:DS24:Refund';
 
@@ -49,21 +50,26 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
     }
 
     const data = normalizePayload(params);
-    const isChargeback = params.event === 'chargeback';
+
+    // isChargeback vem de payload.transaction_type, não de params.event. Achado ao auditar: a
+    // Digistore manda o evento como "on_refund"/"on_payment" (prefixo "on_"), então
+    // `params.event === 'chargeback'` nunca batia — os únicos 5 que caíam certo eram de um
+    // formato de IPN mais antigo. Resultado medido em produção: 132 chargebacks gravados como
+    // 'order.refunded'. transaction_type é o MESMO campo que a tela de Transactions da Digistore
+    // usa (confirmado contra o CSV do afiliado) — mais confiável que adivinhar pelo nome do
+    // evento. Mantém o fallback pelo event antigo pra payload sem transaction_type (medido: ~1%
+    // do volume, IPN de formato legado).
+    const tipoPayload = String(params.transaction_type || '').toLowerCase();
+    const isChargeback = tipoPayload
+      ? tipoPayload === 'chargeback'
+      : params.event === 'chargeback';
     const eventType = isChargeback ? 'order.chargeback' : 'order.refunded';
-
-    if (!data.email) {
-      res.status(400).json({ error: 'Missing email' });
-      return;
-    }
-
     const externalId = extractDS24ProductId(params);
 
-    logger.info(CTX, `Processing DS24 ${eventType} for ${data.email}`, {
-      orderId: data.orderId,
-      client: store.clientId,
-    });
-
+    // GRAVA PRIMEIRO, PROCESSA DEPOIS — mesma razão do handler de pagamento (ver o comentário
+    // grande lá): e-mail ausente ou ActiveCampaign fora do ar não podem fazer um reembolso
+    // desaparecer. Um 4xx/5xx aqui é a Digistore reenviando e, se persistir, desligando a
+    // conexão de IPN inteira — foi o que explicou os 19 dias sem NENHUM evento.
     let logId: number | null = null;
     if (isDatabaseReady()) {
       try {
@@ -88,54 +94,64 @@ export async function handleDS24Refund(req: Request, res: Response, _next: NextF
       }
     }
 
-    const kit = await upsertProduct(store.clientId, 'digistore24', externalId, data.productName);
+    // Responde OK agora — o dado já está seguro. O resto é enriquecimento (tag no
+    // ActiveCampaign); falha nele não pode fazer a Digistore achar que perdeu o evento.
+    res.status(200).send('OK');
 
-    if (!METRICS_ONLY) {
-      if (store.acApiUrl && store.acApiKey) {
-        const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
-        const contact = await ac.syncContact({ email: data.email });
+    if (!data.email) {
+      logger.warn(CTX, `No email found in DS24 ${eventType} — stored, enrichment skipped`, { orderId: data.orderId });
+      await marcarEnriquecimento(logId, 'skipped', 'sem email no payload');
+      return;
+    }
 
-        if (kit?.enabled) {
-          const tagName = isChargeback
-            ? `[${kit.name}] Chargeback`
-            : `[${kit.name}] Reembolso`;
+    logger.info(CTX, `Processing DS24 ${eventType} for ${data.email}`, {
+      orderId: data.orderId, client: store.clientId,
+    });
 
-          const storedTagId = isChargeback ? kit.ac_tag_chargeback_id : kit.ac_tag_reembolso_id;
+    try {
+      const kit = await upsertProduct(store.clientId, 'digistore24', externalId, data.productName);
 
-          if (storedTagId) {
-            await ac.addTagToContact(contact.id, storedTagId);
+      if (!METRICS_ONLY) {
+        if (store.acApiUrl && store.acApiKey) {
+          const ac = new ActiveCampaignClient(store.acApiUrl, store.acApiKey);
+          const contact = await ac.syncContact({ email: data.email });
+
+          if (kit?.enabled) {
+            const tagName = isChargeback
+              ? `[${kit.name}] Chargeback`
+              : `[${kit.name}] Reembolso`;
+
+            const storedTagId = isChargeback ? kit.ac_tag_chargeback_id : kit.ac_tag_reembolso_id;
+
+            if (storedTagId) {
+              await ac.addTagToContact(contact.id, storedTagId);
+            } else {
+              const tag = await ac.findTagByName(tagName);
+              if (tag) await ac.addTagToContact(contact.id, tag.id);
+              else logger.warn(CTX, `Tag not found: ${tagName}`);
+            }
           } else {
-            const tag = await ac.findTagByName(tagName);
-            if (tag) await ac.addTagToContact(contact.id, tag.id);
-            else logger.warn(CTX, `Tag not found: ${tagName}`);
+            logger.info(CTX, `Product "${data.productName}" not enabled — contact synced only`);
           }
         } else {
-          logger.info(CTX, `Product "${data.productName}" not enabled — contact synced only`);
+          logger.warn(CTX, 'ActiveCampaign credentials not configured — stored, enrichment skipped');
         }
+      } else {
+        logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
       }
-    } else {
-      logger.info(CTX, 'METRICS_ONLY — skipping AC/SlickText side effects');
-    }
 
-    if (isDatabaseReady() && logId) {
-      try {
-        await query(`UPDATE webhook_logs SET status = 'processed', processed_at = NOW() WHERE id = $1`, [logId]);
-      } catch (_) {}
+      await marcarEnriquecimento(logId, 'processed', null);
+      logger.info(CTX, `✅ DS24 ${eventType} processed for ${data.email}`);
+    } catch (enrichErr: any) {
+      // O reembolso já está gravado (logId). Isso aqui é "a tag não foi posta", não "o dinheiro
+      // sumiu" — grava o motivo NA LINHA CERTA e segue, sem 5xx pra Digistore reagir.
+      logger.error(CTX, 'Enrichment failed (refund already stored)', enrichErr.message);
+      await marcarEnriquecimento(logId, 'failed', enrichErr.message);
     }
-
-    logger.info(CTX, `✅ DS24 ${eventType} processed for ${data.email}`);
-    res.status(200).send('OK');
   } catch (error: any) {
+    // Só cai aqui erro ANTES da gravação (resolução de loja, assinatura) — response ainda não
+    // foi enviada. Isso sim é "não sabemos nem de quem é o evento", e um 5xx genuíno.
     logger.error(CTX, 'Failed to process DS24 refund', error.message);
-    if (isDatabaseReady()) {
-      try {
-        await query(
-          `UPDATE webhook_logs SET status = 'failed', error = $1
-           WHERE id = (SELECT id FROM webhook_logs WHERE source = 'digistore24' ORDER BY created_at DESC LIMIT 1)`,
-          [error.message]
-        );
-      } catch (_) {}
-    }
     res.status(500).json({ error: 'Internal processing error' });
   }
 }

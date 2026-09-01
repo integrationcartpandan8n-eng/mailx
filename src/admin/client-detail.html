@@ -53,9 +53,12 @@
             padding: 2rem 1.5rem;
         }
 
-        /* Antes 900px: num monitor largo tudo virava um poço vertical com escuridão
-           dos lados. 1500px deixa os grids de KPI e as tabelas respirarem. */
-        .container { width: 100%; max-width: 1500px; }
+        /* Antes 900px, depois 1500px: num monitor largo tudo virava um poço vertical com
+           escuridão dos lados. 1500px ainda deixava ~25% da tela morta em monitor de 1920 —
+           medido na auditoria de layout. 1920px preenche 1080p/1440p inteiros; acima disso
+           o teto continua existindo de propósito, porque linha de tabela larga demais fica
+           difícil de seguir com o olho da esquerda pra direita. */
+        .container { width: 100%; max-width: 1920px; }
 
         /* Header */
         .page-header {
@@ -306,6 +309,51 @@
         /* Seção "Desempenho por Mensagem de Automação" */
         .section-block { margin-bottom: 1.25rem; }
 
+        /* ── Resumo de negócio da aba SMS ── */
+        .rn { display: flex; flex-direction: column; gap: 0.9rem; margin-bottom: 1.25rem; }
+        .rn-frase {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-sm);
+            padding: 1rem 1.15rem;
+        }
+        .rn-frase p { font-size: 0.98rem; line-height: 1.6; color: var(--text-dim); margin: 0; }
+        .rn-frase b { color: #fff; font-weight: 700; }
+        .rn-frase .rn-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; color: #fff; }
+        .rn-fonte { display: block; margin-top: 0.55rem; font-size: 0.72rem; color: var(--text-muted); line-height: 1.5; }
+
+        .rn-herois { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.85rem; }
+        .rn-heroi {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 1rem 1.1rem;
+            display: flex; flex-direction: column; gap: 0.2rem;
+        }
+        .rn-heroi .k { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+        .rn-heroi .v { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.05; color: #fff; font-variant-numeric: tabular-nums; }
+        .rn-heroi .d { font-size: 0.75rem; color: var(--text-dim); }
+        .rn-heroi .barra { height: 5px; background: rgba(255,255,255,0.07); border-radius: 99px; margin-top: 0.4rem; overflow: hidden; }
+        .rn-heroi .barra i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+
+        .rn-destaques { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+        @media (max-width: 58rem) { .rn-destaques { grid-template-columns: 1fr; } }
+        .rn-dest {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 0.9rem 1.05rem;
+            display: flex; flex-direction: column; gap: 0.35rem;
+        }
+        .rn-dest.bom { border-left: 3px solid var(--success); }
+        .rn-dest.ruim { border-left: 3px solid var(--danger); }
+        .rn-dest .t { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; color: var(--text-muted); }
+        .rn-dest .n { font-size: 0.92rem; font-weight: 700; color: #fff; }
+        .rn-dest .f { font-size: 0.81rem; color: var(--text-dim); line-height: 1.5; }
+        .rn-dest .f .pos { color: var(--success); font-weight: 700; }
+        .rn-dest .f .neg { color: var(--danger); font-weight: 700; }
+
         /* Filtro por produto — chips acima do resumo. Ficam na mesma família visual dos
            seletores de período (mesma altura, mesmo raio), com o valor do produto embaixo do nome
            pra escolha ser por relevância e não por ordem alfabética. */
@@ -467,6 +515,54 @@
         }
 
         .rank-list { padding: 0.5rem 0; }
+
+        /* Card de segmento no mesmo padrão do de mensagens: cada número com o rótulo COLADO nele,
+           em vez de tabela com cabeçalho longe do valor. O print mostrou o problema — "31.980"
+           embaixo de "LEADS ABANDONO" mas deslocado, e quem bate o olho não sabe qual número é o
+           quê. Rótulo junto do valor não desalinha nunca, em qualquer largura de tela. */
+        /* Blocos por produto: mesmo princípio do card de segmento — rótulo colado no número.
+           A tabela anterior tinha sete colunas e, no print de produção, o valor aparecia
+           deslocado do cabeçalho: quem batia o olho não sabia qual número era o quê. */
+        .prod-bloco {
+            border: 1px solid var(--border); border-radius: 10px;
+            padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; background: var(--surface-2);
+        }
+        .prod-nome { font-weight: 700; font-size: 0.88rem; margin-bottom: 0.5rem; }
+        .prod-parte {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 1rem; padding: 0.35rem 0; flex-wrap: wrap;
+        }
+        .prod-parte + .prod-parte { border-top: 1px dashed var(--border); }
+        .pp-rot { font-size: 0.75rem; color: var(--text-dim); }
+        .pp-nums { display: flex; gap: 1.25rem; font-size: 0.78rem; color: var(--text-soft); flex-wrap: wrap; }
+        .pp-nums b { font-size: 0.95rem; color: var(--text); }
+        .pp-nums small { font-size: 0.63rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+        .sem-base { color: var(--text-dim); font-size: 0.8rem; }
+
+        .seg-row {
+            display: grid;
+            grid-template-columns: 1fr 150px 120px 130px;
+            gap: 1rem;
+            align-items: center;
+            padding: 0.8rem 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+        .seg-row:first-of-type { border-top: none; }
+        .seg-nome { font-weight: 700; font-size: 0.92rem; }
+        .seg-escopo { font-size: 0.68rem; color: var(--text-dim); margin-top: 0.15rem; }
+        .seg-num { text-align: right; }
+        .seg-num .v { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.02em; }
+        .seg-num .r {
+            font-size: 0.63rem; color: var(--text-dim); text-transform: uppercase;
+            letter-spacing: 0.05em; margin-top: 0.1rem;
+        }
+        .seg-num.vendas .v { color: var(--success); }
+        .seg-num.taxa .v { color: var(--accent-light); }
+        .seg-num .sem-base { font-size: 0.85rem; font-weight: 600; color: var(--text-dim); }
+        @media (max-width: 62rem) {
+            .seg-row { grid-template-columns: 1fr 90px 90px; }
+            .seg-row .seg-num.leads { display: none; }
+        }
 
         .rank-row {
             display: grid;
@@ -934,9 +1030,14 @@
            esquerda, ícone num quadrado colorido, label em cima e valor grande embaixo.
            Os templates renderizam ícone → valor → label; o flex `order` inverte pra
            label ficar acima do valor sem mexer em todos os templates JS. */
+        /* --kpi-cols é preenchido pelo balancearKpiGrids() (ver JS): com auto-fit puro, o
+           número de colunas é só "quantas cabem", e o resto da divisão vira buraco no fim da
+           última fila — 10 KPIs em 7 colunas davam 7+3, com 4 vãos vazios (medido na
+           auditoria de layout). Com o número de colunas escolhido a partir da CONTAGEM, os
+           mesmos 10 viram 5+5. auto-fit fica como fallback se o JS não rodar. */
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            grid-template-columns: repeat(var(--kpi-cols, auto-fit), minmax(190px, 1fr));
             gap: 0.9rem;
         }
 
@@ -1022,6 +1123,28 @@
         .card-header.collapsible.open .chevron { transform: rotate(180deg); }
 
         /* Tooltip de explicação nos KPIs — ícone (ⓘ) ao lado do label */
+        /* Aviso de saúde da coleta. Deliberadamente grande e no topo: é a informação que muda
+           como todo o resto da tela deve ser lido, e não pode competir por atenção com um card. */
+        .alerta-coleta {
+            display: flex; gap: 0.85rem; align-items: flex-start;
+            padding: 1rem 1.15rem; margin-bottom: 1rem;
+            border-radius: 10px; border: 1px solid; line-height: 1.5; font-size: 0.9rem;
+        }
+        .alerta-coleta i { font-size: 1.15rem; margin-top: 0.1rem; flex-shrink: 0; }
+        .alerta-coleta__acao {
+            margin-top: 0.45rem; font-size: 0.83rem; opacity: 0.9;
+        }
+        .alerta-coleta--parado {
+            background: rgba(255, 77, 106, 0.1); border-color: rgba(255, 77, 106, 0.45); color: var(--danger);
+        }
+        .alerta-coleta--buraco {
+            background: rgba(255, 176, 32, 0.1); border-color: rgba(255, 176, 32, 0.45); color: var(--warning);
+        }
+        .alerta-coleta--duvida {
+            background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.4); color: var(--text-muted);
+        }
+        .alerta-coleta strong { color: inherit; }
+
         .kpi-tip {
             display: inline-block;
             position: relative;
@@ -1224,6 +1347,11 @@
             </button>
             <button class="tab-btn" onclick="switchTab('sms')" id="tab-sms" style="flex:1; padding:0.7rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
                 <i class="fas fa-sms"></i> SMS
+            </button>
+            <!-- Por último e mais estreita de propósito: é a aba menos visitada no dia a dia.
+                 Quem mede abre a tela dezenas de vezes; quem configura, uma vez por cliente. -->
+            <button class="tab-btn" onclick="switchTab('config')" id="tab-config" style="flex:0 0 auto; padding:0.7rem 1.1rem; border:none; background:transparent; color:var(--text-dim); font-size:0.78rem; font-weight:700; cursor:pointer; transition:all 0.2s; text-transform:uppercase; letter-spacing:0.05em; border-left:1px solid var(--border)">
+                <i class="fas fa-gear"></i> Config
             </button>
         </div>
 
@@ -1547,14 +1675,9 @@
                     <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista (a API da SlickText não filtra contatos por lista e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com lista vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com lista</span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas MailX</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoBody"><div class="seg-row"><div>Carregando...</div></div></div>
                 </div>
             </div>
         </div>
@@ -1625,14 +1748,47 @@
                     <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">Leads: total vitalício da tag <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL da tag (a API do ActiveCampaign não filtra contatos por tag e por período ao mesmo tempo); vendas são do período selecionado. Ambos contam SÓ os produtos com tag vinculada, pra taxa comparar o mesmo conjunto. A taxa mistura as duas janelas de tempo, é aproximada.">ⓘ</span> · Vendas: do período · só produtos com tag</span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas Email</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoEmailBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoEmailBody"><div class="seg-row"><div>Carregando...</div></div></div>
+                </div>
+            </div>
+
+            <!-- Os mesmos três gráficos da Visão Geral, escopados a este canal. Pedido do Nicollas:
+                 sem isso, a única leitura possível era a do cliente inteiro, e não dava pra saber
+                 se um pico de recuperação veio do SMS ou do email.
+                 A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
+                 mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
+                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso". -->
+            <div class="grid-2">
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
+                        <div style="height:220px; position:relative"><canvas id="chartAutoCampEmail"></canvas></div>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
+                        <div style="height:220px; position:relative"><canvas id="chartRecUpsellEmail"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · Email — a taxa é DESTE canal, não a do cliente</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartRefundEmail"></canvas></div>
                 </div>
             </div>
         </div><!-- end tab-content-email -->
@@ -1642,6 +1798,16 @@
             <div style="padding:0.75rem 1rem; background:var(--warning-bg); border-radius:var(--radius-sm); margin-bottom:1rem; font-size:0.78rem; color:var(--text-dim)">
                 ⚠ Faturamento e vendas SMS já respeitam o período selecionado acima. Contatos e créditos são o total vitalício/atual do SlickText — a API não permite consultar isso por data.
             </div>
+
+            <!-- Resumo de negócio. Entra ACIMA de tudo e não remove nada: quem já conhece a tela
+                 continua com os mesmos cards abaixo, e quem abre pela primeira vez entende sem
+                 precisar ler card nenhum. A fonte de cada número aparece ESCRITA, não em tooltip —
+                 quem não conhece o sistema não passa o mouse procurando procedência. -->
+            <!-- Saúde da coleta. Fica ACIMA de qualquer número porque muda como todos eles devem
+                 ser lidos: se a coleta esteve parada no período, os totais abaixo estão
+                 subestimados e uma queda na tela pode não ter acontecido na vida real. -->
+            <div id="smsSaudeColeta"></div>
+            <div id="smsResumoNegocio"></div>
             <div class="card">
                 <div class="card-header">
                     <div class="card-title"><i class="fas fa-sack-dollar"></i> Faturamento SMS <span style="font-size:0.7rem; color:var(--text-muted); margin-left:0.5rem; font-weight:400; text-transform:none; letter-spacing:0">UTM MailxSMS</span></div>
@@ -1662,15 +1828,14 @@
                     <span id="convSegmentoSmsLegenda" style="font-size:0.65rem; color:var(--text-muted); font-weight:600"></span>
                 </div>
                 <div class="card-body" style="padding:0">
-                    <table class="kit-table">
-                        <thead>
-                            <tr><th>Segmento</th><th>Leads</th><th>Vendas SMS</th><th>Taxa</th></tr>
-                        </thead>
-                        <tbody id="convSegmentoSmsBody">
-                            <tr><td colspan="4" class="empty-state">Carregando...</td></tr>
-                        </tbody>
-                    </table>
+                    <!-- Sem tabela: cada linha carrega o proprio rotulo colado no numero, entao nao ha
+                         cabecalho distante do valor pra desalinhar. -->
+                    <div id="convSegmentoSmsBody"><div class="seg-row"><div>Carregando...</div></div></div>
                 </div>
+                <!-- Mesma divisão aberta por produto (pedido 3.4 do documento). Fica dentro do mesmo
+                     card, abaixo do consolidado, pra leitura ser "o total e de onde ele vem" em vez
+                     de dois cards que a pessoa precisa somar de cabeça. -->
+                <div id="convSegmentoSmsPorProduto"></div>
             </div>
 
             <div class="section-block" id="sms-granular-section" style="display:none;">
@@ -1743,8 +1908,54 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Os mesmos três gráficos da Visão Geral, escopados a este canal. Pedido do Nicollas:
+                 sem isso, a única leitura possível era a do cliente inteiro, e não dava pra saber
+                 se um pico de recuperação veio do SMS ou do email.
+                 A linha TOTAL continua sendo a do cliente inteiro de propósito — é a régua que
+                 mostra o tamanho da fatia. Se ela também fosse escopada, as duas linhas
+                 coincidiriam e o gráfico deixaria de responder "quanto disso é nosso". -->
+            <div class="grid-2">
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-line"></i> Faturamento: Automação x Campanha</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária atribuída via UTM — medium · linha pontilhada = faturamento total do cliente (todos os canais)</div>
+                        <div style="height:220px; position:relative"><canvas id="chartAutoCampSms"></canvas></div>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:0">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-area"></i> Faturamento: Recuperação x Upsell</div>
+                        <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="font-size:0.68rem; color:var(--text-dim); margin-bottom:0.5rem">Receita diária por segmento — campanha</div>
+                        <div style="height:220px; position:relative"><canvas id="chartRecUpsellSms"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fas fa-chart-pie"></i> Faturamento: Aprovado x Reembolso</div>
+                    <span style="font-size:0.65rem; color:var(--text-muted); font-weight:600">só MailX · SMS — a taxa é DESTE canal, não a do cliente</span>
+                </div>
+                <div class="card-body">
+                    <div style="height:220px; position:relative"><canvas id="chartRefundSms"></canvas></div>
+                </div>
+            </div>
         </div><!-- end tab-content-sms -->
 
+        <!-- ═══ ABA CONFIGURAÇÃO ═══
+             Estes cards ficavam FORA das abas, então apareciam embaixo de Visão Geral, de Email e
+             de SMS ao mesmo tempo. Quem abria a aba SMS para ver desempenho rolava por token de
+             API, URL de webhook e botão de pausar cliente antes de chegar no próximo número.
+             Configuração e medição são duas tarefas com públicos diferentes: o head operacional
+             lê números todo dia e mexe em credencial quase nunca. Nada foi removido — só saiu do
+             caminho de quem só quer olhar métrica. -->
+        <div id="tab-content-config" style="display:none">
         <!-- Client Info -->
         <div class="card">
             <div class="card-header">
@@ -2031,6 +2242,7 @@
                 </button>
             </div>
         </div>
+        </div><!-- end tab-content-config -->
     </div>
 
     <!-- Modal -->
@@ -2099,6 +2311,52 @@
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
         }
+
+        // ── Balanceamento das filas de KPI ──
+        //
+        // Problema medido na auditoria de layout: .kpi-grid usava auto-fit, que só responde
+        // "quantas colunas cabem" e ignora quantos itens existem. Em 1500px cabiam 7; o card
+        // de Faturamento SMS tem 10 KPIs, então saía 7 + 3 com quatro vãos vazios na segunda
+        // fila. Mesma coisa no Envios e Créditos (4 KPIs em 3 colunas = 3 + 1 sozinho).
+        //
+        // Aqui o número de colunas sai da CONTAGEM: dado quantas caberiam, calcula quantas
+        // filas são necessárias e divide os itens igualmente entre elas — 10 em 2 filas = 5+5.
+        // Genérico de propósito (roda em TODO .kpi-grid da página, e não numa lista de ids
+        // fixos): KPI novo entra sem precisar mexer aqui de novo.
+        const KPI_MIN_PX = 190;   // igual ao minmax() do .kpi-grid
+        const KPI_GAP_PX = 14.4;  // 0.9rem em 16px
+        function balancearKpiGrids() {
+            document.querySelectorAll('.kpi-grid').forEach(grid => {
+                const itens = grid.children.length;
+                const largura = grid.clientWidth;
+                // Grid escondido (aba inativa) mede 0 — sem largura não há o que decidir, e o
+                // observer chama de novo quando a aba abrir.
+                if (itens === 0 || largura === 0) return;
+                const cabem = Math.max(1, Math.floor((largura + KPI_GAP_PX) / (KPI_MIN_PX + KPI_GAP_PX)));
+                const filas = Math.ceil(itens / cabem);
+                const colunas = Math.ceil(itens / filas);
+                // Só escreve quando muda: setProperty sempre invalida layout, e isso roda
+                // dentro de observers de resize/mutação.
+                if (grid.style.getPropertyValue('--kpi-cols') !== String(colunas)) {
+                    grid.style.setProperty('--kpi-cols', colunas);
+                }
+            });
+        }
+        // Dois gatilhos, porque as duas coisas mudam o resultado: a LARGURA (janela, abrir a
+        // aba, sidebar) e a CONTAGEM (cada re-render troca o innerHTML do grid). Observers em
+        // vez de chamar na mão em cada um dos ~10 pontos de render — um ponto esquecido seria
+        // um grid desbalanceado sem sintoma óbvio.
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(() => balancearKpiGrids());
+            document.addEventListener('DOMContentLoaded', () => {
+                document.querySelectorAll('.kpi-grid').forEach(g => ro.observe(g));
+            });
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const mo = new MutationObserver(() => balancearKpiGrids());
+            document.querySelectorAll('.kpi-grid').forEach(g => mo.observe(g, { childList: true }));
+            balancearKpiGrids();
+        });
 
         const CURRENCY_SYMBOL_MAP = { USD: '$', BRL: 'R$', EUR: '€' };
         function currencySymbol(code) {
@@ -2876,6 +3134,8 @@
                     refundSection && refundSection.style.display !== 'none'
                         ? loadRefundChartClient(from, to, timeOpts.fromTime, timeOpts.toTime)
                         : null,
+                    loadGraficosDoCanal('sms', from, to, timeOpts.fromTime, timeOpts.toTime),
+                    loadGraficosDoCanal('email', from, to, timeOpts.fromTime, timeOpts.toTime),
                     loadSmsGranular(clientId, { from, to, fromTime: timeOpts.fromTime, toTime: timeOpts.toTime }),
                     reloadClientStatsForPeriod(from, to, timeOpts),
                     loadSmsStats(from, to, timeOpts),
@@ -3097,6 +3357,12 @@
 
         // ── Refund doughnut chart (Fase D.5) ──
         const __clientRefundChart = { chart: null };
+        // Um ref por canvas: Chart.js guarda a instância presa ao canvas, e reaproveitar o mesmo
+        // ref para dois gráficos faz o segundo destruir o primeiro na próxima atualização.
+        const __refundChartEmail = { chart: null };
+        const __refundChartSms = { chart: null };
+        const __chartsEmail = {};
+        const __chartsSms = {};
 
         function renderRefundChart(d, canvas, ref, pctEl, chargebackEl) {
             const symbol = currencySymbol(d.currency);
@@ -3159,6 +3425,43 @@
                     : '';
             }
             return pctReembolso;
+        }
+
+        // Versões por canal dos três gráficos. Mesma função de render dos da Visão Geral — o que
+        // muda é só o parâmetro channel e o canvas de destino, então um conserto no desenho vale
+        // para os três lugares de uma vez.
+        async function loadGraficosDoCanal(canal, from, to, fromTime, toTime) {
+            const suf = canal === 'sms' ? 'Sms' : 'Email';
+            const refs = canal === 'sms' ? __chartsSms : __chartsEmail;
+            const refRefund = canal === 'sms' ? __refundChartSms : __refundChartEmail;
+            const rotulo = `gráficos de ${canal.toUpperCase()}`;
+            try {
+                const params = new URLSearchParams({ from, to, client_id: clientId, channel: canal });
+                appendPeriodTimeParams(params, fromTime, toTime);
+
+                const [rSerie, rRefund] = await Promise.all([
+                    fetch(`${API}/dashboard/revenue-charts?${params}`),
+                    fetch(`${API}/dashboard/revenue-vs-refund?${params}`),
+                ]);
+                if (!rSerie.ok) throw new Error(`HTTP ${rSerie.status}`);
+                const dSerie = await rSerie.json();
+                updateRevenueCharts(
+                    dSerie,
+                    document.getElementById('chartAutoCamp' + suf),
+                    document.getElementById('chartRecUpsell' + suf),
+                    refs
+                );
+
+                // O de reembolso pode faltar (cliente só CartPanda não rastreia estorno) sem que
+                // os de série estejam errados — por isso é conferido separado, e a falha de um não
+                // apaga o outro.
+                if (rRefund.ok) {
+                    renderRefundChart(await rRefund.json(), document.getElementById('chartRefund' + suf), refRefund, null, null);
+                }
+                clearDataLoadError(rotulo);
+            } catch (e) {
+                reportDataLoadError(rotulo, e);
+            }
         }
 
         async function loadRefundChartClient(from, to, fromTime, toTime) {
@@ -3272,6 +3575,13 @@
         }
 
         // ── Load Per-Client Stats ──
+        // Plural com um dono. Já quebrou quatro vezes neste projeto ("recuperaçãoões",
+        // "1 cliques/venda", "Outras 1 mensagens", "Thermo · 1 vendas") — sempre consertado no
+        // ponto, nunca na causa. Texto montado com concatenação erra plural; função não erra.
+        function plural(n, singular, pluralForma) {
+            return Math.abs(Number(n)) === 1 ? singular : pluralForma;
+        }
+
         function calcTaxa(vendas, leads) {
             const v = parseInt(vendas) || 0;
             const l = parseInt(leads) || 0;
@@ -3283,6 +3593,110 @@
         // Renderiza a tabela "Conversão por Segmento" (Carrinho Abandonado / Compradores) —
         // reaproveitada pra versão consolidada (Visão Geral) e pelas isoladas por canal
         // (Email/SMS), todas vindas do mesmo payload de /clientes/:id/stats.
+        // ── Conversão por Segmento aberta POR PRODUTO ──
+        //
+        // Pedido 3.4 do documento: "precisa ser dividido por produto tmb". Responde a pergunta que o
+        // consolidado não responde — qual produto recupera melhor carrinho.
+        //
+        // Sai por FAMÍLIA, não por SKU, e a tela diz isso: a lista da SlickText é uma só para a
+        // família toda, então não existe taxa "do M1 2 bottles" separada da "do M3 6 bottles". Quebrar
+        // por SKU contaria a mesma lista várias vezes.
+        function renderConversaoPorProduto(porProduto) {
+            // Guardado para o clique no chip poder redesenhar sem refazer a requisição: trocar de
+            // produto é troca de VISÃO, não de dado, e ir ao servidor a cada clique daria a
+            // impressão de lentidão em algo que já está na memória.
+            window.__convProdutoDados = porProduto;
+            const el = document.getElementById('convSegmentoSmsPorProduto');
+            if (!el) return;
+            if (!Array.isArray(porProduto) || porProduto.length === 0) { el.innerHTML = ''; return; }
+
+            const cel = (seg) => {
+                // leads null = produto do utm não casou com nenhuma lista. Taxa não é calculável, e
+                // mostrar 0% diria "não converte" quando a verdade é "não sabemos o denominador".
+                if (seg.leads == null) {
+                    return `<td class="num">—</td>
+                            <td class="num" style="color:var(--success); font-weight:700">${seg.vendas.toLocaleString('pt-BR')}</td>
+                            <td><span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="Este produto vendeu por SMS mas não tem lista da SlickText que case com o nome dele, então não há denominador para calcular a taxa. As vendas estão certas; o que falta é a lista.">sem lista ⓘ</span></td>`;
+                }
+                const t = seg.taxa;
+                const cor = t == null ? '' : (t > 3 ? 'green' : '');
+                const estilo = t == null || t > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)';
+                return `<td class="num">${seg.leads.toLocaleString('pt-BR')}</td>
+                        <td class="num" style="color:var(--success); font-weight:700">${seg.vendas.toLocaleString('pt-BR')}</td>
+                        <td>${t == null ? '<span style="color:var(--text-dim)">—</span>' : `<span class="tag ${cor}" style="${estilo}">${t.toLocaleString('pt-BR')}%</span>`}</td>`;
+            };
+
+            // Seletor Geral / por produto, em vez de despejar total e detalhe empilhados.
+            // Ideia do Nicollas, e ele tem razão: com 3+ produtos a tela vira uma parede de
+            // números, e ninguém compara duas tabelas de uma vez — se olha uma de cada vez.
+            // "Geral" continua sendo o padrão porque é a leitura que responde "como foi o canal".
+            const sel = window.__convProdutoSel || null;
+            const chipsProd = `
+                <div class="prod-chips" id="conv-prod-chips" style="margin-bottom:0.6rem">
+                    <button type="button" class="prod-chip${!sel ? ' active' : ''}" data-conv-prod="">Geral<small>todos os produtos</small></button>
+                    ${porProduto.map(p => `
+                        <button type="button" class="prod-chip${sel === p.produto ? ' active' : ''}" data-conv-prod="${escapeHtml(p.produto)}">
+                            ${escapeHtml(p.produto)}<small>${(() => { const v = (p.carrinho_abandonado.vendas || 0) + (p.compradores.vendas || 0); return `${v.toLocaleString('pt-BR')} ${plural(v, 'venda', 'vendas')}`; })()}</small>
+                        </button>`).join('')}
+                </div>`;
+
+            // Filtra DEPOIS de montar os chips, senão o chip do produto escondido some junto com a
+            // linha e não há como voltar para ele.
+            const visiveis = sel ? porProduto.filter(p => p.produto === sel) : porProduto;
+
+            const linhas = visiveis.map(p => {
+                const nc = p.nao_classificado || 0;
+                const aviso = nc > 0
+                    ? ` <span class="kpi-tip" tabindex="0" style="color:var(--warning)" data-tip="${nc} ${plural(nc, 'venda', 'vendas')} deste produto não casam nem com carrinho abandonado nem com upsell/compra aprovada. Contam no faturamento, mas não entram em nenhum dos dois segmentos. Corrigir o link na SlickText resolve.">${nc} s/ classificação</span>`
+                    : '';
+                // Um bloco por segmento, cada número com o rótulo do lado. A tabela anterior tinha
+                // sete colunas e o cabeçalho longe do valor — no print de produção o "31.980"
+                // aparecia deslocado do "LEADS ABANDONO".
+                const parte = (rot, seg) => {
+                    const leads = seg.leads;
+                    // Usa seg.taxa do servidor, não recalcula aqui — é o servidor que sabe se o
+                    // lead é do período ou vitalício (taxa_nao_calculavel_motivo === 'leads_vitalicio'
+                    // quando é vitalício, e nesse caso ele já manda taxa: null de propósito).
+                    const taxa = leads == null
+                        ? '<span class="sem-base">sem lista</span>'
+                        : seg.taxa_nao_calculavel_motivo === 'leads_vitalicio'
+                            ? `<span class="sem-base">não calculável <span class="kpi-tip" tabindex="0" data-tip="Os leads aqui são o total vitalício da lista, não do período — dividir venda do período por gente acumulada desde sempre não é taxa aproximada, é comparar janelas de tempo diferentes.">ⓘ</span></span>`
+                            : leads < 30
+                                ? `<span class="sem-base">base pequena</span>`
+                                : `<strong>${calcTaxa(seg.vendas, leads)}</strong>`;
+                    return `
+                        <div class="prod-parte">
+                            <div class="pp-rot">${rot}</div>
+                            <div class="pp-nums">
+                                <span><b>${leads == null ? '—' : leads.toLocaleString('pt-BR')}</b> leads</span>
+                                <span><b style="color:var(--success)">${seg.vendas.toLocaleString('pt-BR')}</b> ${plural(seg.vendas, 'venda', 'vendas')}</span>
+                                <span>${taxa} <small>conversão</small></span>
+                            </div>
+                        </div>`;
+                };
+                return `
+                    <div class="prod-bloco">
+                        <div class="prod-nome">${escapeHtml(p.produto)}${aviso}</div>
+                        ${parte('Carrinho abandonado', p.carrinho_abandonado)}
+                        ${parte('Compradores', p.compradores)}
+                    </div>`;
+            }).join('');
+
+            el.innerHTML = `
+                <div style="border-top:1px solid var(--border); padding:0.85rem 1.25rem 0">
+                    <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-dim)">
+                        Aberto por produto
+                        <span class="kpi-tip" tabindex="0" data-tip="Agrupado pelo produto que está no utm_campaign da venda — o produto da AUTOMAÇÃO, não o SKU do pedido: a venda de um upsell traz o SKU do upsell, mas quem a gerou foi o fluxo da família, e é na lista da família que o lead está. Por isso sai por família (NeuroMind Pro) e não por SKU (M1 - NeuroMind Pro 2 Bottles): a lista da SlickText é uma só para a família toda, e quebrar por SKU contaria a mesma lista várias vezes.">ⓘ</span>
+                    </div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:0.5rem">
+                        por família de produto · leads das listas da família · vendas atribuídas às automações dela
+                    </div>
+                    ${chipsProd}
+                </div>
+                <div style="padding:0 1.25rem 0.75rem">${linhas}</div>
+            `;
+        }
+
         // Legenda do cabeçalho da Conversão por Segmento (SMS): diz de qual janela vêm os leads.
         // Precisa ser dinâmica porque a resposta mudou de natureza — com dois retratos das listas os
         // leads são DO PERÍODO e a taxa passa a ser exata; sem eles continuam vitalícios e a taxa é
@@ -3312,7 +3726,7 @@
                     el.innerHTML = `Leads: entraram entre ${fmtData(periodo.de)} e ${fmtData(periodo.ate)} <span class="kpi-tip" tabindex="0" data-tip="Faltou o retrato de um dos dias exatos do filtro, então foi usado o retrato mais próximo dentro de 3 dias. Isso deixa a janela dos leads MAIOR que a das vendas, e a taxa fica subestimada: mais leads no denominador para as mesmas vendas. Escolha um período cujas pontas tenham retrato para a taxa ficar exata.">ⓘ</span> · <span style="color:var(--warning)">janela maior que o filtro · taxa subestimada</span>`;
                     return;
                 }
-                el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. Ambos os lados contam só os produtos com lista vinculada, pra comparar o mesmo conjunto.">ⓘ</span> · Vendas: do período · taxa exata`;
+                el.innerHTML = `Leads: entraram no período${quando} <span class="kpi-tip" tabindex="0" data-tip="Leads são a diferença entre dois retratos diários do tamanho de cada lista, então contam quem ENTROU dentro do período — a mesma janela das vendas. A taxa é exata. As vendas contam as que vieram de uma automação vinculada, que é onde o lead da pessoa está — inclusive upsell, que não tem lista própria.">ⓘ</span> · Vendas: do período · taxa exata`;
                 return;
             }
             if (seg.leads_source === 'unavailable') {
@@ -3326,61 +3740,85 @@
             const retratosTxt = r
                 ? ` · retrato diário das listas desde ${fmtData(r.primeiro_retrato)} (${r.dias_com_retrato} dia${r.dias_com_retrato === 1 ? '' : 's'})`
                 : '';
-            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. Ambos os lados contam só os produtos com lista vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
+            el.innerHTML = `Leads: total vitalício da lista <span class="kpi-tip" tabindex="0" data-tip="Leads são o total ATUAL de cada lista; vendas são do período selecionado. A SlickText não conta contatos por lista e por período ao mesmo tempo, então a taxa mistura duas janelas de tempo e é aproximada. O dashboard grava um retrato diário do tamanho das listas: escolhendo um período coberto por dois retratos, este número passa a ser só quem entrou no período e a taxa fica exata. As vendas contam as que vieram de uma automação vinculada.">ⓘ</span> · Vendas: do período · taxa aproximada${retratosTxt}`;
         }
 
         function renderConversaoSegmentoTable(tbodyId, cs) {
             const tbody = document.getElementById(tbodyId);
             if (!tbody || !cs) return;
-            // Célula de leads com o ESCOPO estampado. A taxa de conversão só é comparável quando
-            // se sabe se o denominador é do período ou o total acumulado da lista — e por muito
-            // tempo era o acumulado sem dizer. Agora, quando existem retratos diários das listas
-            // cobrindo o período, os leads são a diferença entre dois retratos (exato) e a célula
-            // diz isso; sem retratos, continua vitalício e a célula diz isso também.
-            // .kpi-tip em vez de title nativo: title só aparece depois de 1-2s de hover, e ninguém
-            // descobre por acidente que existe uma ressalva ali.
-            const leadsCell = (seg) => {
-                const n = seg.leads.toLocaleString('pt-BR');
-                const p = seg.leads_periodo;
-                const escopo = seg.leads_source === 'snapshot_delta'
-                    ? (p && p.janela_bate === false
-                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">entraram entre ${fmtData(p.de)} e ${fmtData(p.ate)} — janela maior que o filtro</small>`
-                        : `<small style="display:block; color:var(--text-dim); font-size:0.68rem">entraram no período${p ? ` (${fmtData(p.de)} → ${fmtData(p.ate)})` : ''}</small>`)
-                    : seg.leads_source === 'slicktext_list'
-                        ? `<small style="display:block; color:var(--warning); font-size:0.68rem">total da lista (vitalício)</small>`
-                        : '';
-                const tip = seg.leads_warning
-                    ? ` <span class="kpi-tip" tabindex="0" data-tip="${seg.leads_warning.replace(/"/g, '&quot;')}">ⓘ</span>`
+
+            // Linhas no mesmo padrão do card de mensagens: rótulo COLADO no número.
+            //
+            // A tabela anterior tinha cabeçalho no topo e valor embaixo, e no print de produção o
+            // "31.980" aparecia deslocado do "LEADS ABANDONO" — quem batia o olho não sabia qual
+            // número era o quê. Rótulo junto do valor não desalinha em largura nenhuma.
+            const linhaSeg = (nome, escopo, leadsHtml, vendas, taxaHtml) => `
+                <div class="seg-row">
+                    <div>
+                        <div class="seg-nome">${nome}</div>
+                        ${escopo ? `<div class="seg-escopo">${escopo}</div>` : ''}
+                    </div>
+                    <div class="seg-num leads">${leadsHtml}</div>
+                    <div class="seg-num vendas"><div class="v">${vendas.toLocaleString('pt-BR')}</div><div class="r">${plural(vendas, 'venda', 'vendas')}</div></div>
+                    <div class="seg-num taxa">${taxaHtml}</div>
+                </div>`;
+
+            const numLeads = (seg) => {
+                if (seg.leads_nao_somavel) {
+                    const pc = seg.leads_por_canal || {};
+                    return `<div class="sem-base">não somável <span class="kpi-tip" tabindex="0" data-tip="A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign — somar contaria cada uma duas vezes. SMS: ${(pc.sms ?? 0).toLocaleString('pt-BR')} · Email: ${(pc.email ?? 0).toLocaleString('pt-BR')}. Veja as tabelas por canal, onde a taxa é válida.">ⓘ</span></div>`;
+                }
+                // webhook_exato: leads de compra contados direto da venda que recebemos, com
+                // precisão de segundos — mais preciso que o retrato, e por isso rotulado à parte
+                // dele (ver o "ⓘ" com a divergência, quando existir).
+                const escopoTxt = seg.leads_source === 'webhook_exato' ? 'leads (venda registrada)'
+                    : seg.leads_source === 'snapshot_delta' ? 'leads do período'
+                    : 'leads (total da lista)';
+                const div = seg.divergencia_retrato;
+                const tipDivergencia = div && div.diferenca > 0
+                    ? ` <span class="kpi-tip" tabindex="0" data-tip="O retrato mediu ${div.do_retrato.toLocaleString('pt-BR')} novo(s) contato(s) na lista neste período, mas só ${div.explicado_por_venda.toLocaleString('pt-BR')} têm venda registrada aqui. A diferença (${div.diferenca.toLocaleString('pt-BR')}) provavelmente entrou por um gateway que não capturamos (ex.: JVZoo, BuyGoods) — a pessoa está na lista de verdade, só não temos o evento de venda dela.">ⓘ</span>`
                     : '';
-                return `${n}${tip}${escopo}`;
+                return `<div class="v">${(seg.leads ?? 0).toLocaleString('pt-BR')}</div><div class="r">${escopoTxt}${tipDivergencia}</div>`;
             };
-            const abLeadsCell = leadsCell(cs.carrinho_abandonado);
-            const abTaxaStr = calcTaxa(cs.carrinho_abandonado.vendas, cs.carrinho_abandonado.leads);
-            const abTaxaNum = abTaxaStr === '—' ? 0 : parseFloat(abTaxaStr);
-            const abTaxaCell = abTaxaStr === '—'
-                ? `<span style="color:var(--text-dim)">—</span>`
-                : `<span class="tag ${abTaxaNum > 3 ? 'green' : ''}" style="${abTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${abTaxaStr}</span>`;
-            const compLeadsCell = leadsCell(cs.compradores);
-            const compTaxaStr = calcTaxa(cs.compradores.vendas, cs.compradores.leads);
-            const compTaxaNum = compTaxaStr === '—' ? 0 : parseFloat(compTaxaStr);
-            const compTaxaCell = compTaxaStr === '—'
-                ? `<span style="color:var(--text-dim)">—</span>`
-                : `<span class="tag ${compTaxaNum > 3 ? 'green' : ''}" style="${compTaxaNum > 3 ? '' : 'color:var(--warning);background:var(--warning-bg)'}">${compTaxaStr}</span>`;
+
+            // Taxa só quando a base sustenta conclusão. Com 2 leads, uma venda a mais move 50
+            // pontos — exibir "100,0%" faria alguém concluir que o fluxo converte tudo, quando não
+            // há amostra para afirmar nada. Melhor dizer que a base é pequena do que dar um número
+            // que parece medido.
+            const BASE_MINIMA = 30;
+            // Fontes cujo lead é DO PERÍODO — as únicas em que dividir venda do período por lead
+            // dá uma taxa de verdade. 'slicktext_list' é vitalício (tamanho atual da lista inteira,
+            // não do período): dividir venda de 30 dias por gente acumulada desde sempre não é taxa
+            // aproximada, é comparar janelas de tempo diferentes — visto em produção rendendo 0,98%
+            // quando o denominador tinha 9+ meses de gente contra 30 dias de venda.
+            const FONTES_DO_PERIODO = new Set(['snapshot_delta', 'webhook_exato']);
+            const numTaxa = (seg) => {
+                const leads = seg.leads;
+                if (leads == null) return `<div class="sem-base">—</div>`;
+                if (!FONTES_DO_PERIODO.has(seg.leads_source)) {
+                    return `<div class="sem-base">não calculável <span class="kpi-tip" tabindex="0" data-tip="Os leads aqui são o total VITALÍCIO da lista (todo mundo que já entrou, desde sempre); as vendas são só do período escolhido. Dividir um pelo outro não é uma taxa aproximada — é comparar janelas de tempo diferentes, e o resultado pode sair uma ou duas ordens de grandeza menor que a conversão real. Leads e vendas continuam certos, a divisão entre eles é que não significa nada ainda. Some dias de retrato até a lista ter cobertura do período pedido, e a taxa aparece.">ⓘ</span></div>`;
+                }
+                if (leads < BASE_MINIMA) {
+                    return `<div class="sem-base">base pequena <span class="kpi-tip" tabindex="0" data-tip="Só ${leads.toLocaleString('pt-BR')} lead(s) no período: uma venda a mais ou a menos mudaria a taxa em dezenas de pontos. Um número assim não sustenta conclusão nenhuma, então não é exibido como se sustentasse. Escolha um período maior.">ⓘ</span></div>`;
+                }
+                const t = calcTaxa(seg.vendas, leads);
+                return `<div class="v">${t}</div><div class="r">conversão</div>`;
+            };
+
+            const naoClass = cs.nao_classificado || 0;
             tbody.innerHTML = [
-                { seg: 'Carrinho Abandonado', leadsHtml: abLeadsCell, vendas: cs.carrinho_abandonado.vendas, taxaHtml: abTaxaCell },
-                // Mesma função de taxa dos dois lados. Antes o abandono usava calcTaxa e os
-                // compradores o campo pronto da API, com arredondamentos diferentes — a tabela
-                // mostrava 4.4% numa linha e 40.23% na outra, e duas precisões na mesma coluna fazem
-                // parecer que os números vêm de lugares diferentes (vinham).
-                { seg: 'Compradores', leadsHtml: compLeadsCell, vendas: cs.compradores.vendas, taxaHtml: compTaxaCell },
-            ].map(r => `
-                <tr>
-                    <td style="font-weight:600">${r.seg}</td>
-                    <td>${r.leadsHtml}</td>
-                    <td style="color:var(--success); font-weight:700">${r.vendas.toLocaleString('pt-BR')}</td>
-                    <td>${r.taxaHtml}</td>
-                </tr>
-            `).join('');
+                linhaSeg('Carrinho Abandonado', null, numLeads(cs.carrinho_abandonado), cs.carrinho_abandonado.vendas, numTaxa(cs.carrinho_abandonado)),
+                linhaSeg('Compradores', null, numLeads(cs.compradores), cs.compradores.vendas, numTaxa(cs.compradores)),
+                ...(naoClass > 0 ? [linhaSeg(
+                    '<span style="color:var(--warning)">Não classificado</span>',
+                    'o utm_campaign do link não diz de qual fluxo veio',
+                    `<div class="sem-base">sem lista <span class="kpi-tip" tabindex="0" data-tip="Não existe lista para este grupo: são vendas que não casam nem com carrinho abandonado nem com upsell/compra aprovada. Antes caíam em Compradores e inflavam a taxa de lá. Corrigir o link na SlickText move a venda para o segmento certo.">ⓘ</span></div>`,
+                    naoClass,
+                    `<div class="sem-base">—</div>`
+                )] : []),
+            ].join('');
+
+
 
             // Nota de reconciliação: os KPIs no topo da aba contam TODOS os produtos, essa
             // tabela só os com lista/tag vinculada. Sem essa linha, o mesmo indicador aparece
@@ -3389,8 +3827,11 @@
             const foraComp = cs.compradores.vendas_fora_escopo || 0;
             if (foraAb > 0 || foraComp > 0) {
                 const partes = [];
-                if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s)`);
-                if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões)`);
+                // "venda" e "recuperação" sem qualificar dava a entender que eram coisas
+                // diferentes de vendas — e como os números se sobrepunham (52 dentro das 70), quem
+                // lia somava 122. Agora são disjuntos E rotulados pelo fluxo de origem.
+                if (foraComp > 0) partes.push(`${foraComp.toLocaleString('pt-BR')} venda(s) de fluxo de comprador`);
+                if (foraAb > 0) partes.push(`${foraAb.toLocaleString('pt-BR')} recuperação(ões) de carrinho`);
                 // Nomeia os produtos e o MOTIVO de cada um. Antes a nota dizia só a quantidade e
                 // atribuía a causa a "produto sem lista/tag vinculada" — que é uma das três causas
                 // possíveis, não a única. Dizer a causa errada manda a pessoa arrumar o que não está
@@ -3402,19 +3843,112 @@
                         const qtd = [];
                         if (f.vendas_fora > 0) qtd.push(`${f.vendas_fora} venda${f.vendas_fora > 1 ? 's' : ''}`);
                         if (f.recuperacoes_fora > 0) qtd.push(`${f.recuperacoes_fora} ${f.recuperacoes_fora > 1 ? 'recuperações' : 'recuperação'}`);
-                        return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>
+                        // A MENSAGEM entra ao lado do produto porque, com escopo por automação, é
+                        // a mensagem que se vincula — é o que a pessoa precisa procurar pra resolver.
+                        const msg = f.mensagem
+                            ? ` <span style="font-family:monospace; font-size:0.68rem; opacity:0.8">${escapeHtml(f.mensagem)}</span>`
+                            : '';
+                        return `<div><span style="color:var(--text)">${escapeHtml(f.produto)}</span>${msg}
                             — ${qtd.join(' · ')} <span style="opacity:0.75">(${escapeHtml(f.motivo)})</span></div>`;
                       }).join('') + `</div>`
                     : '';
 
                 tbody.insertAdjacentHTML('beforeend', `
-                    <tr>
-                        <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
-                            <i class="fas fa-circle-info" style="color:var(--warning); margin-right:0.35rem"></i>
-                            ${partes.join(' e ')} do período não aparecem nesta tabela, e também ficam fora da contagem de leads — por isso os KPIs no topo da aba mostram números maiores.
-                            ${listaHtml}
-                        </td>
-                    </tr>
+                    <div style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border); padding:0.8rem 1.25rem">
+                        <i class="fas fa-circle-info" style="color:var(--warning); margin-right:0.35rem"></i>
+                        ${partes.join(' e ')} do período não aparecem nesta tabela, e também ficam fora da contagem de leads — por isso os KPIs no topo da aba mostram números maiores.
+                        ${listaHtml}
+                    </div>
+                `);
+            }
+
+            // Status de retrato de TODA lista de produto ativo — não só a recém-conectada
+            // (standby:true), a já estabelecida também, com as datas gravadas de cada uma. Existe
+            // só no card SMS (cs.listas_retrato_status vem null/undefined no Email e no
+            // consolidado) — sem essa nota, quem troca conta/lista no workflow não tem como saber
+            // que aquela lista específica ficou "muda" até a taxa dela aparecer estranha semanas
+            // depois.
+            //
+            // <details>/<summary> nativo em vez de parede de texto sempre aberta. A versão anterior
+            // desta tabela listava as datas por extenso ("30/07/2026, 03/08/2026, ...") — lista de
+            // texto não é visualização, e crescia sem dar nenhum padrão visível. Troca por uma
+            // barra de cobertura: um quadradinho por dia, preenchido = tem retrato, vazio = não tem
+            // — o padrão "sólido com 1 furo" vs "só os 2 últimos dias" salta aos olhos sem ler nada.
+            const retratoStatus = cs.listas_retrato_status || [];
+            if (retratoStatus.length > 0) {
+                const emStandby = retratoStatus.filter(l => l.standby).length;
+
+                // Range comum a todas as barras: do dia mais antigo com retrato ao mais recente.
+                // Sem um eixo compartilhado, a barra de uma lista de 2 dias e a de uma lista de 9
+                // dias teriam larguras diferentes e não daria pra comparar cobertura entre elas.
+                const todasDatas = retratoStatus.flatMap(l => l.datas || []);
+                const diaMaisAntigo = todasDatas.length > 0 ? todasDatas.reduce((a, b) => a < b ? a : b) : null;
+                const diaMaisRecente = todasDatas.length > 0 ? todasDatas.reduce((a, b) => a > b ? a : b) : null;
+                const rangeDias = [];
+                if (diaMaisAntigo && diaMaisRecente) {
+                    let d = new Date(`${diaMaisAntigo}T00:00:00Z`);
+                    const fim = new Date(`${diaMaisRecente}T00:00:00Z`);
+                    while (d <= fim) {
+                        rangeDias.push(d.toISOString().slice(0, 10));
+                        d.setUTCDate(d.getUTCDate() + 1);
+                    }
+                }
+
+                const barraCobertura = (datas) => {
+                    const gravados = new Set(datas || []);
+                    return `<div style="display:flex; gap:1px">${rangeDias.map(dia => {
+                        const tem = gravados.has(dia);
+                        return `<span title="${fmtData(dia)}${tem ? '' : ' — sem retrato'}" style="width:9px; height:9px; border-radius:2px; background:${tem ? 'var(--success)' : 'var(--surface-2)'}; border:1px solid ${tem ? 'var(--success)' : 'var(--border)'}"></span>`;
+                    }).join('')}</div>`;
+                };
+
+                // Agrupado por produto (mesma ordem que já vem do servidor) — só imprime o nome do
+                // produto na primeira linha do grupo, com uma borda separando de um produto pro
+                // outro, pra não repetir "NeuroMind Pro" quatro vezes seguidas.
+                const linhasTabela = retratoStatus.map((l, i) => {
+                    const seg = l.segmento === 'abandono' ? 'Abandono' : 'Compra Aprovada';
+                    const novoGrupo = i === 0 || retratoStatus[i - 1].produto !== l.produto;
+                    const statusHtml = l.standby
+                        ? `<span style="color:var(--warning)"><i class="fas fa-clock"></i> nova</span>`
+                        : `<span style="color:var(--success)"><i class="fas fa-check"></i> histórico ok</span>`;
+                    return `<tr style="${novoGrupo && i > 0 ? 'border-top:1px solid var(--border)' : ''}">
+                        <td style="padding:0.3rem 0.6rem 0.3rem 0; ${novoGrupo ? 'font-weight:600' : 'opacity:0'}">${escapeHtml(l.produto)}</td>
+                        <td style="padding:0.3rem 0.6rem; color:var(--text-dim)">${seg}</td>
+                        <td style="padding:0.3rem 0.6rem">${statusHtml}</td>
+                        <td style="padding:0.3rem 0 0.3rem 0.6rem">${barraCobertura(l.datas)}</td>
+                    </tr>`;
+                }).join('');
+
+                const resumoTxt = emStandby > 0
+                    ? `${emStandby} de ${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} em standby — conectada(s) recentemente, ainda coletando histórico`
+                    : `${retratoStatus.length} lista${retratoStatus.length > 1 ? 's' : ''} com retrato — nenhuma em standby`;
+                const icone = emStandby > 0
+                    ? `<i class="fas fa-clock" style="color:var(--warning); margin-right:0.35rem"></i>`
+                    : `<i class="fas fa-circle-check" style="color:var(--success); margin-right:0.35rem"></i>`;
+                tbody.insertAdjacentHTML('beforeend', `
+                    <div style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border); padding:0.8rem 1.25rem">
+                        <details>
+                            <summary style="cursor:pointer; user-select:none">
+                                ${icone}${resumoTxt}
+                            </summary>
+                            <div style="margin-top:0.5rem; overflow-x:auto">
+                                <table style="border-collapse:collapse; width:100%; font-size:0.72rem">
+                                    <thead>
+                                        <tr style="text-align:left; color:var(--text-dim); border-bottom:1px solid var(--border)">
+                                            <th style="padding:0 0.6rem 0.3rem 0; font-weight:600">Produto</th>
+                                            <th style="padding:0 0.6rem 0.3rem; font-weight:600">Segmento</th>
+                                            <th style="padding:0 0.6rem 0.3rem; font-weight:600">Histórico</th>
+                                            <th style="padding:0 0 0.3rem 0.6rem; font-weight:600">Cobertura (${diaMaisAntigo ? fmtData(diaMaisAntigo) : ''} → ${diaMaisRecente ? fmtData(diaMaisRecente) : ''})</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>${linhasTabela}</tbody>
+                                </table>
+                            </div>
+                            <div style="margin-top:0.5rem; opacity:0.85">
+                                "Histórico ok" é sobre a LISTA, não sobre a taxa: a taxa do produto continua "não calculável" enquanto QUALQUER lista dele (abandono ou compra, incluindo a de um segundo gateway) ainda estiver "nova" — é tudo ou nada por produto, não lista por lista.
+                            </div>
+                        </details>
+                    </div>
                 `);
             }
         }
@@ -3711,6 +4245,8 @@
                 renderConversaoSegmentoTable('convSegmentoBody', data.conversao_por_segmento);
                 renderConversaoSegmentoTable('convSegmentoEmailBody', data.conversao_por_segmento_email);
                 renderConversaoSegmentoTable('convSegmentoSmsBody', data.conversao_por_segmento_sms);
+                renderConversaoPorProduto(data.conversao_por_segmento_sms?.por_produto);
+                renderInvariantesQuebradas(data.invariantes);
                 renderLegendaLeadsSms(data.conversao_por_segmento_sms);
 
                 // Render recent webhooks
@@ -3739,6 +4275,13 @@
             document.getElementById('tab-content-geral').style.display = 'none';
             document.getElementById('tab-content-email').style.display = 'none';
             document.getElementById('tab-content-sms').style.display = 'none';
+            document.getElementById('tab-content-config').style.display = 'none';
+
+            // A barra de período some na aba de configuração: ela promete "aplica a todos os
+            // gráficos desta página", e ali não existe gráfico nenhum. Controle visível que não
+            // faz nada é pior que controle ausente — quem mexe fica esperando algo mudar.
+            const barra = document.getElementById('globalPeriodControl');
+            if (barra) barra.style.display = tab === 'config' ? 'none' : '';
 
             // Deactivate all buttons
             document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -3763,6 +4306,99 @@
         }
 
         // ── Load SMS Stats from SlickText API ──
+        // Saúde da coleta — responde "os números abaixo estão completos?" antes de mostrar número.
+        //
+        // Existe por causa de 03/08/2026: a Digistore desativou sozinha as conexões de IPN depois de
+        // o endpoint devolver erro, e ficamos 4 dias sem gravar venda nenhuma. Na tela isso aparecia
+        // como queda de vendas — falha de coleta lida como resultado de operação. Um aviso teria
+        // custado 30 segundos de conserto em vez de 4 dias.
+        async function loadSaudeDaColeta(from, to, timeOpts = {}) {
+            const box = document.getElementById('smsSaudeColeta');
+            if (!box) return;
+            try {
+                const params = new URLSearchParams();
+                if (from && to && !timeOpts.today) { params.set('start', from); params.set('end', to); }
+                const res = await fetch(`${API}/clientes/${clientId}/saude-da-coleta?${params}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const d = await res.json();
+                box.innerHTML = renderSaudeColeta(d);
+            } catch (err) {
+                // Falha aqui não pode apagar a tela nem, pior, sugerir que está tudo certo:
+                // o painel deixa de saber se a coleta está de pé, e diz isso.
+                box.innerHTML = `<div class="alerta-coleta alerta-coleta--duvida">
+                    <i class="fas fa-circle-question"></i>
+                    <div><strong>Não foi possível verificar a saúde da coleta.</strong>
+                    Os números abaixo podem estar incompletos sem aviso. (${err.message})</div>
+                </div>`;
+            }
+        }
+
+        function fmtDataHora(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
+            if (isNaN(d)) return iso;
+            return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Invariante quebrada é o painel dizendo que ele mesmo está errado. Vai no topo, com o
+        // mesmo destaque do aviso de coleta parada: não adianta o servidor detectar se a tela
+        // continuar mostrando o número como se nada houvesse.
+        function renderInvariantesQuebradas(inv) {
+            const box = document.getElementById('smsSaudeColeta');
+            if (!box || !inv || !inv.quebradas || inv.quebradas.length === 0) return;
+            const html = inv.quebradas.map(q => `
+                <div class="alerta-coleta alerta-coleta--parado">
+                    <i class="fas fa-scale-unbalanced"></i>
+                    <div>
+                        <strong>Número inconsistente nesta tela.</strong>
+                        ${escapeHtml(q.afirma)} — mas deu ${q.esquerda.toLocaleString('pt-BR')} de um lado
+                        e ${q.direita.toLocaleString('pt-BR')} do outro (diferença de ${q.diferenca.toLocaleString('pt-BR')}).
+                        <div class="alerta-coleta__acao">${escapeHtml(q.consequencia || '')}
+                        Detalhe completo em <span style="font-family:monospace">/admin/clientes/ID/diagnostico/invariantes</span>.</div>
+                    </div>
+                </div>`).join('');
+            box.insertAdjacentHTML('afterbegin', html);
+        }
+
+        function renderSaudeColeta(d) {
+            const partes = [];
+            const c = d.coleta_agora || {};
+
+            if (c.em_silencio) {
+                const h = c.horas_em_silencio;
+                const espera = h >= 24 ? `${Math.floor(h / 24)} dia(s)` : `${h} horas`;
+                partes.push(`<div class="alerta-coleta alerta-coleta--parado">
+                    <i class="fas fa-triangle-exclamation"></i>
+                    <div>
+                        <strong>A coleta parece parada: nenhuma venda há ${espera}.</strong>
+                        Último webhook recebido em ${fmtDataHora(c.ultimo_webhook)}.
+                        ${c.intervalo_normal_minutos ? `Normalmente entra uma venda a cada ${c.intervalo_normal_minutos} min.` : ''}
+                        <div class="alerta-coleta__acao">Checar no painel da Digistore, em Settings &rarr; Integrations (IPN),
+                        se as conexões continuam <strong>ativas</strong> — já aconteceu de serem desativadas sozinhas
+                        depois de o endpoint devolver erro.</div>
+                    </div>
+                </div>`);
+            }
+
+            (d.janelas_sem_coleta || []).forEach(j => {
+                const fim = j.em_aberto ? 'agora (ainda aberta)' : fmtDataHora(j.fim);
+                // A estimativa de vendas perdidas continua guardada em janelas_sem_coleta e vem no
+                // endpoint, mas NÃO entra no banner: o aviso precisa ser lido batendo o olho, e
+                // parágrafo longo no topo de um painel é lido como decoração. Quem quiser o número
+                // consulta /saude-da-coleta ou a tabela.
+                partes.push(`<div class="alerta-coleta alerta-coleta--buraco">
+                    <i class="fas fa-circle-exclamation"></i>
+                    <div>
+                        <strong>Este período tem ${fmtDataHora(j.inicio)} → ${fim} sem coleta.</strong>
+                        Os números abaixo estão <strong>subestimados</strong> nesse intervalo — vendas aconteceram e não foram gravadas.
+                        <div class="alerta-coleta__acao">Motivo: ${j.motivo}</div>
+                    </div>
+                </div>`);
+            });
+
+            return partes.join('');
+        }
+
         async function loadSmsStats(from, to, timeOpts = {}) {
             try {
                 const params = new URLSearchParams();
@@ -3773,6 +4409,9 @@
                     params.set('to', to);
                 }
                 appendPeriodTimeParams(params, timeOpts.fromTime, timeOpts.toTime);
+                // Sem await: o aviso de coleta não pode atrasar os números, e os números não podem
+                // depender dele para aparecer.
+                loadSaudeDaColeta(from, to, timeOpts);
                 const res = await fetch(`${API}/clientes/${clientId}/sms-stats?${params}`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
@@ -3797,49 +4436,75 @@
                     return;
                 }
 
+                // k.warn: quando true, o valor fica em amarelo — usado quando o número é real mas
+                // sabemos que pode estar incompleto (lista que não respondeu agora). k.sub: linha
+                // pequena abaixo do rótulo, pro "desde quando" do histórico de retrato.
                 const smsKpiCardTip = (k) => `
                     <div class="kpi-card">
                         <div class="kpi-icon ${k.icon.split(' ')[1]}"><i class="fas ${k.icon.split(' ')[0]}"></i></div>
-                        <div class="kpi-value">${k.value}</div>
+                        <div class="kpi-value"${k.warn ? ' style="color:var(--warning)"' : ''}>${k.value}</div>
                         <div class="kpi-label">${k.label}${k.tip ? ` <span class="kpi-tip" tabindex="0" data-tip="${k.tip.replace(/"/g, '&quot;')}">ⓘ</span>` : ''}</div>
+                        ${k.sub ? `<div style="font-size:0.65rem; color:var(--text-muted); margin-top:0.15rem">${k.sub}</div>` : ''}
                     </div>
                 `;
 
                 // SMS Revenue KPIs (mailxsms UTM-attributed) — já respeita o período selecionado
                 const r = data.revenue || {};
+                window.__smsRevenue = r;
+                renderResumoNegocioSms();
+                // /sms-stats e /sms-granular são dois fetches em paralelo (Promise.allSettled) —
+                // se o granular responder primeiro, a tabela por mensagem já renderizou usando o
+                // total do período ANTERIOR (ou nenhum). Re-renderiza agora que o oficial chegou;
+                // renderSmsGranular() não faz nada se a granular ainda não tiver dado nenhum.
+                renderSmsGranular();
                 document.getElementById('smsRevenueKpis').innerHTML = [
-                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'Faturamento com UTM de origem SMS (mailxsms), no período selecionado.' },
-                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'Quantidade de vendas atribuídas a SMS, no período selecionado.' },
-                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'Faturamento SMS ÷ Vendas SMS do período.' },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de recuperação de carrinho abandonado.' },
-                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'Faturamento só das recuperações SMS acima.' },
-                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas SMS, quantas vieram de um fluxo de upsell.' },
-                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'Faturamento só das vendas de upsell SMS acima.' },
+                    { icon: 'fa-sack-dollar green', label: 'Faturamento SMS', value: r.faturamento_sms || '$ 0,00', tip: 'FONTE: nosso banco de webhooks da Digistore — não vem da SlickText. Soma o valor dos pedidos aprovados cujo link de origem tem utm_source=mailx-sms. ESCOPO: período selecionado. A SlickText não sabe quanto uma mensagem faturou; ela sabe envio e clique. O faturamento é nosso cruzamento entre o pedido e o link que o gerou.' },
+                    { icon: 'fa-paper-plane blue', label: 'Vendas SMS', value: (r.vendas_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco de webhooks da Digistore. Conta pedidos aprovados (event_type=order.paid) cujo link tem utm_source=mailx-sms. ESCOPO: período selecionado. Cancelamento e reembolso NÃO saem desta contagem — aparecem separados no card de reembolso.' },
+                    { icon: 'fa-receipt purple', label: 'Ticket Médio SMS', value: r.ticket_medio_sms || '$ 0,00', tip: 'CÁLCULO: Faturamento SMS ÷ Vendas SMS, os dois cards ao lado. Não é média informada por ninguém — é divisão dos dois números que você está vendo, no mesmo período.' },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Recuperações SMS', value: (r.recuperacoes_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco. É um subconjunto das Vendas SMS: as que vieram de fluxo de carrinho abandonado, identificadas pelo utm_campaign começar com CarrinhoAbandonado. ESCOPO: período selecionado. Recuperação + Upsell não fecham necessariamente o total: pode haver venda SMS de fluxo que não é nem um nem outro.' },
+                    { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações SMS', value: r.faturamento_recuperacoes_sms || '$ 0,00', tip: 'FONTE: nosso banco. Soma o valor apenas dos pedidos contados em Recuperações SMS ao lado. ESCOPO: período selecionado.' },
+                    { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell SMS', value: (r.vendas_upsell_sms || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco. Subconjunto das Vendas SMS: as de fluxo de upsell / compra aprovada, identificadas pelo utm_campaign. ESCOPO: período selecionado.' },
+                    { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell SMS', value: r.faturamento_upsell_sms || '$ 0,00', tip: 'FONTE: nosso banco. Soma o valor apenas dos pedidos contados em Vendas Upsell SMS ao lado. ESCOPO: período selecionado.' },
                     // Faturamento total do CLIENTE (todos os canais, mesmo período) + representatividade
                     // do SMS nesse total — seção 3.1.2/3.2 da spec original, aplicada por canal.
-                    { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
-                    { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (r.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas SMS.' },
-                    { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento SMS ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
+                    { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: r.faturamento_total_cliente || '$ 0,00', tip: 'FONTE: nosso banco, TODOS os pedidos aprovados do cliente no período, sem filtro de origem — inclui afiliado, tráfego pago e orgânico, onde a MailX não participa. É a base de comparação da representatividade. ESCOPO: período selecionado.' },
+                    { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (r.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'FONTE: nosso banco, contagem de todos os pedidos aprovados do cliente no período, sem filtro de origem. ESCOPO: período selecionado.' },
+                    { icon: 'fa-percentage purple', label: 'Representatividade SMS', value: `${(r.representatividade_sms ?? 0).toLocaleString('pt-BR')}%`, tip: 'CÁLCULO: Faturamento SMS ÷ Fat. Total do Cliente × 100 — os dois cards desta mesma tela, mesmo período. É a fatia do faturamento do cliente que passou pelo SMS da MailX.' },
                 ].map(smsKpiCardTip).join('');
 
                 // Contact KPIs
                 const c = data.contacts || {};
-                // Total contacts: prefer SlickText brand-wide total over per-kit sum (which is 0 until kits link to lists)
-                const brandTotal = c.analytics?.totals?.total ?? 0;
-                const totalContatos = brandTotal || (c.total || 0);
+                // Desde quando o retrato diário mede o tamanho das listas — mesma leitura que já
+                // existe no card de Conversão por Segmento, aqui pros KPIs de contato.
+                const rh = c.retrato_historico;
+                const retratoSub = rh
+                    ? `Retrato desde ${fmtData(rh.primeiro_retrato)} (${rh.dias_com_retrato} dia${rh.dias_com_retrato === 1 ? '' : 's'})`
+                    : '';
+                // Total Contatos: SÓ usa o total da marca (analytics) quando a API respondeu de
+                // verdade. Antes, `brandTotal || c.total` trocava pra soma das listas de produto
+                // (um número menor, com significado diferente) sempre que brandTotal dava 0 —
+                // inclusive quando 0 era "a API falhou", não "a marca não tem contato". Agora essa
+                // troca só acontece com aviso explícito (analytics_indisponivel), nunca em silêncio.
+                const totalContatos = c.analytics_indisponivel ? (c.total || 0) : (c.analytics?.totals?.total ?? 0);
+                const totalContatosTip = c.analytics_indisponivel
+                    ? 'A SlickText não respondeu o total de contatos da marca agora — mostrando a SOMA DAS LISTAS DE PRODUTO no lugar (um número menor: só quem está em lista de abandono/compra vinculada, não a marca inteira). Recarregue a aba em alguns minutos.'
+                    : 'FONTE: API da SlickText, endpoint de analytics de contatos da marca. ESCOPO: total atual da conta, VITALÍCIO — a API não permite contar contatos por data, então este número não muda ao trocar o período.';
                 document.getElementById('smsContactKpis').innerHTML = [
-                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: 'Total de contatos SMS da marca no SlickText (independe de período).' },
-                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de compra aprovada, por produto.' },
-                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'Contatos na(s) lista(s) de carrinho abandonado, por produto.' },
+                    { icon: 'fa-users blue', label: 'Total Contatos', value: totalContatos.toLocaleString('pt-BR'), tip: totalContatosTip, warn: c.analytics_indisponivel, sub: c.analytics_indisponivel ? '' : retratoSub },
+                    { icon: 'fa-shopping-bag green', label: 'Compradores', value: (c.compradores || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Compra Aprovada dos produtos ativos (endpoint /lists/{id}/contacts/count). Lista compartilhada por vários produtos da mesma família é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' + (c.contatos_incompletos ? ' AVISO: pelo menos uma lista não respondeu agora — este número pode estar MENOR que o real.' : ''), warn: c.contatos_incompletos, sub: retratoSub },
+                    { icon: 'fa-cart-arrow-down orange', label: 'Carrinhos Abandonados', value: (c.carrinhos_abandonados || 0).toLocaleString('pt-BR'), tip: 'FONTE: API da SlickText, contagem de cada lista de Abandono de Carrinho dos produtos ativos. Lista compartilhada é contada UMA vez. ESCOPO: total atual, VITALÍCIO — não muda com o período.' + (c.contatos_incompletos ? ' AVISO: pelo menos uma lista não respondeu agora — este número pode estar MENOR que o real.' : ''), warn: c.contatos_incompletos, sub: retratoSub },
                 ].map(smsKpiCardTip).join('');
 
                 // Credits/Messages KPIs
                 const credits = data.credits?.usage || {};
+                const creditsIndisponivel = data.credits?.indisponivel;
+                const listsIndisponivel = data.lists?.indisponivel;
+                const creditsTip = (base) => base + (creditsIndisponivel ? ' AVISO: a SlickText não respondeu agora — este valor é 0 por falta de resposta, NÃO é o saldo real. Recarregue em alguns minutos.' : '');
                 document.getElementById('smsSendKpis').innerHTML = [
-                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: (credits.credits_available || 0).toLocaleString('pt-BR'), tip: 'Créditos de SMS restantes no plano SlickText do cliente.' },
-                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: (credits.credits_used || 0).toLocaleString('pt-BR'), tip: 'Créditos já consumidos no ciclo atual do plano.' },
-                    { icon: 'fa-database purple', label: 'Total Créditos', value: (credits.total_credits || 0).toLocaleString('pt-BR'), tip: 'Limite total de créditos do plano contratado.' },
-                    { icon: 'fa-list orange', label: 'Listas SMS', value: data.lists?.total || 0, tip: 'Quantidade de listas criadas no SlickText para este cliente.' },
+                    { icon: 'fa-coins green', label: 'Créditos Disponíveis', value: creditsIndisponivel ? '—' : (credits.credits_available || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage da marca. ESCOPO: saldo agora, não do período. Atenção: mensagem acima de 160 caracteres consome mais de um crédito por envio.'), warn: creditsIndisponivel },
+                    { icon: 'fa-paper-plane blue', label: 'Créditos Usados', value: creditsIndisponivel ? '—' : (credits.credits_used || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage. ESCOPO: acumulado da conta, VITALÍCIO — não é o consumo do período selecionado.'), warn: creditsIndisponivel },
+                    { icon: 'fa-database purple', label: 'Total Créditos', value: creditsIndisponivel ? '—' : (credits.total_credits || 0).toLocaleString('pt-BR'), tip: creditsTip('FONTE: API da SlickText, endpoint /usage — o total contratado no plano do cliente.'), warn: creditsIndisponivel },
+                    { icon: 'fa-list orange', label: 'Listas SMS', value: listsIndisponivel ? '—' : (data.lists?.total || 0), tip: 'FONTE: API da SlickText — todas as listas existentes na conta, incluindo as que não são de produto (rastreio, teste). Contando todas as contas SlickText do cliente.' + (listsIndisponivel ? ' AVISO: a SlickText não respondeu agora — sem dado nenhum pra mostrar. Recarregue em alguns minutos.' : ''), warn: listsIndisponivel },
                 ].map(smsKpiCardTip).join('');
 
                 // Lists per product table
@@ -3848,14 +4513,40 @@
                     document.getElementById('smsListsBody').innerHTML =
                         '<tr><td colspan="4" class="empty-state"><i class="fas fa-box-open"></i> Nenhum produto com listas SMS</td></tr>';
                 } else {
+                    // Lista compartilhada entre produtos conta uma vez só nos totais do topo da
+                    // aba, mas aparece em mais de uma linha aqui (é a mesma lista, uma linha por
+                    // produto que a usa) — sem aviso, somar esta coluna dá um número maior que os
+                    // cards acima, e parece inconsistência em vez de contagem esperada.
+                    const compartilhadaTip = (nomes) => nomes && nomes.length > 0
+                        ? ` <span class="kpi-tip" tabindex="0" data-tip="Mesma lista da SlickText também usada por: ${nomes.map(escapeHtml).join(', ')}. Por isso o número se repete nas duas linhas — nos totais do topo da aba, essa lista é contada uma vez só.">ⓘ</span>`
+                        : '';
+                    const algumCompartilhado = listStats.some(l =>
+                        (l.compra_compartilhada_com?.length > 0) || (l.abandono_compartilhada_com?.length > 0));
+                    // null = a SlickText não respondeu essa lista agora (falha real) — "indisponível"
+                    // em vez de 0, mesmo padrão já usado pra envios sem retrato nesta mesma tela.
+                    const contagem = (v) => v == null ? `<span style="color:var(--warning)">indisponível</span>` : v;
+                    const algumIndisponivel = listStats.some(l => l.compra_contacts == null || l.abandono_contacts == null);
+
                     document.getElementById('smsListsBody').innerHTML = listStats.map(l => `
                         <tr>
                             <td style="color:#fff; font-weight:600">${l.product}</td>
-                            <td><span class="tag green">${l.compra_contacts}</span></td>
-                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${l.abandono_contacts}</span></td>
-                            <td style="font-weight:700">${l.compra_contacts + l.abandono_contacts}</td>
+                            <td><span class="tag green">${contagem(l.compra_contacts)}</span>${compartilhadaTip(l.compra_compartilhada_com)}</td>
+                            <td><span class="tag" style="color:var(--warning);background:var(--warning-bg)">${contagem(l.abandono_contacts)}</span>${compartilhadaTip(l.abandono_compartilhada_com)}</td>
+                            <td style="font-weight:700">${(l.compra_contacts == null || l.abandono_contacts == null) ? '—' : l.compra_contacts + l.abandono_contacts}</td>
                         </tr>
-                    `).join('');
+                    `).join('') + (algumIndisponivel ? `
+                        <tr>
+                            <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                                <i class="fas fa-triangle-exclamation" style="margin-right:0.35rem; color:var(--warning)"></i>
+                                Pelo menos uma lista não respondeu à SlickText agora — "indisponível" não é zero, é falha temporária de consulta. Recarregue a aba em alguns minutos.
+                            </td>
+                        </tr>` : '') + (algumCompartilhado ? `
+                        <tr>
+                            <td colspan="4" style="font-size:0.72rem; color:var(--text-dim); background:var(--surface-2); border-top:1px solid var(--border)">
+                                <i class="fas fa-circle-info" style="margin-right:0.35rem"></i>
+                                Alguns produtos compartilham a mesma lista (ⓘ em cima do número) — a soma desta tabela pode ficar maior que os totais de Compradores/Carrinhos Abandonados no topo da aba, que contam cada lista uma vez só.
+                            </td>
+                        </tr>` : '');
                 }
                 clearDataLoadError('SMS');
             } catch (e) {
@@ -3876,7 +4567,12 @@
         }
 
         function fmtSmsPct(value, total) {
-            if (!total) return '0,0%';
+            // total < 0 acontece quando reembolsos superam vendas no canal inteiro no período —
+            // raro, mas com o total oficial (que pode ir negativo de verdade, ao contrário da soma
+            // da própria tabela) dividir por ele dá um percentual negativo pra uma linha de receita
+            // positiva. Sem total positivo não dá pra expressar "fatia de quê", então mostra 0,0%
+            // em vez de um número que confunde mais do que ajuda.
+            if (!total || total < 0) return '0,0%';
             return ((value / total) * 100).toFixed(1).replace('.', ',') + '%';
         }
 
@@ -4295,6 +4991,126 @@
             }
         });
 
+        // ── Resumo de negócio da aba SMS ──
+        //
+        // Para quem NÃO conhece o sistema. O pedido foi explícito: o head operacional precisa
+        // entender batendo o olho e não sabe de onde os números são puxados. Duas consequências de
+        // desenho:
+        //
+        // 1. A fonte vem ESCRITA na tela, não em tooltip. Quem não conhece não passa o mouse
+        //    procurando procedência — ou está visível, ou não existe para essa pessoa.
+        // 2. A frase vem antes de qualquer card. "O SMS gerou X em Y vendas, que é Z% do que o
+        //    cliente faturou" responde a pergunta que se faz ao abrir; onze cards não respondem,
+        //    eles pedem que a pessoa monte a resposta sozinha.
+        //
+        // É ADITIVO: entra acima e não remove nada. Quem já usa a tela continua com os mesmos cards.
+        function renderResumoNegocioSms() {
+            const el = document.getElementById('smsResumoNegocio');
+            const r = window.__smsRevenue;
+            if (!el || !r) return;
+
+            const vendas = r.vendas_sms || 0;
+            // Sem venda no período não existe leitura de negócio a fazer — e uma frase dizendo
+            // "gerou $0,00 em 0 vendas" ocupa espaço para não informar nada.
+            if (vendas === 0) {
+                el.innerHTML = `<div class="rn"><div class="rn-frase">
+                    <p>Nenhuma venda atribuída ao SMS no período selecionado.
+                    <span class="rn-fonte">Se você esperava vendas aqui, verifique se as mensagens estão vinculadas
+                    (botão Auto-vincular) e se os links carregam <code>utm_source=mailx-sms</code>.</span></p>
+                </div></div>`;
+                return;
+            }
+
+            const rep = r.representatividade_sms ?? 0;
+            const rec = r.recuperacoes_sms || 0;
+            const ups = r.vendas_upsell_sms || 0;
+            // Fatia da recuperação dentro do próprio SMS: é o que diz se o canal vive de recuperar
+            // carrinho ou de vender upsell, e é a pergunta que o operacional faz.
+            const recShare = vendas > 0 ? Math.round((rec / vendas) * 100) : 0;
+
+            // Campeã e pior vêm da tabela granular. Podem não estar carregadas ainda — a frase e os
+            // números principais aparecem sem elas, e os destaques entram quando a tabela chegar.
+            const rows = (window.__smsGranularData?.rows || []).slice();
+            let destaquesHtml = '';
+            if (rows.length > 0) {
+                const porReceita = rows.slice().sort((a, b) => b.receita_liquida - a.receita_liquida);
+                const melhor = porReceita.find(x => x.vendas > 0);
+                const pior = porReceita[porReceita.length - 1];
+                const semVenda = rows.filter(x => x.vendas === 0 && x.receita_liquida < 0).length;
+
+                const tipoTxt = (t) => /upsell|compra aprovada/i.test(t || '') ? 'Compra Aprovada' : 'Carrinho Abandonado';
+                const money = (v) => (v < 0 ? '−' : '') + '$' + Math.abs(Math.round(v)).toLocaleString('pt-BR');
+
+                // Denominador tem que ser o faturamento SMS OFICIAL (r.receita_sms), não a soma da
+                // própria tabela granular. A granular exige utm_medium/utm_source EXATOS
+                // ('auto-sms'/'mailx-sms'); o faturamento oficial usa uma regra mais larga que
+                // também aceita formato não padrão (ex.: Horse Peak manda utm_medium=WFI001) — a
+                // soma da granular fica menor que o total real, e dividir por ela infla o
+                // percentual (visto em produção: 58% quando o real era 48%).
+                const totalSmsReal = r.receita_sms || 0;
+
+                const blocoBom = melhor ? `
+                    <div class="rn-dest bom">
+                        <span class="t">Mensagem que mais vendeu</span>
+                        <span class="n">${escapeHtml(humanizeMsgCode(melhor.mensagem).human)} · ${tipoTxt(melhor.tipo_automacao)}${melhor.produto ? ' · ' + escapeHtml(melhor.produto) : ''}</span>
+                        <span class="f"><span class="pos">${money(melhor.receita_liquida)}</span> em <b>${melhor.vendas.toLocaleString('pt-BR')} vendas</b>${totalSmsReal > 0 ? ` — ${Math.round(melhor.receita_liquida / totalSmsReal * 100)}% da receita do SMS` : ''}.</span>
+                    </div>` : '';
+
+                const blocoRuim = (pior && pior.receita_liquida < 0) ? `
+                    <div class="rn-dest ruim">
+                        <span class="t">Precisa de atenção</span>
+                        <span class="n">${escapeHtml(humanizeMsgCode(pior.mensagem).human)} · ${tipoTxt(pior.tipo_automacao)}${pior.produto ? ' · ' + escapeHtml(pior.produto) : ''}</span>
+                        <span class="f"><span class="neg">${money(pior.receita_liquida)}</span> no período${pior.vendas === 0 ? ' — reembolso de vendas anteriores e nenhuma venda nova' : ''}.${semVenda > 1 ? (semVenda - 1 === 1 ? ' Outra mensagem também está no negativo.' : ` Outras ${semVenda - 1} mensagens estão no negativo.`) : ''}</span>
+                    </div>` : '';
+
+                if (blocoBom || blocoRuim) destaquesHtml = `<div class="rn-destaques">${blocoBom}${blocoRuim}</div>`;
+            }
+
+            el.innerHTML = `
+                <div class="rn">
+                    <div class="rn-frase">
+                        <p>
+                            O SMS gerou <span class="rn-val">${r.faturamento_sms || '$ 0,00'}</span> em
+                            <b>${vendas.toLocaleString('pt-BR')} vendas</b> no período —
+                            <b>${rep.toLocaleString('pt-BR')}%</b> de tudo que o cliente faturou.
+                            Desse total, <span class="rn-val">${r.faturamento_recuperacoes_sms || '$ 0,00'}</span>
+                            vieram de <b>carrinho recuperado</b> (${rec.toLocaleString('pt-BR')} vendas) e
+                            <span class="rn-val">${r.faturamento_upsell_sms || '$ 0,00'}</span> de
+                            <b>upsell</b> (${ups.toLocaleString('pt-BR')} vendas).
+                            <span class="rn-fonte">
+                                Faturamento e vendas vêm do nosso banco, dos webhooks de pedido aprovado da Digistore,
+                                filtrados pelos links com <code>utm_source=mailx-sms</code> — respeitam o período escolhido acima.
+                                Envios, cliques, contatos e créditos vêm da API da SlickText.
+                                Reembolso não sai da contagem de vendas: aparece separado.
+                            </span>
+                        </p>
+                    </div>
+
+                    <div class="rn-herois">
+                        <div class="rn-heroi">
+                            <span class="k">Faturamento SMS</span>
+                            <span class="v">${r.faturamento_sms || '$ 0,00'}</span>
+                            <span class="d">${vendas.toLocaleString('pt-BR')} vendas · ticket ${r.ticket_medio_sms || '$ 0,00'}</span>
+                        </div>
+                        <div class="rn-heroi">
+                            <span class="k">Fatia do faturamento do cliente</span>
+                            <span class="v">${rep.toLocaleString('pt-BR')}%</span>
+                            <span class="d">de ${r.faturamento_total_cliente || '$ 0,00'} em todos os canais</span>
+                            <span class="barra"><i style="width:${Math.max(0, Math.min(100, rep))}%"></i></span>
+                        </div>
+                        <div class="rn-heroi">
+                            <span class="k">Vem de carrinho recuperado</span>
+                            <span class="v">${r.faturamento_recuperacoes_sms || '$ 0,00'}</span>
+                            <span class="d">${recShare}% das vendas de SMS são recuperação</span>
+                            <span class="barra"><i style="width:${Math.max(0, Math.min(100, recShare))}%"></i></span>
+                        </div>
+                    </div>
+
+                    ${destaquesHtml}
+                </div>
+            `;
+        }
+
         // ── Envios por Automação ──
         // O total de mensagens que cada fluxo disparou no período. A tabela acima mostra envio por
         // MENSAGEM; aqui é a soma por automação, que é a pergunta de quem quer saber qual fluxo está
@@ -4578,9 +5394,26 @@
         // tabela mostrando só o Thermo transformaria o cabeçalho numa afirmação falsa a cada clique —
         // e o total geral continua visível, no chip "Todos os produtos", que mostra a receita
         // completa. Assim nada se perde e nada se contradiz.
+        // Família do produto: o mesmo produto chega com nomes diferentes no utm_campaign conforme
+        // quem criou o link. "NeuromindPro" e "NeuromindProN8N" são o MESMO NeuroMind — confirmado
+        // com o Nicollas — e viravam dois grupos, cada um com um pedaço da receita e nenhum com o
+        // total, que é a dificuldade de agrupamento que ele relatou.
+        //
+        // A regra tira sufixo de ORIGEM (quem disparou), não de produto: o que identifica o produto
+        // é o nome, e "veio pelo n8n" é característica do disparo. Conservador de propósito — só o
+        // sufixo no fim, porque remover no meio quebraria nome legítimo que contenha a sigla.
+        // A família vem PRONTA do servidor (produto_familia). O fallback existe só para resposta
+        // antiga em cache do navegador — e é deliberadamente o nome cru, não uma segunda cópia da
+        // regra: duas cópias foi exatamente o que fez o NeuromindProN8N ficar certo numa tela e
+        // errado na outra. Regra de negócio tem um dono, e o dono é src/admin/atribuicao.ts.
+        function familiaProduto(row) {
+            if (row && typeof row === 'object') return row.produto_familia || row.produto || '—';
+            return row || '—';
+        }
+
         function rowsFiltradas(rows) {
             const f = window.__smsFiltroProduto;
-            return f ? rows.filter(r => (r.produto || '—') === f) : rows;
+            return f ? rows.filter(r => familiaProduto(r) === f) : rows;
         }
 
         function renderFiltroProduto(data, sym) {
@@ -4589,10 +5422,11 @@
 
             const porProduto = new Map();
             for (const r of data.rows) {
-                const k = r.produto || '—';
-                const cur = porProduto.get(k) || { receita: 0, msgs: 0 };
+                const k = familiaProduto(r);
+                const cur = porProduto.get(k) || { receita: 0, msgs: 0, variantes: new Set() };
                 cur.receita += r.receita_liquida;
                 cur.msgs++;
+                if (r.produto && r.produto !== k) cur.variantes.add(r.produto);
                 porProduto.set(k, cur);
             }
             // Um produto só: o filtro não escolheria nada e viraria enfeite.
@@ -4620,6 +5454,16 @@
                 ${chips}
             </div>`;
         }
+
+        // Delegado no documento porque o bloco é reescrito a cada render — listener preso ao
+        // elemento morreria junto com ele na primeira troca de período.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-conv-prod]');
+            if (!btn) return;
+            const v = btn.dataset.convProd || null;
+            window.__convProdutoSel = (window.__convProdutoSel === v) ? null : (v || null);
+            renderConversaoPorProduto(window.__convProdutoDados);
+        });
 
         document.getElementById('sms-filtro-produto')?.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-produto]');
@@ -4681,7 +5525,16 @@
 
         function renderSmsGranularMensagem(data, sym) {
             data = { ...data, rows: rowsFiltradas(data.rows) };
-            const total = data.total_receita_liquida_sms || 0;
+            // Denominador tem que ser o faturamento SMS OFICIAL (mesma regra já aplicada na frase-
+            // resumo e na "mensagem campeã" acima), não a soma da própria tabela granular. A
+            // granular só soma pedidos com utm_medium/utm_source EXATOS; quando existe mensagem em
+            // prejuízo (reembolso sem venda nova no período, ver lossRows abaixo) essa soma cai
+            // bem abaixo da receita real — e dividir a linha mais forte por um total encolhido
+            // estoura 100% (o prejuízo que a puxou pra baixo nem aparece nesta lista, só na seção
+            // de "Prejuízo no período" logo adiante, então o leitor não tem como saber por quê).
+            // Sem faturamento oficial carregado ainda (primeira pintura antes de /sms-stats
+            // responder), cai pro total granular mesmo, só pra não mostrar NaN%.
+            const total = window.__smsRevenue?.receita_sms || data.total_receita_liquida_sms || 0;
             const positiveRows = data.rows.filter(r => r.receita_liquida >= 0);
             const lossRows = data.rows.filter(r => r.receita_liquida < 0);
             const leader = smsGlobalLeader(positiveRows);
@@ -4745,12 +5598,15 @@
 
         function renderSmsGranularProduto(data, sym) {
             data = { ...data, rows: rowsFiltradas(data.rows) };
-            const total = data.total_receita_liquida_sms || 0;
+            // Mesmo motivo do total em renderSmsGranularMensagem logo acima: usar a soma da própria
+            // tabela como denominador estoura 100% quando existe produto em prejuízo (reembolso sem
+            // venda nova) puxando o total pra baixo.
+            const total = window.__smsRevenue?.receita_sms || data.total_receita_liquida_sms || 0;
             const leader = smsGlobalLeader(data.rows);
             const byProduct = new Map();
 
             for (const row of data.rows) {
-                const key = row.produto || '—';
+                const key = familiaProduto(row);
                 if (!byProduct.has(key)) byProduct.set(key, []);
                 byProduct.get(key).push(row);
             }
@@ -4760,6 +5616,10 @@
                     produto,
                     rows: rows.sort((a, b) => b.receita_liquida - a.receita_liquida),
                     subtotal: rows.reduce((sum, r) => sum + r.receita_liquida, 0),
+                    // Quais nomes crus caíram nesta família. Vai para a tela quando houver mais de
+                    // um: agrupamento que junta sem dizer o que juntou faz quem conhece os nomes
+                    // achar que sumiu produto.
+                    variantes: [...new Set(rows.map(r => r.produto).filter(n => n && n !== produto))],
                 }))
                 .sort((a, b) => b.subtotal - a.subtotal);
 
@@ -4797,7 +5657,15 @@
                 return `
                     <div class="group-block">
                         <div class="group-head">
-                            <span class="group-name">${group.produto}${avisoUtm}</span>
+                            <span class="group-name">${group.produto}${avisoUtm}${
+                                // Agrupamento explícito: diz QUAIS nomes crus entraram nesta
+                                // família. Sem isso, quem conhece "NeuromindProN8N" abre a tela,
+                                // não acha o nome, e conclui que a mensagem sumiu — em vez de
+                                // entender que ela está somada aqui.
+                                group.variantes.length > 0
+                                    ? ` <span class="kpi-tip" tabindex="0" data-tip="Agrupa também: ${escapeHtml(group.variantes.join(', '))}. É o mesmo produto com nome diferente no utm_campaign, conforme quem criou o link — o sufixo de origem (ex: N8N) diz quem disparou, não qual produto é.">agrupado</span>`
+                                    : ''
+                            }</span>
                             <span class="group-total">${fmtSmsMoney(sym, group.subtotal)}<small>${fmtSmsPct(group.subtotal, total)} do total SMS</small></span>
                         </div>
                         <div class="group-rows">${rowsHtml}</div>
@@ -4825,6 +5693,7 @@
                 ? renderSmsGranularProduto(data, sym)
                 : renderSmsGranularMensagem(data, sym);
             renderCreditosAutomacao();
+            renderResumoNegocioSms();
             // Sem await: a tabela já está na tela e o bloco de envios por automação preenche quando
             // a SlickText responder. Só na primeira renderização — trocar a visão produto/mensagem
             // não muda o número por automação, e refazer a consulta a cada clique seria desperdício.
@@ -4941,7 +5810,7 @@
                 { icon: 'fa-hand-holding-dollar green', label: 'Fat. Recuperações Email', value: em.faturamento_recuperacoes_email || '$ 0,00', tip: 'Faturamento só das recuperações Email acima.' },
                 { icon: 'fa-arrow-trend-up green', label: 'Vendas Upsell Email', value: (em.vendas_upsell_email || 0).toLocaleString('pt-BR'), tip: 'Dessas vendas Email, quantas vieram de um fluxo de upsell.' },
                 { icon: 'fa-hand-holding-dollar blue', label: 'Fat. Upsell Email', value: em.faturamento_upsell_email || '$ 0,00', tip: 'Faturamento só das vendas de upsell Email acima.' },
-                { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'Faturamento aprovado do cliente em TODOS os canais (SMS, Email, orgânico), no mesmo período — base de comparação da representatividade abaixo.' },
+                { icon: 'fa-coins blue', label: 'Fat. Total do Cliente', value: em.faturamento_total_cliente || '$ 0,00', tip: 'FONTE: nosso banco, TODOS os pedidos aprovados do cliente no período, sem filtro de origem — inclui afiliado, tráfego pago e orgânico, onde a MailX não participa. É a base de comparação da representatividade. ESCOPO: período selecionado.' },
                 { icon: 'fa-boxes-stacked blue', label: 'Vendas Totais do Cliente', value: (em.vendas_total_cliente || 0).toLocaleString('pt-BR'), tip: 'Quantidade de pedidos aprovados do cliente em TODOS os canais no período — base de comparação para as vendas de Email.' },
                 { icon: 'fa-percentage purple', label: 'Representatividade Email', value: `${(em.representatividade_email ?? 0).toLocaleString('pt-BR')}%`, tip: 'Faturamento Email ÷ Faturamento Total do Cliente × 100, no período selecionado.' },
             ].map(k => `

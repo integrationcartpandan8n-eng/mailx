@@ -8,6 +8,12 @@ import { CartPandaClient } from '../services/cartpanda';
 import { SlickTextClient } from '../services/slicktext';
 import { autoLinkSlickTextLists } from '../webhooks/slicktext-sync';
 import { ActiveCampaignClient } from '../services/activecampaign';
+import { ds24Call, ds24KeyConfigurada, acharChavesInteressantes } from '../services/digistore24-api';
+import { estadoDoCliente } from '../jobs/webhook-watchdog';
+import { enviosDoEspelho } from '../services/espelho-envios';
+import { cardsDeAfiliadoDoCliente } from '../services/afiliado';
+import { conferirInvariantes } from './invariantes';
+import { canaisConfigurados } from '../services/notificador';
 import { env, METRICS_ONLY } from '../config/env';
 import { produtorAdminRouter } from '../produtor/admin-router';
 import {
@@ -23,96 +29,13 @@ import {
 
 const CTX = 'Admin';
 
-// ─────────────────────────────────────────────────────────────
-// Fase B — Atribuição MailX via colunas normalizadas
-// Canal decidido por utm_medium (padrão UTMS_DASH), com fallback
-// legado (source/campaign sem hífen) para registros antigos sem medium.
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Venda atribuída à MailX (qualquer canal).
- *
- * Inclui tracking_code porque ClickBank e Buygoods NÃO ACEITAM UTM — a documentação UTMS_DASH
- * define que a marcação vai no `tid` (ClickBank) e no `subid` (Buygoods), no formato
- * "Mailx_AutoEmail_..." / "MailxSMS_AutoSMS_...". Esse valor é guardado cru em
- * webhook_logs.tracking_code. Sem olhar essa coluna, toda venda MailX vinda desses dois
- * gateways seria registrada e não atribuída a ninguém — o ClickBank ainda não está ativo,
- * então nada foi perdido até agora, mas passaria a ser invisível no dia que ligasse.
- */
-const SQL_IS_MAILX = `(
-  COALESCE(utm_source, '')   ILIKE '%mailx%'
-  OR COALESCE(utm_campaign, '') ILIKE '%mailx%'
-  OR COALESCE(tracking_code, '') ILIKE '%mailx%'
-)`;
-
-/**
- * Canal SMS: medium contém 'sms', OU a origem é mailx-sms.
- *
- * A checagem por utm_source já existia, mas só valia com `utm_medium IS NULL` — e essa condição
- * classificava venda de SMS como EMAIL. Encontrado ao validar o SMS: os links do Horse Peak (N8N)
- * saem com `utm_source=mailx-sms` e `utm_medium=WFI001` / `WFI002-Upsell`, fora do padrão da spec
- * (que manda `auto-sms`). Como 'WFI001' não contém 'sms' e não é nulo, a venda caía em
- * SQL_IS_SMS = falso; e como a origem tem 'mailx', SQL_IS_MAILX = verdadeiro. Resultado:
- * SQL_MAILX_EMAIL = MailX E NÃO SMS ficava verdadeiro, e receita de SMS entrava no faturamento de
- * EMAIL — o pior tipo de erro, porque os dois canais ficam errados de uma vez e a soma continua
- * fechando.
- *
- * Origem `mailx-sms` é prova suficiente de canal, com ou sem medium: nenhum link de email carrega
- * essa origem. O medium fora do padrão continua sendo problema (a tabela por mensagem exige
- * `auto-sms` exato), mas isso aparece na nota de reconciliação do card, não como canal trocado.
- */
-const SQL_IS_SMS = `(
-  COALESCE(utm_medium, '') ILIKE '%sms%'
-  OR REPLACE(COALESCE(utm_source, ''),   '-', '') ILIKE '%mailxsms%'
-  OR REPLACE(COALESCE(utm_campaign, ''), '-', '') ILIKE '%mailxsms%'
-  -- ClickBank/Buygoods: o canal vem no próprio código de rastreio, que começa com
-  -- "MailxSMS_AutoSMS_" no SMS e "Mailx_AutoEmail_" no email. Tokens específicos em vez de
-  -- procurar 'sms' solto, pra nome de produto com essas letras não classificar errado.
-  OR COALESCE(tracking_code, '') ILIKE '%mailxsms%'
-  OR COALESCE(tracking_code, '') ILIKE '%autosms%'
-)`;
-
-/** MailX via SMS. */
-const SQL_MAILX_SMS = `(${SQL_IS_MAILX} AND ${SQL_IS_SMS})`;
-
-/** MailX via Email = MailX e NÃO SMS. */
-const SQL_MAILX_EMAIL = `(${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS})`;
-
-/** Recuperação de carrinho abandonado (qualquer canal). */
-const SQL_IS_RECOVERY = `(
-  COALESCE(utm_campaign, '') ILIKE '%carrinhoabandonado%'
-  OR COALESCE(utm_source, '') ILIKE '%carrinhoabandonado%'
-  OR COALESCE(tracking_code, '') ILIKE '%carrinhoabandonado%'
-)`;
-
-/** Medium de automação (auto-email / auto-sms). */
-const SQL_MEDIUM_AUTO = `COALESCE(utm_medium, '') ILIKE '%auto%'`;
-
-/** Medium de campanha (campaign-editorial / campaing-promo e variações). */
-const SQL_MEDIUM_CAMPAIGN = `(
-  COALESCE(utm_medium, '') ILIKE '%campai%'
-  OR COALESCE(utm_medium, '') ILIKE '%editorial%'
-  OR COALESCE(utm_medium, '') ILIKE '%promo%'
-)`;
-
-/** Campanha de upsell. */
-/**
- * Upsell — a automação de pós-compra. Duas grafias circulam para o MESMO evento: a
- * documentação UTMS_DASH chama de "Automação Compra Aprovada (Upsell)" e usa
- * "CompraAprovada" na campanha, enquanto os disparos em produção usam "Upsell".
- * As duas contam, nos dois caminhos (utm_campaign e tid/subid) — antes só "Upsell" era
- * reconhecido via UTM, então um cliente que seguisse a documentação à risca teria upsell
- * zerado sem nenhum aviso.
- */
-const SQL_IS_UPSELL = `(
-  COALESCE(utm_campaign, '')    ILIKE '%upsell%'
-  OR COALESCE(utm_campaign, '') ILIKE '%compraaprovada%'
-  OR COALESCE(tracking_code, '') ILIKE '%upsell%'
-  OR COALESCE(tracking_code, '') ILIKE '%compraaprovada%'
-)`;
-
-/** Receita normalizada (Fase A garante NUMERIC ou NULL). */
-const SQL_REVENUE = `COALESCE(SUM(total_price), 0)`;
+// A definição de canal e de segmento mora em ./atribuicao — uma vez, para os dois caminhos que
+// leem esses números (a resposta da aba e o endpoint de invariantes). Ver o cabeçalho de lá.
+import {
+  SQL_IS_MAILX, SQL_IS_SMS, SQL_MAILX_SMS, SQL_MAILX_EMAIL,
+  SQL_IS_RECOVERY, SQL_MEDIUM_AUTO, SQL_MEDIUM_CAMPAIGN, SQL_IS_UPSELL, SQL_REVENUE,
+  SQL_ESCOPO_POR_AUTOMACAO, familiaDoProduto, apurarSms, listasDoKit,
+} from './atribuicao';
 
 const SQL_EXCLUDE_PAUSED_CLIENTS = `client_id NOT IN (SELECT id FROM clients WHERE status = 'paused')`;
 
@@ -176,7 +99,35 @@ function validateYmdRange(from: string, to: string): { fromDate: Date; toDate: D
   return { fromDate, toDate, dayCount };
 }
 
-/** Builds created_at filter using $1=from, $2=to; optionally appends $3/$4 for time. */
+// ─────────────────────────────────────────────────────────────────────────────
+// FUSO — o dia do painel começa e termina em env.APP_TZ (Brasília), não em UTC.
+//
+// created_at é TIMESTAMP sem fuso, gravado em env.DB_TZ (UTC). Para comparar com uma data que o
+// usuário escolheu no filtro (que é uma data LOCAL), os dois precisam virar instantes no mesmo
+// fuso: `created_at AT TIME ZONE DB_TZ` transforma o valor cru em instante, e
+// `data::timestamp AT TIME ZONE APP_TZ` transforma a meia-noite local em instante. A comparação
+// então é instante contra instante, sem depender do fuso da sessão do Postgres.
+//
+// A forma é de FRONTEIRA (converter os dois limites) e não de coluna
+// (`(created_at AT TIME ZONE ...)::date = $1`) de propósito: função sobre a coluna descarta o
+// índice de created_at, e webhook_logs é a tabela grande da base.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** O instante (timestamptz) em que começa o dia local `expr`. */
+function inicioDoDiaLocal(expr: string): string {
+  return `((${expr})::timestamp AT TIME ZONE '${env.APP_TZ}')`;
+}
+
+/** created_at (cru, em DB_TZ) como instante comparável. */
+const CREATED_AT_INSTANTE = `(created_at AT TIME ZONE '${env.DB_TZ}')`;
+
+/** A data de HOJE no fuso do negócio — substitui CURRENT_DATE, que é a data em UTC. */
+const HOJE_LOCAL = `((NOW() AT TIME ZONE '${env.APP_TZ}')::date)`;
+
+/**
+ * Builds created_at filter using $1=from, $2=to; optionally appends $3/$4 for time.
+ * from/to são datas LOCAIS (fuso do negócio) — ver o bloco de fuso acima.
+ */
 function createdAtRangeSql(
   params: (string | number)[],
   hasTime: boolean,
@@ -185,9 +136,11 @@ function createdAtRangeSql(
 ): string {
   if (hasTime && fromTime && toTime) {
     params.push(fromTime, toTime);
-    return `created_at >= ($1::date + $3::time) AND created_at <= ($2::date + $4::time)`;
+    return `${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal('$1::date + $3::time')}
+        AND ${CREATED_AT_INSTANTE} <= ${inicioDoDiaLocal('$2::date + $4::time')}`;
   }
-  return `created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')`;
+  return `${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal('$1::date')}
+      AND ${CREATED_AT_INSTANTE} < ${inicioDoDiaLocal("$2::date + INTERVAL '1 day'")}`;
 }
 
 /** Same as createdAtRangeSql but from/to are at $fromIdx/$toIdx (for sms-granular: $2/$3). */
@@ -203,9 +156,11 @@ function createdAtRangeSqlAt(
     params.push(fromTime, toTime);
     const tFromIdx = params.length - 1;
     const tToIdx = params.length;
-    return `created_at >= ($${fromIdx}::date + $${tFromIdx}::time) AND created_at <= ($${toIdx}::date + $${tToIdx}::time)`;
+    return `${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal(`$${fromIdx}::date + $${tFromIdx}::time`)}
+        AND ${CREATED_AT_INSTANTE} <= ${inicioDoDiaLocal(`$${toIdx}::date + $${tToIdx}::time`)}`;
   }
-  return `created_at >= $${fromIdx}::date AND created_at < ($${toIdx}::date + INTERVAL '1 day')`;
+  return `${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal(`$${fromIdx}::date`)}
+      AND ${CREATED_AT_INSTANTE} < ${inicioDoDiaLocal(`$${toIdx}::date + INTERVAL '1 day'`)}`;
 }
 
 /**
@@ -248,7 +203,8 @@ function periodSql(
   params: (string | number)[]
 ): string {
   if (period.isToday) {
-    return `created_at >= CURRENT_DATE AND created_at < CURRENT_DATE + INTERVAL '1 day'`;
+    return `${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal(HOJE_LOCAL)}
+        AND ${CREATED_AT_INSTANTE} < ${inicioDoDiaLocal(`${HOJE_LOCAL} + INTERVAL '1 day'`)}`;
   }
   if (period.from && period.to) {
     params.push(period.from, period.to);
@@ -299,17 +255,21 @@ async function getSlickTextAccounts(clientId: number | string): Promise<SlickTex
  */
 async function gravarSnapshotDeListas(
   clientId: string,
-  listas: Array<{ id: string; count: number; accountId: number | null }>
+  listas: Array<{ id: string; count: number; accountId: number | null; nome?: string | null }>
 ): Promise<void> {
   for (const l of listas) {
     if (l.count <= 0) continue; // lista que não respondeu — gravar 0 criaria degrau falso no delta
     try {
+      // Este caminho conta lista por ID vindo do kit, então normalmente NÃO sabe o nome. O
+      // COALESCE existe para ele não apagar o nome que o job já gravou: abrir a aba SMS não pode
+      // desfazer informação que a gravação automática obteve.
       await query(
-        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count)
-         VALUES ($1, $2, $3, CURRENT_DATE, $4)
+        `INSERT INTO list_contact_snapshots (client_id, st_account_id, list_id, snapshot_date, contact_count, list_name)
+         VALUES ($1, $2, $3, ${HOJE_LOCAL}, $4, $5)
          ON CONFLICT (client_id, COALESCE(st_account_id, 0), list_id, snapshot_date)
-         DO UPDATE SET contact_count = EXCLUDED.contact_count`,
-        [clientId, l.accountId, l.id, l.count]
+         DO UPDATE SET contact_count = EXCLUDED.contact_count,
+                       list_name = COALESCE(EXCLUDED.list_name, list_contact_snapshots.list_name)`,
+        [clientId, l.accountId, l.id, l.count, l.nome ?? null]
       );
     } catch (err: any) {
       logger.warn(CTX, `Falha ao gravar retrato da lista ${l.id} (client ${clientId}): ${err.message}`);
@@ -331,36 +291,78 @@ async function leadsPorPeriodoViaSnapshots(
   abandonoIds: string[],
   compraIds: string[],
   from: string,
-  to: string
-): Promise<{ abandono: number; compra: number; baseDate: string; endDate: string } | null> {
+  to: string,
+  liveFimCounts?: Map<string, number>
+): Promise<{ abandono: number; compra: number; deltaPorLista: Map<string, number>; baseDate: string; endDate: string; cobreDe: string; cobreAte: string; horaBase: string | null; horaFim: string | null } | null> {
   const todas = [...new Set([...abandonoIds, ...compraIds])];
   if (todas.length === 0) return null;
 
-  // Uma consulta só: para cada lista, o retrato mais próximo de cada ponta dentro da tolerância.
-  const rows = await query<{ list_id: string; ponta: string; snapshot_date: string; contact_count: string }>(
-    `WITH base AS (
-       SELECT DISTINCT ON (list_id) list_id, 'base' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-       FROM list_contact_snapshots
-       WHERE client_id = $1 AND list_id = ANY($2)
-         AND snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND ($3::date - INTERVAL '1 day')
-       ORDER BY list_id, snapshot_date DESC
-     ), fim AS (
-       SELECT DISTINCT ON (list_id) list_id, 'fim' AS ponta, snapshot_date::text AS snapshot_date, contact_count
-       FROM list_contact_snapshots
-       WHERE client_id = $1 AND list_id = ANY($2)
-         AND snapshot_date BETWEEN $4::date AND ($4::date + INTERVAL '3 days')
-       ORDER BY list_id, snapshot_date ASC
-     )
-     SELECT * FROM base UNION ALL SELECT * FROM fim`,
-    [clientId, todas, from, to]
-  );
+  // ── QUAL retrato é a ponta de cada lado ──
+  //
+  // O retrato é gravado no INÍCIO do dia: o job pergunta "já existe retrato de hoje?" e grava na
+  // primeira janela após a meia-noite. Então retrato(D) = tamanho da lista às 00:0x do dia D, ou
+  // seja "estado no começo de D".
+  //
+  // Logo, quem entrou DURANTE [from..to] = retrato(to + 1 dia) − retrato(from).
+  //
+  // Antes daqui pegava retrato(to) − retrato(from − 1 dia), que mede [from−1 .. to−1]: um dia
+  // atrasado. Em 30 dias o desvio é ruído e ninguém vê; num filtro de 1 dia é o número inteiro
+  // errado — foi como apareceu em produção, filtro 12→12 devolvendo os leads do dia 11 contra as
+  // vendas do dia 12.
+  //
+  // created_at entra na consulta porque a premissa "gravado logo após a meia-noite" só vale se o
+  // processo estava de pé na virada. Se o servidor subiu às 09h, o retrato daquele dia representa
+  // 09h, não 00h — e aí a janela real não é o dia inteiro. Quem chama usa a hora pra decidir se
+  // ainda pode chamar a taxa de exata.
+  const SQL_PONTA = (ponta: 'base' | 'fim', ordem: 'DESC' | 'ASC', faixa: string) => `
+    SELECT DISTINCT ON (list_id) list_id, '${ponta}' AS ponta, snapshot_date::text AS snapshot_date,
+           created_at::text AS created_at, contact_count
+    FROM list_contact_snapshots
+    WHERE client_id = $1 AND list_id = ANY($2) AND ${faixa}
+    ORDER BY list_id, snapshot_date ${ordem}`;
 
-  const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string }>();
+  // base: prefere o retrato do próprio dia `from`; se faltar, cai pro anterior mais próximo
+  // (janela fica mais larga, nunca mais estreita — subcontar lead seria pior).
+  const FAIXA_BASE = `snapshot_date BETWEEN ($3::date - INTERVAL '3 days') AND $3::date`;
+  // fim: prefere o retrato do dia seguinte a `to`; se faltar, cai pro posterior mais próximo.
+  const FAIXA_FIM = `snapshot_date BETWEEN ($4::date + INTERVAL '1 day') AND ($4::date + INTERVAL '4 days')`;
+
+  // Quando `to` é hoje, o retrato do dia seguinte ainda não existe — e nem deveria esperar por
+  // ele. `liveFimCounts` é a contagem que a rota chamadora ACABOU de buscar na SlickText (ao vivo,
+  // pro total vitalício): é o estado de AGORA, que é exatamente a ponta final de um período que
+  // termina hoje. Reaproveitada em vez de bater na API de novo.
+  const rows = liveFimCounts
+    ? await query<{ list_id: string; ponta: string; snapshot_date: string; created_at: string; contact_count: string }>(
+        SQL_PONTA('base', 'DESC', FAIXA_BASE), [clientId, todas, from]
+      )
+    : await query<{ list_id: string; ponta: string; snapshot_date: string; created_at: string; contact_count: string }>(
+        // Cada lado precisa de parênteses: os dois SELECT têm ORDER BY próprio (exigido pelo
+        // DISTINCT ON de cada um), e Postgres rejeita ORDER BY dentro de um braço de UNION sem
+        // parênteses — "syntax error at or near UNION" em produção pra todo período que não
+        // termina hoje (a branch com liveFimCounts não passa por aqui).
+        `(${SQL_PONTA('base', 'DESC', FAIXA_BASE)}) UNION ALL (${SQL_PONTA('fim', 'ASC', FAIXA_FIM)})`,
+        [clientId, todas, from, to]
+      );
+
+  const porLista = new Map<string, { base?: number; fim?: number; baseD?: string; fimD?: string; baseAt?: string; fimAt?: string }>();
   for (const r of rows) {
     const e = porLista.get(r.list_id) ?? {};
-    if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; }
-    else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; }
+    if (r.ponta === 'base') { e.base = parseInt(r.contact_count); e.baseD = r.snapshot_date; e.baseAt = r.created_at; }
+    else { e.fim = parseInt(r.contact_count); e.fimD = r.snapshot_date; e.fimAt = r.created_at; }
     porLista.set(r.list_id, e);
+  }
+  if (liveFimCounts) {
+    for (const id of todas) {
+      const count = liveFimCounts.get(id);
+      if (count == null) continue; // sem contagem ao vivo pra essa lista — cai no "falta uma ponta" abaixo, honesto
+      const e = porLista.get(id) ?? {};
+      e.fim = count;
+      // A ponta final é AGORA: o dia seguinte a `to` é o fim conceitual da janela (o período
+      // termina no fim de `to`), e a hora fica nula porque não é retrato, é leitura ao vivo.
+      e.fimD = diaSeguinte(to);
+      e.fimAt = null as unknown as string;
+      porLista.set(id, e);
+    }
   }
 
   // Exige as duas pontas em TODAS as listas. Faltando uma, a soma sairia menor que a realidade e
@@ -379,13 +381,152 @@ async function leadsPorPeriodoViaSnapshots(
   const compra = somar(compraIds);
   if (abandono === null || compra === null) return null;
 
+  // Delta POR LISTA, não só o total. É o que permite a tabela "Aberto por produto" usar a MESMA
+  // fonte de leads da tabela de cima.
+  //
+  // Antes ela usava o total atual da lista (vitalício) enquanto a de cima usava o delta do
+  // período — e as duas apareciam no mesmo card, com a mesma venda: 26 recuperações contra 644
+  // leads davam 4,0% em cima, e as mesmas 26 contra 31.980 davam 0,08% embaixo. Cinquenta vezes
+  // de diferença, os dois "certos" no seu próprio universo, e só o de cima com legenda. Comparar
+  // taxas de universos diferentes lado a lado é pior que não mostrar a segunda.
+  const deltaPorLista = new Map<string, number>();
+  for (const [id, e] of porLista) {
+    if (e.base != null && e.fim != null) deltaPorLista.set(id, Math.max(0, e.fim - e.base));
+  }
+
   // As datas vêm como texto do SQL (snapshot_date::text) de propósito: o driver do Postgres devolve
   // DATE como objeto Date do JS, e String(date).slice(0,10) produzia "Thu Jul 30" — foi o que
   // apareceu na tela em produção, no idioma errado e sem ano.
+  //
+  // baseDate/endDate são os RETRATOS usados (o mais conservador de cada lado entre as listas);
+  // cobreDe/cobreAte são os DIAS que a conta de fato cobre — que é o que faz sentido mostrar na
+  // tela. Os dois são diferentes por um dia no fim, e confundir um com o outro foi o que deixou a
+  // legenda dizendo "entraram no período (11/08 → 12/08)" num filtro de 12→12.
   const datas = [...porLista.values()];
-  const baseDate = datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from;
-  const endDate = datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? to;
-  return { abandono, compra, baseDate: String(baseDate).slice(0, 10), endDate: String(endDate).slice(0, 10) };
+  const baseDate = String(datas.map(d => d.baseD).filter(Boolean).sort().pop() ?? from).slice(0, 10);
+  const endDate = String(datas.map(d => d.fimD).filter(Boolean).sort()[0] ?? diaSeguinte(to)).slice(0, 10);
+  const horaBase = datas.map(d => d.baseAt).filter(Boolean).sort().pop() ?? null;
+  const horaFim = datas.map(d => d.fimAt).filter(Boolean).sort()[0] ?? null;
+  return {
+    abandono, compra, deltaPorLista, baseDate, endDate,
+    cobreDe: baseDate,
+    cobreAte: diaAnterior(endDate),
+    horaBase: horaBase ? String(horaBase) : null,
+    horaFim: horaFim ? String(horaFim) : null,
+  };
+}
+
+/** +1 dia numa data YYYY-MM-DD, em UTC (sem depender do fuso do processo). */
+function diaSeguinte(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Instante → hora de parede no fuso do negócio. Reaproveitado, porque montar Intl é caro. */
+const PARTES_LOCAIS = new Intl.DateTimeFormat('en-GB', {
+  timeZone: env.APP_TZ, hourCycle: 'h23',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+
+/**
+ * O retrato carimbado com `snapshotDate` foi de fato tirado perto do COMEÇO desse dia?
+ *
+ * É a checagem que decide se a taxa pode se chamar exata. A conta "quem entrou no período" só vale
+ * se retrato(D) representa o começo do dia D — se o processo subiu às 09h, o retrato daquele dia é
+ * de 09h e a janela real perde as primeiras 9 horas.
+ *
+ * Mede a distância até a meia-noite do dia CARIMBADO (snapshot_date), não até a meia-noite do dia
+ * em que o retrato caiu. A diferença importa na transição de fuso: os retratos gravados antes da
+ * troca usavam a data em UTC, e uma meia-noite UTC é 21:00 de Brasília do dia anterior — ou seja,
+ * ficam 2h48 ANTES da meia-noite de Brasília que eles carimbam. Continuam sendo uma boa
+ * aproximação de "começo do dia", e a tolerância de 3h30 os mantém válidos em vez de invalidar a
+ * série inteira. Os gravados de agora em diante caem a minutos da meia-noite local.
+ */
+function retratoRepresentaInicioDoDia(
+  snapshotDate: string | null,
+  createdAt: string | null,
+  toleranciaMs = 3.5 * 60 * 60 * 1000
+): boolean {
+  if (!createdAt) return true; // ponta ao vivo — é o instante presente, exato por construção
+  if (!snapshotDate) return false;
+  const d = new Date(createdAt.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(createdAt) ? '' : 'Z'));
+  if (isNaN(d.getTime())) return false;
+  const p: Record<string, number> = {};
+  for (const parte of PARTES_LOCAIS.formatToParts(d)) {
+    if (parte.type !== 'literal') p[parte.type] = parseInt(parte.value, 10);
+  }
+  // Compara duas horas de parede como se as duas fossem UTC: a subtração vira aritmética pura,
+  // sem conta de offset (e o Brasil não tem mais horário de verão).
+  const real = Date.UTC(p.year!, p.month! - 1, p.day!, p.hour!, p.minute!, p.second!);
+  const [ay, am, ad] = snapshotDate.slice(0, 10).split('-').map(Number);
+  const alvo = Date.UTC(ay!, am! - 1, ad!, 0, 0, 0);
+  return Math.abs(real - alvo) <= toleranciaMs;
+}
+
+/** −1 dia numa data YYYY-MM-DD, em UTC. */
+function diaAnterior(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Leads de COMPRA por período, exatos, direto do webhook_logs — não do retrato.
+ *
+ * Por que existe: confirmado por amostra (5 contatos, comparando o `created` da SlickText contra
+ * o `webhook_logs.created_at` da venda correspondente) que o contato nasce na SlickText entre 40
+ * segundos e pouco mais de 1 minuto DEPOIS do nosso `order.paid` — é o n8n reagindo ao mesmo
+ * evento que a gente recebeu, quase no mesmo instante. Isso torna `webhook_logs.created_at` uma
+ * fonte EXATA (precisão de segundos, não de dia) e RETROATIVA (cobre desde sempre, não só desde
+ * que o retrato começou a rodar) de "quando essa venda virou lead de compra".
+ *
+ * LIMITE HONESTO, medido no mesmo teste: 1 dos 5 contatos da amostra tinha a última venda
+ * registrada aqui 4 dias ANTES de virar contato na SlickText — ele comprou de novo por um gateway
+ * que não ingerimos (JVZoo/BuyGoods, confirmado sem handler no nosso lado). Esta função só conta
+ * venda que NÓS recebemos; comprador que entrou na lista por outro caminho fica de fora daqui
+ * mesmo estando na lista de verdade. Por isso ela não substitui o retrato — o retrato mede o
+ * tamanho real da lista, venha o contato de onde vier, e a DIFERENÇA entre os dois números é o
+ * sinal de venda não capturada, não um erro deste cálculo.
+ *
+ * Cobre só o lado COMPRA de propósito: não existe handler de carrinho abandonado para produto
+ * vendido via Digistore (só para CartPanda) — o abandono desses produtos é tratado inteiramente
+ * pelo n8n, sem gravar nada aqui. Sem evento nosso para ancorar, o lado abandono continua
+ * dependendo do retrato.
+ *
+ * SÓ CONTA PRODUTO COM UMA LISTA DE COMPRA (sem slot 2), de propósito. Uma venda nossa não diz em
+ * QUAL das duas listas o comprador caiu quando o produto tem gateway duplo (ex.: Thermo Burn,
+ * 105431 + 145156) — só sabemos que ele comprou. Uma versão anterior desta função tentava contar
+ * as duas listas separadamente com um CROSS JOIN, e cada venda desses produtos entrava DUAS vezes
+ * (uma por lista) — 14.460 "leads" onde o total real de vendas do período inteiro era 8.237.
+ * Produto com duas listas fica de fora daqui e cai no retrato, que mede o tamanho real de cada
+ * lista sem precisar saber de qual gateway veio cada contato — aproximado, mas não inflado.
+ */
+async function leadsDeCompraViaWebhookLogs(
+  clientId: string,
+  compraListIds: string[],
+  from: string,
+  to: string
+): Promise<{ total: number; porLista: Map<string, number> } | null> {
+  if (compraListIds.length === 0) return null;
+
+  const rows = await query<{ list_id: string; leads: string }>(
+    `SELECT k.st_list_compra_id AS list_id, COUNT(*)::text AS leads
+     FROM webhook_logs w
+     JOIN kits k ON k.client_id = w.client_id AND k.platform = w.source AND k.external_id = w.product_external_id
+     WHERE w.client_id = $1 AND w.event_type = 'order.paid'
+       AND k.st_list_compra_id = ANY($2)
+       AND k.st_list_compra_id_2 IS NULL
+       AND w.created_at >= $3::date AND w.created_at < ($4::date + INTERVAL '1 day')
+     GROUP BY k.st_list_compra_id`,
+    [clientId, compraListIds, from, to]
+  );
+
+  if (rows.length === 0) return null;
+  const porLista = new Map(rows.map(r => [r.list_id, parseInt(r.leads)]));
+  const total = [...porLista.values()].reduce((a, b) => a + b, 0);
+  return { total, porLista };
 }
 
 /**
@@ -706,7 +847,14 @@ adminRouter.get('/dashboard/revenue-charts', asyncHandler(async (req: Request, r
 
   const { fromTime, toTime, hasTime } = parseOptionalTimeRange(req);
 
-  const channelExtra = channel === 'email' ? `AND NOT ${SQL_IS_SMS}` : '';
+  // channel escopa as SÉRIES da MailX (automação, campanha, recuperação, upsell) — nunca a série
+  // `total`, que é o faturamento do cliente inteiro e serve de régua no gráfico. Escopar o total
+  // junto faria as duas linhas coincidirem e o gráfico perderia justamente o que ele mostra: o
+  // tamanho da fatia MailX dentro do que o cliente fatura.
+  const channelExtra =
+    channel === 'email' ? `AND NOT ${SQL_IS_SMS}`
+    : channel === 'sms' ? `AND ${SQL_IS_SMS}`
+    : '';
   const params: (string | number)[] = [from, to];
   const dateFilterSql = createdAtRangeSql(params, hasTime, fromTime, toTime);
   let clientFilter = '';
@@ -818,6 +966,15 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     clientFilter = `AND client_id = $${params.length}`;
   }
 
+  // Mesmo escopo por canal dos gráficos de série. Aqui ele vale para TODAS as fatias (aprovado,
+  // reembolso e chargeback): a rosca compara pedaços do mesmo bolo, então misturar aprovado de um
+  // canal com reembolso de todos daria uma taxa de reembolso inventada.
+  const canalRefund = req.query.channel as string | undefined;
+  const escopoCanal =
+    canalRefund === 'email' ? `AND ${SQL_IS_MAILX} AND NOT ${SQL_IS_SMS}`
+    : canalRefund === 'sms' ? `AND ${SQL_MAILX_SMS}`
+    : '';
+
   const row = await queryOne<{ aprovado: string; reembolso: string; chargeback_custo: string }>(`
     SELECT
       COALESCE(SUM(total_price) FILTER (WHERE event_type = 'order.paid' AND status = 'processed'), 0) AS aprovado,
@@ -826,6 +983,7 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     FROM webhook_logs
     WHERE ${dateFilterSql}
       ${clientFilter}
+      ${escopoCanal}
   `, params);
 
   const currency = cid ? await resolveClientCurrency(cid) : 'USD';
@@ -834,6 +992,9 @@ adminRouter.get('/dashboard/revenue-vs-refund', asyncHandler(async (req: Request
     aprovado: parseFloat(row?.aprovado || '0'),
     reembolso: parseFloat(row?.reembolso || '0'),
     chargeback_custo: parseFloat(row?.chargeback_custo || '0'),
+    // Escopo declarado no dado, não só no título da tela: quem consome a API direto precisa saber
+    // se está olhando o cliente inteiro ou um canal, senão compara números de universos diferentes.
+    escopo: canalRefund === 'email' ? 'MailX · Email' : canalRefund === 'sms' ? 'MailX · SMS' : 'cliente inteiro (todos os canais)',
     currency,
     from_time: hasTime ? fromTime : null,
     to_time: hasTime ? toTime : null,
@@ -1199,7 +1360,7 @@ adminRouter.post('/integration/store', asyncHandler(async (req: Request, res: Re
 // GET /admin/server-today - Data atual segundo o próprio Postgres (evita depender do
 // fuso-horário do navegador de quem está usando o filtro "Hoje").
 adminRouter.get('/server-today', asyncHandler(async (_req: Request, res: Response) => {
-  const row = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+  const row = await queryOne<{ today: string }>(`SELECT ${HOJE_LOCAL}::text as today`);
   res.json({ date: row?.today });
 }));
 
@@ -1207,7 +1368,7 @@ adminRouter.get('/server-today', asyncHandler(async (_req: Request, res: Respons
 adminRouter.get('/stats', asyncHandler(async (_req: Request, res: Response) => {
   const clientsCount = await queryOne<{ count: string }>(`SELECT COUNT(*) FROM clients`);
   const webhooksToday = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE`
+    `SELECT COUNT(*) FROM webhook_logs WHERE ${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal(HOJE_LOCAL)}`
   );
 
   res.json({
@@ -1556,7 +1717,7 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   );
   // "Hoje" é sempre literal (independe do período de análise selecionado) — diagnóstico de saúde da integração.
   const webhooksToday = await queryOne<{ count: string }>(
-    `SELECT COUNT(*) FROM webhook_logs WHERE created_at >= CURRENT_DATE AND client_id = $1`, [clientId]
+    `SELECT COUNT(*) FROM webhook_logs WHERE ${CREATED_AT_INSTANTE} >= ${inicioDoDiaLocal(HOJE_LOCAL)} AND client_id = $1`, [clientId]
   );
   const refundParams: (string | number)[] = [clientId];
   const refundPeriod = periodSql(period, refundParams);
@@ -1831,10 +1992,42 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // Vendas continuam vindo do nosso banco (já são exatas, é conversão real registrada).
   let abandonoLeads = 0;
   let compradorLeads = 0;
-  let leadsSource: 'slicktext_list' | 'snapshot_delta' | 'unavailable' = 'unavailable';
+  type FonteDeLeads = 'webhook_exato' | 'slicktext_list' | 'snapshot_delta' | 'unavailable';
+  let leadsSource: FonteDeLeads = 'unavailable';
+  // Fonte dos leads de COMPRA especificamente — pode divergir da do abandono (ver comentário mais
+  // abaixo, perto de onde ela é calculada).
+  let compradorLeadsSource: FonteDeLeads = 'unavailable';
   let leadsWarning: string | null = null;
   let leadsPeriodoInfo: { de: string; ate: string; janela_bate: boolean } | null = null;
+  // Janela dos leads de COMPRA especificamente — quando vem do webhook, é sempre exata (não tem
+  // folga de retrato pra estourar o período), então não pode compartilhar leadsPeriodoInfo com o
+  // abandono, que continua podendo ter janela aproximada.
+  let leadsPeriodoInfoCompra: { de: string; ate: string; janela_bate: boolean } | null = null;
   let leadsRetratos: { primeiro_retrato: string; dias_com_retrato: number } | null = null;
+  // Contraprova: quantos leads o retrato mediu na lista de compra contra quantos a gente
+  // conseguiu explicar por venda registrada — a diferença é o tamanho do que entrou por um
+  // caminho que não capturamos (ver leadsDeCompraViaWebhookLogs).
+  let compraDivergencia: { do_retrato: number; explicado_por_venda: number; diferenca: number } | null = null;
+  // Insumos da conversão POR PRODUTO (pedido 3.4 do documento: "precisa ser dividido por produto").
+  let contagemPorLista = new Map<string, number>();
+  let kitsComListas: Array<{ nome: string; listasAbandono: string[]; listasCompra: string[] }> = [];
+  // Quais listas, dentro de contagemPorLista, têm número DO PERÍODO (snapshot_delta ou
+  // webhook_exato) — as únicas em que dividir vendas do período por esses leads produz uma taxa
+  // de verdade. As de fora têm número VITALÍCIO (tamanho atual da lista inteira, acumulado desde
+  // sempre) misturado com venda de um recorte de dias — dividir os dois não é taxa "aproximada",
+  // é comparar coisas de janelas de tempo diferentes, e o resultado pode ficar uma ou duas ordens
+  // de grandeza menor que a conversão real (visto em produção: 0,98% quando o denominador tinha
+  // 9+ meses de gente acumulada contra 30 dias de venda). Produto cuja lista caia fora daqui não
+  // ganha taxa nenhuma — "não calculável" é mais honesto que um número pequeno demais.
+  let listasComNumeroDoPeriodo = new Set<string>();
+  // Status de retrato de CADA lista de produto ativo — não só a em standby, a Murilo pediu pra
+  // ver as datas das já estabelecidas também. Lista recém-conectada (troca de conta/lista no
+  // workflow, gateway novo, produto migrado) ainda sem retrato suficiente pra entrar em cálculo
+  // de período nenhum entra com standby:true. Sem isso, uma troca no meio do mês passa muda: a
+  // tela continua respondendo (cai no vitalício, que sempre tem número), e ninguém percebe que
+  // aquela lista ficou sem histórico até a taxa estranhar semanas depois. Quem troca lista/conta
+  // no workflow é o Murilo — precisa ver na hora, não descobrir por reclamação do Nicollas.
+  let listasRetratoStatus: Array<{ produto: string; segmento: 'abandono' | 'compra'; list_id: string; standby: boolean; desde: string | null; dias_gravados: number; datas: string[] }> = [];
 
   {
     // Todas as contas SlickText do cliente, não só a principal. Bug encontrado ao validar o SMS:
@@ -1864,26 +2057,97 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           const r = await autoLinkSlickTextLists(clients[i]!.st, parseInt(clientId as string));
           unmatched = i === 0 ? r.unmatched : unmatched.filter(u => r.unmatched.some(x => x.kitId === u.kitId));
         }
-        const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-          `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+        const kits = await query<{ name: string; st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+          `SELECT DISTINCT name, st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
+           FROM kits WHERE client_id = $1 AND enabled = true`,
           [clientId]
         );
 
-        const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
-        const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+        // flatMap via listasDoKit, e não só a coluna 1: um produto pode ter uma segunda lista de
+        // outro gateway de lead (ver comentário em listasDoKit), e as duas contam.
+        const abandonoIds = [...new Set(kits.flatMap(k => listasDoKit(k).abandono))];
+        const compraIds = [...new Set(kits.flatMap(k => listasDoKit(k).compra))];
 
-        // Um list_id existe em UMA das contas; nas outras a chamada falha e vira 0. Por isso o
-        // total de cada lista é o MAIOR valor entre as contas, não a soma — somar contaria a
-        // mesma lista de novo se duas contas respondessem.
-        const contarLista = async (listId: string): Promise<{ count: number; accountId: number | null }> => {
+        // Um list_id existe em UMA das contas; nas outras a chamada falha com 404 e vira 0
+        // (esperado — ver getListContactCount). Por isso o total de cada lista é o MAIOR valor
+        // entre as contas, não a soma — somar contaria a mesma lista de novo se duas contas
+        // respondessem.
+        //
+        // incerto:true quando NENHUMA conta respondeu de verdade (todas com falha real, não
+        // 404) — 0 aqui seria indistinguível de "lista genuinamente vazia", e essa lista não
+        // pode entrar como se fosse um zero de verdade nos totais vitalícios nem no retrato do
+        // dia (por isso o count fica 0, mas a flag avisa quem soma).
+        const contarLista = async (listId: string): Promise<{ count: number; accountId: number | null; incerto: boolean }> => {
           const porConta = await Promise.all(
             clients.map(async c => ({ accountId: c.acc.accountId, count: await c.st.getListContactCount(parseInt(listId)) }))
           );
-          return porConta.reduce((melhor, atual) => (atual.count > melhor.count ? atual : melhor), { count: 0, accountId: null as number | null });
+          const validas = porConta.filter((c): c is { accountId: number | null; count: number } => c.count !== null);
+          if (validas.length === 0) return { count: 0, accountId: null, incerto: true };
+          const melhor = validas.reduce((m, a) => (a.count > m.count ? a : m));
+          return { ...melhor, incerto: false };
         };
 
         const abandonoPorLista = await Promise.all(abandonoIds.map(async id => ({ id, ...(await contarLista(id)) })));
         const compraPorLista = await Promise.all(compraIds.map(async id => ({ id, ...(await contarLista(id)) })));
+
+        // Contagem por list_id, pra conversão POR PRODUTO reaproveitar sem repetir chamada na
+        // SlickText: as mesmas listas são as dos produtos, só agrupadas de outro jeito.
+        contagemPorLista = new Map<string, number>();
+        for (const l of [...abandonoPorLista, ...compraPorLista]) contagemPorLista.set(l.id, l.count);
+        kitsComListas = kits.map(k => {
+          const l = listasDoKit(k);
+          return { nome: k.name, listasAbandono: l.abandono, listasCompra: l.compra };
+        });
+
+        // Status de retrato de TODA lista de produto ativo — não só as em standby, o Murilo pediu
+        // pra ver as datas das já estabelecidas também. A consulta vem antes de
+        // gravarSnapshotDeListas, e não depois: uma lista trocada ontem tem que continuar
+        // aparecendo como nova hoje, não "resetar" porque acabou de ganhar o retrato do dia.
+        const STANDBY_DIAS_MIN = 4; // abaixo disso a lista nunca serviu de base nem com a tolerância de 3 dias
+        const retratoPorLista = await query<{ list_id: string; primeiro: string; dias: string; datas: string[] }>(
+          `SELECT list_id, MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias,
+                  ARRAY_AGG(DISTINCT snapshot_date::text ORDER BY snapshot_date::text) AS datas
+           FROM list_contact_snapshots WHERE client_id = $1 AND list_id = ANY($2)
+           GROUP BY list_id`,
+          [clientId, [...abandonoIds, ...compraIds]]
+        ).catch(() => []);
+        const retratoPorListaMap = new Map(retratoPorLista.map(r => [r.list_id, { primeiro: r.primeiro.slice(0, 10), dias: parseInt(r.dias), datas: r.datas }]));
+
+        // A lista é da FAMÍLIA, mas kit.name é por SKU — "M2 - NeuroMind Pro (3 Bottles)",
+        // "UP1 - NeuroMind Pro (6 Bottles)" etc. apontam pra MESMA lista. Sem agrupar por
+        // list_id, a mesma lista nova aparecia 6 vezes na tela (visto em produção: 34 linhas pra
+        // só ~10 listas de verdade) — o oposto de "fácil de ver o que é novo". Tira o prefixo de
+        // código (M1/M2/UP1-V3/DW1...) e o sufixo de tamanho pra chegar no nome da família.
+        const nomeFamilia = (nomeSku: string): string =>
+          nomeSku
+            .replace(/^\s*[A-Za-z]{1,4}\d*(-[A-Za-z]?\d+)?\s*-\s*/, '')
+            .replace(/\s*\(\d+\s*[Bb]ottles?\)\s*$/, '')
+            .trim() || nomeSku;
+
+        const retratoAgrupado = new Map<string, { segmento: 'abandono' | 'compra'; familias: Set<string>; desde: string | null; dias: number; datas: string[] }>();
+        for (const k of kits) {
+          const l = listasDoKit(k);
+          const familia = nomeFamilia(k.name);
+          const juntar = (id: string, segmento: 'abandono' | 'compra') => {
+            const r = retratoPorListaMap.get(id);
+            const atual = retratoAgrupado.get(id) ?? { segmento, familias: new Set<string>(), desde: r?.primeiro ?? null, dias: r?.dias ?? 0, datas: r?.datas ?? [] };
+            atual.familias.add(familia);
+            retratoAgrupado.set(id, atual);
+          };
+          l.abandono.forEach(id => juntar(id, 'abandono'));
+          l.compra.forEach(id => juntar(id, 'compra'));
+        }
+        listasRetratoStatus = [...retratoAgrupado.entries()]
+          .map(([list_id, v]) => ({
+            produto: [...v.familias].join(' / '),
+            segmento: v.segmento,
+            list_id,
+            standby: v.dias < STANDBY_DIAS_MIN,
+            desde: v.desde,
+            dias_gravados: v.dias,
+            datas: v.datas,
+          }))
+          .sort((a, b) => a.produto.localeCompare(b.produto));
 
         // Retrato do dia — de graça, os números já estão em mãos. É o que permite leads por
         // período nas próximas consultas (ver tabela list_contact_snapshots).
@@ -1905,36 +2169,68 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         const abandonoVitalicio = abandonoPorLista.reduce((a, b) => a + b.count, 0);
         const compraVitalicio = compraPorLista.reduce((a, b) => a + b.count, 0);
 
+        // "Hoje" chega com period.isToday e SEM from/to (ver resolvePeriodFilter) — trata como
+        // período ativo de hoje-a-hoje, usando a contagem AO VIVO que acabamos de buscar (linha
+        // acima) como ponta final, em vez de esperar o retrato do dia. Sem isso, o filtro "Hoje"
+        // caía sempre no vitalício, porque `period.from`/`period.to` vinham vazios.
+        const hojeStr = period.isToday
+          ? (await queryOne<{ hoje: string }>(`SELECT ${HOJE_LOCAL}::text AS hoje`))?.hoje.slice(0, 10)
+          : null;
+        const periodoDe = period.isToday ? hojeStr! : period.from;
+        const periodoAte = period.isToday ? hojeStr! : period.to;
+        const periodoAtivo = !!(periodoDe && periodoAte);
+
         // Leads DO PERÍODO via diferença de retratos, quando existem os dois lados. Só com
         // período ativo — sem período o vitalício é a resposta certa, não uma aproximação.
-        const periodoAtivo = !!(period.from && period.to);
         const delta = periodoAtivo
-          ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, period.from!, period.to!)
+          ? await leadsPorPeriodoViaSnapshots(clientId as string, abandonoIds, compraIds, periodoDe!, periodoAte!, period.isToday ? contagemPorLista : undefined)
+          : null;
+        // Independente do retrato: venda que a gente recebeu já diz, com precisão de segundos,
+        // quando o comprador virou lead. Não depende de dois retratos existirem — funciona mesmo
+        // em período retroativo a antes de o mecanismo de retrato ligar.
+        const comprasExatas = periodoAtivo
+          ? await leadsDeCompraViaWebhookLogs(clientId as string, compraIds, periodoDe!, periodoAte!)
           : null;
 
         if (delta) {
+          // A tabela por produto passa a ler daqui também — mesma fonte, mesmo universo, taxas
+          // comparáveis entre as duas partes do card.
+          contagemPorLista = new Map(delta.deltaPorLista);
           abandonoLeads = delta.abandono;
           compradorLeads = delta.compra;
           leadsSource = 'snapshot_delta';
+          // Todo mundo em delta.deltaPorLista já é DO PERÍODO — a diferença entre dois retratos
+          // conta só quem entrou entre eles.
+          listasComNumeroDoPeriodo = new Set([...abandonoIds, ...compraIds]);
           // A janela dos leads coincide com o período pedido?
           //
-          // A busca de retratos aceita até 3 dias de folga em cada ponta, porque o retrato é gravado
-          // quando alguém abre a tela e o dia exato pode faltar. Só que quando a folga é usada, a
-          // janela dos LEADS fica maior que a das VENDAS — visto em produção: filtro de 05 a 06/08
-          // devolvendo leads de 03 a 06/08, três dias contra dois. Nesse caso a taxa tem denominador
-          // de uma janela e numerador de outra, e continuar chamando isso de "taxa exata" é pior que
-          // o vitalício rotulado, porque o vitalício ao menos anuncia que é aproximado.
+          // A busca de retratos aceita folga de alguns dias em cada ponta, porque o dia exato pode
+          // faltar (servidor fora do ar na virada). Quando a folga é usada, a janela dos LEADS fica
+          // maior que a das VENDAS — visto em produção: filtro de 05 a 06/08 devolvendo leads de 03
+          // a 06/08, três dias contra dois. Nesse caso a taxa tem denominador de uma janela e
+          // numerador de outra, e continuar chamando isso de "taxa exata" é pior que o vitalício
+          // rotulado, porque o vitalício ao menos anuncia que é aproximado.
           //
-          // O esperado para a ponta inicial é a VÉSPERA do primeiro dia do período: quem entrou no
-          // dia 05 aparece na diferença entre o retrato do dia 04 e o do dia 06.
-          const vespera = new Date(`${period.from}T00:00:00Z`);
-          vespera.setUTCDate(vespera.getUTCDate() - 1);
-          const esperadoDe = vespera.toISOString().slice(0, 10);
+          // Com retrato de início de dia, a janela exata é: base no PRÓPRIO `from` e fim no dia
+          // SEGUINTE a `to` (ver o comentário em leadsPorPeriodoViaSnapshots). Antes daqui esperava
+          // a véspera de `from`, que é justamente o off-by-one que fazia o filtro 12→12 medir o
+          // dia 11.
+          const esperadoFim = diaSeguinte(periodoAte!);
+          // Terceira condição, além das datas: o retrato tem que ter sido gravado PERTO da
+          // meia-noite pra representar "começo do dia". Se o processo subiu às 09h, o retrato
+          // daquele dia é de 09h e a janela real perde as primeiras 9 horas — a conta continua a
+          // melhor disponível, mas não é exata, e a tela não pode afirmar que é.
+          // Ver retratoRepresentaInicioDoDia: mede contra a meia-noite do dia CARIMBADO, no fuso
+          // do negócio — o que mantém válidos os retratos gravados antes da troca de fuso.
           leadsPeriodoInfo = {
-            de: delta.baseDate,
-            ate: delta.endDate,
-            // Quando false, a tela para de dizer "exata" e mostra a janela que realmente foi usada.
-            janela_bate: delta.baseDate === esperadoDe && delta.endDate === period.to,
+            // de/ate agora são os DIAS COBERTOS, não os retratos usados — é o que a pessoa pediu no
+            // filtro e o que ela espera ler de volta.
+            de: delta.cobreDe,
+            ate: delta.cobreAte,
+            janela_bate: delta.baseDate === periodoDe
+              && delta.endDate === esperadoFim
+              && retratoRepresentaInicioDoDia(delta.baseDate, delta.horaBase)
+              && retratoRepresentaInicioDoDia(delta.endDate, delta.horaFim),
           };
         } else {
           abandonoLeads = abandonoVitalicio;
@@ -1942,11 +2238,62 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
           leadsSource = 'slicktext_list';
         }
 
+        // compradorLeadsSource começa igual a leadsSource (mesmo texto que o abandono, valendo o
+        // aviso de vitalício quando for o caso) e só diverge quando o webhook der resposta —
+        // abandono nunca usa este caminho, porque não existe evento nosso pra ancorar aquele lado
+        // (ver comentário em leadsDeCompraViaWebhookLogs).
+        compradorLeadsSource = leadsSource;
+        leadsPeriodoInfoCompra = leadsPeriodoInfo;
+        if (comprasExatas) {
+          for (const [id, leads] of comprasExatas.porLista) {
+            contagemPorLista.set(id, leads);
+            listasComNumeroDoPeriodo.add(id); // exato e do período, mesmo quando delta falhou
+          }
+          // Recalcula o total somando TODAS as listas de compra pela fonte que cada uma tem —
+          // exata pra produto de lista única, aproximada (retrato/vitalício) pra produto com duas
+          // listas, que fica de fora de comprasExatas de propósito (ver o comentário da função).
+          // Um total só, misturando as duas fontes por lista, é mais correto que escolher uma das
+          // duas fontes inteira — e é exatamente o que contagemPorLista já representa aqui.
+          compradorLeads = compraIds.reduce((soma, id) => soma + (contagemPorLista.get(id) ?? 0), 0);
+
+          // Só chama de "exata" quando TODA lista de compra do cliente coube no cálculo exato. Com
+          // produto de duas listas na mistura, o total é parcialmente aproximado, e dizer "exata"
+          // pra ele seria a mesma classe de erro que motivou o resto desta auditoria: legenda
+          // afirmando mais certeza do que o número tem.
+          const cobreTudo = comprasExatas.porLista.size === compraIds.length;
+          if (cobreTudo) {
+            compradorLeadsSource = 'webhook_exato';
+            // Janela exata por construção — não há folga de retrato pra estourar o período pedido.
+            leadsPeriodoInfoCompra = { de: periodoDe!, ate: periodoAte!, janela_bate: true };
+          }
+
+          // O retrato também mediu este período? Compara só as listas que o webhook cobriu —
+          // comparar contra delta.compra (que inclui produto de duas listas, fora do escopo do
+          // webhook) acusaria "venda não capturada" no Thermo por engano, quando a diferença ali é
+          // só o segundo gateway de lead que o retrato já soma legitimamente.
+          if (delta) {
+            const retratoDasMesmasListas = [...comprasExatas.porLista.keys()]
+              .reduce((soma, id) => soma + (delta.deltaPorLista.get(id) ?? 0), 0);
+            compraDivergencia = {
+              do_retrato: retratoDasMesmasListas,
+              explicado_por_venda: comprasExatas.total,
+              diferenca: retratoDasMesmasListas - comprasExatas.total,
+            };
+          }
+        }
+
         const avisos: string[] = [];
         if (unmatched.length > 0) {
           avisos.push(`${unmatched.length} produto(s) sem lista SlickText vinculada: ${unmatched.map(u => u.kitName).join(', ')}`);
         }
-        if (leadsSource === 'slicktext_list' && periodoAtivo) {
+        // incerto:true = a SlickText não respondeu de verdade pra essa lista agora (timeout, erro
+        // 500, token vencido) — o count fica 0 pra não quebrar a soma, mas 0 aqui NÃO significa
+        // lista vazia, e quem olha a tela precisa saber que o número pode estar subcontado.
+        const listasIncertas = [...abandonoPorLista, ...compraPorLista].filter(l => l.incerto);
+        if (listasIncertas.length > 0) {
+          avisos.push(`${listasIncertas.length} lista(s) não responderam agora (falha temporária da SlickText, não lista vazia) — leads e conversão podem estar subcontados até a próxima tentativa`);
+        }
+        if (leadsSource === 'slicktext_list' && periodoAtivo && !comprasExatas) {
           avisos.push('Leads são o total atual de cada lista (vitalício) contra vendas do período — a SlickText não conta contatos por lista e por data ao mesmo tempo. A partir de agora um retrato diário é gravado, e períodos futuros passam a ter leads exatos.');
         }
         leadsWarning = avisos.length > 0 ? avisos.join(' · ') : null;
@@ -1973,19 +2320,53 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   // os produtos (achado da auditoria: número diferente na mesma tela sem explicação vira dúvida).
   const smsSegParams: (string | number)[] = [clientId];
   const smsSegPeriod = periodSql(period, smsSegParams);
+  // ESCOPO PELA AUTOMAÇÃO DE ORIGEM, não pelo nome do produto.
+  //
+  // Antes: a venda entrava na conta se o PRODUTO tivesse lista da SlickText vinculada. Isso funciona
+  // pra produto de entrada e quebra pra upsell, que nunca vai ter lista própria: ninguém abandona um
+  // carrinho de NightCalm — a pessoa entra pelo fluxo do NeuroMind, recebe a oferta do upsell ali
+  // dentro, e o lead dela está na lista do NeuroMind. Exigir lista do NightCalm era exigir uma coisa
+  // que não existe e não deveria existir. No cliente de referência isso jogava 64 vendas e 46
+  // recuperações fora da tabela em 30 dias, todas de upsell.
+  //
+  // Agora: a venda entra se a MENSAGEM que a gerou está vinculada a uma automação (existe em
+  // sms_campaign_map). É o que alinha numerador e denominador de verdade — a venda veio de um fluxo
+  // cujas listas estão sendo contadas nos leads. Upsell entra pelo fluxo que o vendeu, que é onde o
+  // lead realmente está.
+  //
+  // O que continua fora, e a nota da tela lista: venda de SMS sem mensagem vinculada. Aí não se sabe
+  // de qual automação veio, então não há denominador a que ela pertença.
   const smsSeg = await queryOne<{
     rec_escopo: string; rec_total: string; compra_escopo: string; compra_total: string;
+    nao_classificado: string; total_canal: string;
   }>(`
     SELECT
-      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
-        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_abandono_id IS NOT NULL)) AS rec_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY} AND ${SQL_ESCOPO_POR_AUTOMACAO}) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND st_list_compra_id IS NOT NULL)) AS compra_escopo,
-      COUNT(*) AS compra_total
+      -- NOT recovery: as duas linhas da tabela são segmentos EXCLUDENTES, não um dentro do outro.
+      -- Antes "Compradores" contava TODAS as vendas, inclusive as de carrinho abandonado, e as
+      -- duas linhas se sobrepunham: na tela do North Scale aparecia Carrinho Abandonado 2 e
+      -- Compradores 3, com 3 vendas no período — ou seja, "Compradores" era o total. Pior, o
+      -- resumo do topo da mesma página dizia "2 de recuperação e 1 de upsell", o número certo:
+      -- a tela mostrava o certo e o errado ao mesmo tempo. Como leads de compradores e leads de
+      -- abandono são listas diferentes, o numerador errado inflava a taxa de Compradores.
+      -- RECONHECIMENTO POSITIVO, não por eliminação. Antes "Compradores" era "tudo que não é
+      -- recuperação" — um balde de resto. Qualquer venda com utm fora do padrão (WFI001, Lost,
+      -- uma automação nova) caía ali sem ninguém saber, inflando a conversão do segmento.
+      -- Agora só entra quem CASA com upsell/compra aprovada; o que não casa com nenhum dos dois
+      -- vai para "não classificado", que aparece na tela e vira lista de trabalho pra arrumar o
+      -- link na SlickText. É também o que faz a identidade fechar de verdade:
+      --   recuperação + comprador + não classificado = total
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL} AND ${SQL_ESCOPO_POR_AUTOMACAO}) AS compra_escopo,
+      COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL}) AS compra_total,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_classificado,
+      COUNT(*) AS total_canal
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
       ${smsSegPeriod ? `AND ${smsSegPeriod}` : ''}
   `, smsSegParams);
+  const smsSegNaoClassificado = parseInt(smsSeg?.nao_classificado || '0');
+  const smsSegTotalCanal = parseInt(smsSeg?.total_canal || '0');
   const smsSegRecoveryCount = parseInt(smsSeg?.rec_escopo || '0');
   const smsSegSalesCount = parseInt(smsSeg?.compra_escopo || '0');
   const smsSegRecoveryFora = parseInt(smsSeg?.rec_total || '0') - smsSegRecoveryCount;
@@ -2000,45 +2381,153 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
   const foraParams: (string | number)[] = [clientId];
   const foraPeriod = periodSql(period, foraParams);
   const foraDetalhe = await query<{
-    produto: string | null; rec_fora: string; compra_fora: string; motivo: string;
+    produto: string | null; utm: string | null; rec_fora: string; compra_fora: string; motivo: string;
   }>(`
     WITH vendas AS (
-      SELECT product_name, (${SQL_IS_RECOVERY}) AS is_rec
+      SELECT product_name, utm_campaign, (${SQL_IS_RECOVERY}) AS is_rec,
+             EXISTS (SELECT 1 FROM sms_campaign_map m
+                     WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign) AS vinculada
       FROM webhook_logs
       WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
         ${foraPeriod ? `AND ${foraPeriod}` : ''}
     )
     SELECT
       v.product_name AS produto,
-      COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
-        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-          AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name
-      )) AS rec_fora,
-      COUNT(*) FILTER (WHERE NOT EXISTS (
-        SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-          AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name
-      )) AS compra_fora,
+      v.utm_campaign AS utm,
+      COUNT(*) FILTER (WHERE v.is_rec) AS rec_fora,
+      -- NOT is_rec pelo mesmo motivo da tabela: a nota dizia "70 vendas e 52 recuperações" com
+      -- as 52 DENTRO das 70, e quem lê soma 122. Agora os dois números são disjuntos e somam.
+      COUNT(*) FILTER (WHERE NOT v.is_rec) AS compra_fora,
+      -- Agora que o escopo é pela automação, o motivo de ficar fora é sempre o mesmo: não há
+      -- mensagem vinculada. O que muda é o que fazer, e isso depende de existir utm_campaign.
       CASE
-        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name)
-          THEN 'produto não cadastrado no dashboard'
-        WHEN NOT EXISTS (SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.name = v.product_name AND k.enabled = true)
-          THEN 'produto cadastrado mas desativado'
-        ELSE 'produto ativado, mas sem lista da SlickText vinculada'
+        WHEN v.utm_campaign IS NULL OR TRIM(v.utm_campaign) = ''
+          THEN 'venda sem utm_campaign — o link não identifica a mensagem'
+        ELSE 'mensagem não vinculada a nenhuma automação — rode o Auto-vincular'
       END AS motivo
     FROM vendas v
-    GROUP BY v.product_name
-    HAVING COUNT(*) FILTER (WHERE v.is_rec AND NOT EXISTS (
-             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-               AND k.st_list_abandono_id IS NOT NULL AND k.name = v.product_name)) > 0
-        OR COUNT(*) FILTER (WHERE NOT EXISTS (
-             SELECT 1 FROM kits k WHERE k.client_id = $1 AND k.enabled = true
-               AND k.st_list_compra_id IS NOT NULL AND k.name = v.product_name)) > 0
-    ORDER BY 3 DESC, 2 DESC
+    WHERE NOT v.vinculada
+    GROUP BY v.product_name, v.utm_campaign
+    ORDER BY 4 DESC, 3 DESC
     LIMIT 12
   `, foraParams).catch(() => []);
 
+  // ── Conversão por Segmento POR PRODUTO (pedido 3.4: "precisa ser dividido por produto tmb") ──
+  //
+  // O agrupamento é pelo produto que está no utm_campaign da venda — que é o produto da AUTOMAÇÃO,
+  // não o SKU do pedido. É a única chave que funciona aqui: a venda de um upsell traz o SKU do
+  // upsell, mas quem a gerou foi o fluxo da família, e é na lista da família que o lead está.
+  //
+  // E o resultado sai por FAMÍLIA ("NeuroMind Pro"), não por SKU ("M1 - NeuroMind Pro 2 Bottles"),
+  // porque a lista da SlickText é uma só para a família toda. Quebrar por SKU contaria a mesma lista
+  // várias vezes — foi exatamente o erro que fez os contatos aparecerem como 498 mil numa conta de
+  // 83 mil.
+  const porProdParams: (string | number)[] = [clientId];
+  const porProdPeriod = periodSql(period, porProdParams);
+  const vendasPorUtm = await query<{ utm_campaign: string | null; rec: string; upsell: string; nao_class: string; total: string }>(`
+    SELECT utm_campaign,
+           COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec,
+           -- Os mesmos três estados da tabela principal. Esta query ficou de fora do primeiro
+           -- conserto e continuava usando COUNT(*) como "vendas": a tela mostrava 21 recuperações
+           -- e 27 vendas para o NeuromindPro, onde 27 era o total (21 + 6 de upsell). Corrigir a
+           -- tabela de cima e deixar a de baixo com a semântica antiga é pior que não corrigir
+           -- nenhuma — os dois números convivem na mesma tela e um desmente o outro.
+           COUNT(*) FILTER (WHERE ${SQL_IS_UPSELL}) AS upsell,
+           COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY} AND NOT ${SQL_IS_UPSELL}) AS nao_class,
+           COUNT(*) AS total
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+      AND EXISTS (SELECT 1 FROM sms_campaign_map m
+                  WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign)
+      ${porProdPeriod ? `AND ${porProdPeriod}` : ''}
+    GROUP BY utm_campaign
+  `, porProdParams).catch(() => []);
+
+  const conversaoPorProduto = (() => {
+    if (vendasPorUtm.length === 0 || kitsComListas.length === 0) return [];
+
+    // Casamento por chave normalizada (sem espaço, hífen, acento ou caixa), igual ao auto-vínculo de
+    // listas: o utm traz "NeuromindPro" e o kit se chama "M1 - NeuroMind Pro (2 Bottles)".
+    const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+
+    type Agrupado = { produto: string; rec: number; vendas: number; naoClass: number; total: number; listasAb: Set<string>; listasCo: Set<string> };
+    const porProduto = new Map<string, Agrupado>();
+
+    for (const v of vendasPorUtm) {
+      if (!v.utm_campaign) continue;
+      const produto = familiaDoProduto(parseUtmCampaign(v.utm_campaign).produto);
+      if (!produto) continue;
+      const chave = norm(produto);
+      if (!chave) continue;
+
+      const atual = porProduto.get(chave) ?? { produto, rec: 0, vendas: 0, naoClass: 0, total: 0, listasAb: new Set<string>(), listasCo: new Set<string>() };
+      atual.rec += parseInt(v.rec);
+      // vendas = upsell/compra aprovada, NÃO o total. Ver comentário na query.
+      atual.vendas += parseInt(v.upsell);
+      atual.naoClass += parseInt(v.nao_class);
+      atual.total += parseInt(v.total);
+
+      // Todo kit cuja família casa com esse produto contribui suas listas. Set porque vários SKUs da
+      // mesma família apontam para a MESMA lista, e somar seria contar a lista de novo.
+      for (const k of kitsComListas) {
+        const nk = norm(k.nome);
+        if (!nk.includes(chave) && !chave.includes(nk)) continue;
+        k.listasAbandono.forEach(id => atual.listasAb.add(id));
+        k.listasCompra.forEach(id => atual.listasCo.add(id));
+      }
+      porProduto.set(chave, atual);
+    }
+
+    const somaListas = (ids: Set<string>) => [...ids].reduce((t, id) => t + (contagemPorLista.get(id) ?? 0), 0);
+    // Taxa só quando TODAS as listas do produto, daquele lado, têm número do período. Uma lista
+    // vitalício sozinha no meio já invalida a divisão inteira — não dá pra fazer "meia taxa".
+    const todasDoPeriodo = (ids: Set<string>) => ids.size > 0 && [...ids].every(id => listasComNumeroDoPeriodo.has(id));
+
+    return [...porProduto.values()]
+      .map(a => {
+        const leadsAb = somaListas(a.listasAb);
+        const leadsCo = somaListas(a.listasCo);
+        const abDoPeriodo = todasDoPeriodo(a.listasAb);
+        const coDoPeriodo = todasDoPeriodo(a.listasCo);
+        return {
+          produto: a.produto,
+          // null, não 0, quando o produto do utm não casou com nenhum kit com lista: a taxa não é
+          // calculável, e 0 leads com vendas > 0 renderizaria uma taxa infinita ou um zero mentiroso.
+          //
+          // taxa null também quando o lead é vitalício: dividir venda DO PERÍODO por lead
+          // VITALÍCIO (tamanho da lista inteira, acumulado desde sempre) não é taxa aproximada, é
+          // comparar janelas de tempo diferentes — visto em produção rendendo 0,98% quando o
+          // denominador tinha 9+ meses de gente contra 30 dias de venda. leads e vendas continuam
+          // aparecendo (são fatos), só a razão entre eles some quando não é uma razão de verdade.
+          carrinho_abandonado: {
+            leads: a.listasAb.size > 0 ? leadsAb : null,
+            vendas: a.rec,
+            taxa: (leadsAb > 0 && abDoPeriodo) ? parseFloat(((a.rec / leadsAb) * 100).toFixed(2)) : null,
+            taxa_nao_calculavel_motivo: (leadsAb > 0 && !abDoPeriodo) ? 'leads_vitalicio' : null,
+          },
+          compradores: {
+            leads: a.listasCo.size > 0 ? leadsCo : null,
+            vendas: a.vendas,
+            taxa: (leadsCo > 0 && coDoPeriodo) ? parseFloat(((a.vendas / leadsCo) * 100).toFixed(2)) : null,
+            taxa_nao_calculavel_motivo: (leadsCo > 0 && !coDoPeriodo) ? 'leads_vitalicio' : null,
+          },
+          // O terceiro estado também aqui: sem ele, a soma das duas colunas não bate com o total
+          // do produto e não há como saber se falta venda ou se sobra.
+          nao_classificado: a.naoClass,
+          total: a.total,
+          // Estampa que a lista é da família, para ninguém procurar uma lista por SKU que não existe.
+          listas_usadas: { abandono: a.listasAb.size, compradores: a.listasCo.size },
+        };
+      })
+      .sort((x, y) => y.compradores.vendas - x.compradores.vendas);
+  })();
+
+  // Agrupado por produto E mensagem: com escopo por automação, saber a MENSAGEM é o que permite
+  // agir (é o que se vincula), e o produto é o que identifica a venda pra quem lê.
   const smsSegForaDetalhe = foraDetalhe.map(f => ({
     produto: f.produto || '(sem nome de produto no webhook)',
+    mensagem: f.utm || null,
     recuperacoes_fora: parseInt(f.rec_fora),
     vendas_fora: parseInt(f.compra_fora),
     motivo: f.motivo,
@@ -2142,8 +2631,10 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}
         AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_abandono_id IS NOT NULL)) AS rec_escopo,
       COUNT(*) FILTER (WHERE ${SQL_IS_RECOVERY}) AS rec_total,
-      COUNT(*) FILTER (WHERE product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
-      COUNT(*) AS compra_total
+      -- Mesma correção do SMS: Compradores exclui recuperação, senão as duas linhas se sobrepõem.
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}
+        AND product_name IN (SELECT name FROM kits WHERE client_id = $1 AND enabled = true AND ac_tag_compra_id IS NOT NULL)) AS compra_escopo,
+      COUNT(*) FILTER (WHERE NOT ${SQL_IS_RECOVERY}) AS compra_total
     FROM webhook_logs
     WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_EMAIL}
       ${emailSegPeriod ? `AND ${emailSegPeriod}` : ''}
@@ -2305,31 +2796,67 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
     origem_do_faturamento: origemDoFaturamento,
     desempenho_por_caminho: desempenhoPorCaminho,
     email_automacao_vs_campanha: emailAutomacaoVsCampanha,
+    //
+    // LEADS NÃO SÃO SOMADOS AQUI, e a taxa consolidada não existe.
+    //
+    // A mesma pessoa está na lista da SlickText E na tag do ActiveCampaign: quem abandonou o
+    // carrinho recebe SMS e email do mesmo fluxo. Somar os dois lados conta cada pessoa duas
+    // vezes — no cliente de referência dava 77.845 leads (39.173 do SMS + 38.672 do AC) para uma
+    // base que não tem 77 mil pessoas. Com o denominador dobrado, a taxa consolidada saía pela
+    // METADE da real, e o canal parecia converter menos do que converte.
+    //
+    // Não existe conserto por cálculo: para desduplicar seria preciso cruzar telefone com email
+    // pessoa a pessoa, dado que nenhuma das duas APIs entrega. Então a tela deixa de somar em vez
+    // de mostrar um número que parece certo. Vendas continuam somadas — venda é evento distinto,
+    // não pessoa, e a mesma compra não aparece nos dois canais.
     conversao_por_segmento: {
       carrinho_abandonado: {
-        leads: abandonoLeads + emailAbandonoLeads,
+        leads: null,
         vendas: smsSegRecoveryCount + emailSegRecoveryCount,
         vendas_fora_escopo: smsSegRecoveryFora + emailSegRecoveryFora,
-        taxa: (abandonoLeads + emailAbandonoLeads) > 0
-          ? parseFloat((((smsSegRecoveryCount + emailSegRecoveryCount) / (abandonoLeads + emailAbandonoLeads)) * 100).toFixed(2))
-          : 0,
+        taxa: null,
+        leads_nao_somavel: true,
+        leads_por_canal: { sms: abandonoLeads, email: emailAbandonoLeads },
         leads_source: leadsSource,
         leads_warning: leadsWarning,
       },
       compradores: {
-        leads: compradorLeads + emailCompradorLeads,
+        leads: null,
         vendas: smsSegSalesCount + emailSegSalesCount,
         vendas_fora_escopo: smsSegSalesFora + emailSegSalesFora,
-        taxa: (compradorLeads + emailCompradorLeads) > 0
-          ? parseFloat((((smsSegSalesCount + emailSegSalesCount) / (compradorLeads + emailCompradorLeads)) * 100).toFixed(2))
-          : 0,
-        leads_source: leadsSource,
+        taxa: null,
+        leads_nao_somavel: true,
+        leads_por_canal: { sms: compradorLeads, email: emailCompradorLeads },
+        leads_source: compradorLeadsSource,
         leads_warning: leadsWarning,
       },
     },
     // Isolado por canal — mesmo cálculo, escopado a cada aba (Email/SMS), pedido do Murilo
     // pra bater com a spec ("toda a separação feita isolada para cada aba").
+    // Conferência das identidades que TÊM que fechar. Roda a cada resposta e vai junto com os
+    // números, não num relatório separado: relatório que ninguém abre não protege ninguém.
+    invariantes: conferirInvariantes({
+      segmentoSms: {
+        recuperacoes: smsSegRecoveryCount + smsSegRecoveryFora,
+        compradores: smsSegSalesCount + smsSegSalesFora,
+        naoClassificado: smsSegNaoClassificado,
+        totalCanal: smsSegTotalCanal,
+      },
+      escopoSms: {
+        dentroRec: smsSegRecoveryCount,
+        dentroCompra: smsSegSalesCount,
+        foraRec: smsSegRecoveryFora,
+        foraCompra: smsSegSalesFora,
+        naoClassificado: smsSegNaoClassificado,
+        totalCanal: smsSegTotalCanal,
+      },
+    }),
     conversao_por_segmento_sms: {
+      // Terceiro estado, exposto de propósito. Venda que não casa nem com carrinho abandonado nem
+      // com upsell/compra aprovada não é "comprador por eliminação" — é venda cujo link não diz de
+      // onde veio, e isso é trabalho a fazer na SlickText, não número a esconder.
+      nao_classificado: smsSegNaoClassificado,
+      total_canal: smsSegTotalCanal,
       carrinho_abandonado: {
         leads: abandonoLeads,
         vendas: smsSegRecoveryCount,
@@ -2345,13 +2872,23 @@ adminRouter.get('/clientes/:id/stats', asyncHandler(async (req: Request, res: Re
         vendas: smsSegSalesCount,
         vendas_fora_escopo: smsSegSalesFora,
         taxa: compradorLeads > 0 ? parseFloat(((smsSegSalesCount / compradorLeads) * 100).toFixed(2)) : 0,
-        leads_source: leadsSource,
-        leads_periodo: leadsPeriodoInfo,
+        leads_source: compradorLeadsSource,
+        leads_periodo: leadsPeriodoInfoCompra,
         leads_retratos: leadsRetratos,
         leads_warning: leadsWarning,
+        // Só preenchido quando leads_source é 'webhook_exato' E o retrato também mediu o mesmo
+        // período — é a contraprova: quanto a lista cresceu de verdade contra quanto a gente
+        // conseguiu explicar por venda registrada. Positivo = venda por gateway não capturado.
+        divergencia_retrato: compraDivergencia,
       },
       // Quais produtos ficaram fora e por quê — a nota da tela lista isso em vez de só contar.
       fora_escopo_detalhe: smsSegForaDetalhe,
+      // Pedido 3.4 do documento: a mesma divisão, aberta por produto (por família, ver o bloco).
+      por_produto: conversaoPorProduto,
+      // Status de retrato de TODA lista de produto ativo, com as datas gravadas de cada uma —
+      // não só a recém-trocada (standby:true), a já estabelecida também, pra dar visão completa
+      // de quem mexe nos vínculos do workflow.
+      listas_retrato_status: listasRetratoStatus,
     },
     conversao_por_segmento_email: {
       carrinho_abandonado: {
@@ -2585,6 +3122,7 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
     mensagem: string;
     tipo_automacao: string;
     produto: string;
+    produto_familia: string;
     produto_bruto: string;
     oferta_colada_no_produto: boolean;
     oferta: string | null;
@@ -2609,6 +3147,10 @@ adminRouter.get('/clientes/:id/sms-granular', asyncHandler(async (req: Request, 
         mensagem: parsed.mensagem,
         tipo_automacao: parsed.tipo_automacao,
         produto: parsed.produto,
+        // Família calculada AQUI, não no navegador. A tela tinha a própria cópia da regra, e a
+        // cópia já cobrou: corrigida no front, esquecida no servidor, o NeuromindProN8N virou
+        // produto próprio e as vendas dele saíram do denominador. Agora existe um dono.
+        produto_familia: familiaDoProduto(parsed.produto),
         // Nome cru e o aviso: a tela agrupa pelo produto limpo e estampa que o link está fora do
         // padrão, pra alguém corrigir na SlickText em vez de o dashboard remendar para sempre.
         produto_bruto: parsed.produto_bruto,
@@ -2878,6 +3420,112 @@ adminRouter.post('/clientes/:id/sms-campaign-map/auto', asyncHandler(async (req:
   res.json({ ok: true, linked, scanned, errors: errors.length ? errors : undefined });
 }));
 
+// GET /admin/clientes/:id/diagnostico/origem-dos-webhooks - DE QUAL conta Digistore vêm os
+// webhooks, e quando cada uma parou de mandar.
+//
+// Pergunta que apareceu na operação: "qual Digistore, a nossa ou a do outro produtor?". Tinha
+// resposta exata no banco desde sempre — o payload cru do IPN fica guardado em webhook_logs.payload,
+// e o Digistore manda vendor/publisher/product em cada chamada. Sem isso a resposta seria
+// especulação sobre a conta de alguém.
+//
+// Serve para duas coisas ao mesmo tempo: dizer de quem é a conta, e mostrar QUANDO cada origem
+// recebeu o último webhook. Uma origem cujo último evento é de dias atrás enquanto outra continua
+// chegando é entrega interrompida naquela conta específica, não venda que parou.
+adminRouter.get('/clientes/:id/diagnostico/origem-dos-webhooks', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+
+  // As chaves reais de UM payload, sem assumir nome de campo: o IPN da Digistore muda de formato
+  // entre versões, e chutar nome de campo foi o que já produziu diagnóstico vazio antes.
+  const amostra = await queryOne<{ chaves: string[]; quando: string }>(
+    `SELECT ARRAY(SELECT jsonb_object_keys(payload)) AS chaves, created_at::text AS quando
+     FROM webhook_logs
+     WHERE client_id = $1 AND payload IS NOT NULL AND source = 'digistore24'
+     ORDER BY created_at DESC LIMIT 1`,
+    [clientId]
+  ).catch(() => null);
+
+  // Agrupado pelos identificadores que a Digistore manda. COALESCE pra chave ausente virar '(não
+  // veio no payload)' em vez de sumir a linha inteira do agrupamento.
+  const porOrigem = await query<{
+    vendor: string; publisher: string; produto: string; produto_nome: string; ipn_config: string;
+    eventos: string; primeiro: string; ultimo: string; dias_sem_receber: string;
+  }>(
+    `SELECT
+       -- merchant_id/merchant_name é o que o IPN da Digistore realmente manda; vendor_id não existe
+       -- neste formato (conferido no dump de chaves de um payload real desta integração).
+       COALESCE(payload->>'merchant_id', '(não veio no payload)') AS vendor,
+       COALESCE(payload->>'merchant_name', '—') AS publisher,
+       COALESCE(payload->>'product_id', '—') AS produto,
+       COALESCE(payload->>'product_name', '—') AS produto_nome,
+       COALESCE(payload->>'ipn_config_id', '—') AS ipn_config,
+       COUNT(*) AS eventos,
+       MIN(created_at)::date::text AS primeiro,
+       MAX(created_at)::text AS ultimo,
+       EXTRACT(DAY FROM NOW() - MAX(created_at))::int::text AS dias_sem_receber
+     FROM webhook_logs
+     WHERE client_id = $1 AND source = 'digistore24' AND payload IS NOT NULL
+     GROUP BY 1, 2, 3, 4, 5
+     ORDER BY MAX(created_at) DESC`,
+    [clientId]
+  ).catch(() => []);
+
+  // Último webhook por tipo de evento: uma conta pode continuar mandando reembolso e ter parado de
+  // mandar pagamento, e o total geral esconderia isso.
+  const porEvento = await query<{ event_type: string; eventos: string; ultimo: string }>(
+    `SELECT event_type, COUNT(*) AS eventos, MAX(created_at)::text AS ultimo
+     FROM webhook_logs WHERE client_id = $1
+     GROUP BY event_type ORDER BY MAX(created_at) DESC`,
+    [clientId]
+  ).catch(() => []);
+
+  const lojas = await query<{ shop_slug: string; platform: string; display_name: string | null }>(
+    `SELECT shop_slug, platform, display_name FROM store_integrations WHERE client_id = $1`,
+    [clientId]
+  ).catch(() => []);
+
+  // Resumo por CONTA, no topo. A pergunta é "qual Digistore", e ela se perdia em 38 linhas de
+  // produto: cada produto virava uma linha e a conta aparecia repetida em todas.
+  const porConta = new Map<string, { merchant: string; nome: string; eventos: number; ultimo: string }>();
+  for (const o of porOrigem) {
+    const chave = `${o.vendor}|${o.publisher}`;
+    const atual = porConta.get(chave) ?? { merchant: o.vendor, nome: o.publisher, eventos: 0, ultimo: '' };
+    atual.eventos += parseInt(o.eventos);
+    if (o.ultimo > atual.ultimo) atual.ultimo = o.ultimo;
+    porConta.set(chave, atual);
+  }
+
+  res.json({
+    contas_que_enviaram: [...porConta.values()].sort((a, b) => (a.ultimo > b.ultimo ? -1 : 1)),
+    como_ler: [
+      'contas_que_enviaram é a resposta direta de "qual Digistore" — merchant_id e merchant_name vêm do próprio IPN.',
+      'origens[] é o detalhe por produto dentro de cada conta.',
+      'dias_sem_receber por origem: origem parada enquanto outra continua chegando é entrega interrompida NAQUELA conta, não venda que parou.',
+      'chaves_de_um_payload mostra os campos que o IPN realmente traz nesta integração, para conferir se vendor/publisher existem mesmo.',
+    ],
+    lojas_cadastradas: lojas,
+    chaves_de_um_payload: amostra?.chaves ?? null,
+    ultimo_payload_em: amostra?.quando ?? null,
+    origens: porOrigem.map(o => ({
+      vendor: o.vendor,
+      publisher: o.publisher,
+      product_id: o.produto,
+      product_name: o.produto_nome,
+      // Qual configuração de IPN entregou. Se houver mais de uma, é mais de um cadastro de webhook
+      // apontando pra cá — e uma delas pode ter sido desativada sem a outra.
+      ipn_config_id: o.ipn_config,
+      eventos: parseInt(o.eventos),
+      primeiro_evento: o.primeiro,
+      ultimo_evento: o.ultimo,
+      dias_sem_receber: parseInt(o.dias_sem_receber),
+    })),
+    por_tipo_de_evento: porEvento.map(e => ({
+      event_type: e.event_type,
+      eventos: parseInt(e.eventos),
+      ultimo: e.ultimo,
+    })),
+  });
+}));
+
 // GET /admin/clientes/:id/diagnostico/sem-utm - Investiga as vendas que chegam SEM UTM nenhuma
 // (o grosso do não atribuído). Três perguntas, respondidas do payload cru salvo em JSONB:
 //   1. são upsell/downsell dentro do funil? (produto começando com UP/DS/DW) — nesse caso a
@@ -3066,26 +3714,31 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
   const clientId = req.params.id as string;
   const period = resolvePeriodFilter(req);
 
-  const kits = await query<{ st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT DISTINCT st_list_abandono_id, st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true`,
+  const kits = await query<{ st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+    `SELECT DISTINCT st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
+     FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
-  const abandonoIds = [...new Set(kits.map(k => k.st_list_abandono_id).filter((v): v is string => !!v))];
-  const compraIds = [...new Set(kits.map(k => k.st_list_compra_id).filter((v): v is string => !!v))];
+  const abandonoIds = [...new Set(kits.flatMap(k => listasDoKit(k).abandono))];
+  const compraIds = [...new Set(kits.flatMap(k => listasDoKit(k).compra))];
   const todas = [...new Set([...abandonoIds, ...compraIds])];
 
-  const retratos = await query<{ list_id: string; st_account_id: number | null; snapshot_date: string; contact_count: string }>(
-    `SELECT list_id, st_account_id, snapshot_date::text AS snapshot_date, contact_count
+  const retratos = await query<{ list_id: string; st_account_id: number | null; list_name: string | null; snapshot_date: string; contact_count: string }>(
+    `SELECT list_id, st_account_id, list_name, snapshot_date::text AS snapshot_date, contact_count
      FROM list_contact_snapshots WHERE client_id = $1
      ORDER BY list_id, snapshot_date DESC`,
     [clientId]
   );
 
   const porLista = new Map<string, Array<{ data: string; contatos: number; conta: number | null }>>();
+  const nomePorLista = new Map<string, string>();
   for (const r of retratos) {
     const arr = porLista.get(r.list_id) ?? [];
     arr.push({ data: r.snapshot_date.slice(0, 10), contatos: parseInt(r.contact_count), conta: r.st_account_id });
     porLista.set(r.list_id, arr);
+    // Retratos vêm do mais recente para o mais antigo, então o primeiro nome visto é o atual.
+    // Nome mudado no meio da série é sinal de alguém ter mexido na conta — vale ver a série inteira.
+    if (r.list_name && !nomePorLista.has(r.list_id)) nomePorLista.set(r.list_id, r.list_name);
   }
 
   // Roda o MESMO cálculo que o /stats usa — não uma reimplementação. Se este devolver null, o da
@@ -3099,6 +3752,7 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
     const datas = rs.map(r => r.data);
     return {
       list_id: id,
+      nome: nomePorLista.get(id) ?? null,
       segmento: abandonoIds.includes(id) ? (compraIds.includes(id) ? 'abandono e compra' : 'abandono') : 'compra',
       retratos_gravados: rs.length,
       datas,
@@ -3128,7 +3782,21 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
           : 'GRAVAÇÃO OK — todas as listas ativas têm retrato.',
     },
     calculo_de_leads_por_periodo: delta
-      ? { resolve: true, leads_abandono: delta.abandono, leads_compra: delta.compra, retrato_inicial: delta.baseDate, retrato_final: delta.endDate }
+      ? {
+          resolve: true,
+          leads_abandono: delta.abandono,
+          leads_compra: delta.compra,
+          // Retrato USADO em cada ponta vs DIAS que a conta cobre — os dois, porque a diferença de
+          // um dia entre eles é exatamente onde vivia o off-by-one.
+          retrato_inicial: delta.baseDate,
+          retrato_final: delta.endDate,
+          cobre_de: delta.cobreDe,
+          cobre_ate: delta.cobreAte,
+          // A que hora cada retrato foi gravado: só representa "começo do dia" se for perto da
+          // meia-noite. Longe dela, a janela real não é o dia inteiro.
+          hora_retrato_inicial: delta.horaBase,
+          hora_retrato_final: delta.horaFim,
+        }
       : {
           resolve: false,
           motivo: !(period.from && period.to)
@@ -3138,6 +3806,34 @@ adminRouter.get('/clientes/:id/diagnostico/snapshots-listas', asyncHandler(async
               : 'Há retratos, mas nenhum dentro da tolerância de 3 dias das pontas do período pedido. Tente um período que termine hoje.',
         },
     listas: diagnosticoPorLista,
+    // Listas COM retrato que não estão vinculadas a kit nenhum. Existe por causa da migração do
+    // NeuroMind: a lista vinculada estava congelada em 19.706 e a lista viva era outra, em outra
+    // conta da SlickText, que o painel não olhava. O que decide qual é a viva não é o tamanho — é
+    // qual CRESCE. Por isso aqui vai a variação da série, e não só a contagem atual.
+    listas_sem_vinculo: [...porLista.keys()]
+      .filter(id => !todas.includes(id))
+      .map(id => {
+        const rs = porLista.get(id)!;             // ordenada do mais recente para o mais antigo
+        const atual = rs[0];
+        const antiga = rs[rs.length - 1];
+        return {
+          list_id: id,
+          nome: nomePorLista.get(id) ?? null,
+          conta: atual.conta,
+          contatos_agora: atual.contatos,
+          retratos_gravados: rs.length,
+          primeiro_retrato: antiga.data,
+          // null, e não 0, enquanto há só um retrato: não medido é diferente de medido e parado, e
+          // é justamente essa diferença que decide a religação.
+          variacao: rs.length >= 2 ? atual.contatos - antiga.contatos : null,
+          veredito: rs.length < 2
+            ? 'sem série ainda — precisa de um segundo dia de retrato'
+            : atual.contatos > antiga.contatos
+              ? 'CRESCENDO — está recebendo contato novo'
+              : 'PARADA — não entrou contato desde o primeiro retrato',
+        };
+      })
+      .sort((a, b) => b.contatos_agora - a.contatos_agora),
     como_confirmar_amanha: [
       'Rode este endpoint com ?from= e ?to= terminando no dia de hoje.',
       'Quando calculo_de_leads_por_periodo.resolve virar true, a aba SMS passa a mostrar "entraram no período" com as datas na célula de Leads.',
@@ -3433,6 +4129,392 @@ adminRouter.get('/clientes/:id/diagnostico/probe-link-manual', asyncHandler(asyn
   res.json({ contas: saida });
 }));
 
+// GET /admin/clientes/:id/diagnostico/probe-workflows-paginacao - getWorkflows() pagina?
+//
+// getWorkflows() sempre fez UMA chamada sem offset/limit, com uma nota antiga admitindo que o
+// formato nunca foi confirmado contra a API real (por analogia a /campaigns). getAllLinks() pagina
+// explicitamente porque /links confirmadamente pagina (pagingData) — se /workflows seguir a mesma
+// convenção da API, toda conta com mais automações do que cabe numa página teria o total de envios
+// por automação (envios-por-automacao, diagnostico/cobertura-automacao) subcontado em silêncio,
+// porque as automações que ficaram de fora nem aparecem na lista pra somar.
+//
+// Pede a página 0 (padrão) e, se a marca tiver pelo menos 1 workflow, pede de novo com
+// offset=<quantidade devolvida> — se essa segunda chamada trouxer QUALQUER workflow a mais, a API
+// pagina de verdade e getWorkflows() está perdendo o resto. Também expõe as chaves cruas da
+// resposta (pra achar pagingData/total, se existir, sem adivinhar o nome do campo).
+adminRouter.get('/clientes/:id/diagnostico/probe-workflows-paginacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+  const saida = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    const semParam = await st.rawWorkflowsResponse().catch((e: any) => ({ erro: e.message }));
+    const semParamLista: any[] = Array.isArray(semParam) ? semParam : (semParam?.data ?? []);
+    const qtd = semParamLista.length;
+
+    const comOffset = qtd > 0
+      ? await st.rawWorkflowsResponse({ offset: qtd, limit: 100 }).catch((e: any) => ({ erro: e.message }))
+      : null;
+    const comOffsetLista: any[] = Array.isArray(comOffset) ? comOffset : (comOffset?.data ?? []);
+
+    const idsPrimeiraChamada = new Set(semParamLista.map((w: any) => w?.workflow_id ?? w?.id));
+    const idsNovosNoOffset = comOffsetLista.filter((w: any) => !idsPrimeiraChamada.has(w?.workflow_id ?? w?.id));
+
+    saida.push({
+      conta: acc.label,
+      workflows_na_primeira_chamada: qtd,
+      chaves_da_resposta_crua: semParam && typeof semParam === 'object' && !Array.isArray(semParam)
+        ? Object.keys(semParam) : '(resposta é array puro, sem envelope)',
+      metadado_de_paginacao: semParam?.pagingData ?? semParam?.paging ?? semParam?.meta ?? null,
+      segunda_chamada_com_offset: comOffset && !('erro' in (comOffset as any))
+        ? { workflows_devolvidos: comOffsetLista.length, workflows_NOVOS_nao_vistos_na_primeira: idsNovosNoOffset.length }
+        : { erro: (comOffset as any)?.erro ?? 'não testado (zero workflows na primeira chamada)' },
+      veredito: idsNovosNoOffset.length > 0
+        ? `PAGINA DE VERDADE — offset=${qtd} devolveu ${idsNovosNoOffset.length} workflow(s) que a chamada sem offset não trouxe. getWorkflows() está perdendo automação(ões) hoje.`
+        : qtd === 0
+          ? 'Zero workflows na conta — nada a testar.'
+          : 'offset não trouxe nada novo — ou a API não pagina /workflows, ou esta conta tem poucos workflows pra provar (tente de novo numa conta com muitas automações).',
+    });
+  }
+
+  res.json({ contas: saida });
+}));
+
+// GET /admin/clientes/:id/diagnostico/probe-ordem-mensagens?workflow_id=X&node_id=Y - A ordem de
+// /messages por offset é mesmo crescente por `created`, e estável entre chamadas?
+//
+// countWorkflowNodeMessages() (usada por sms-campaign-sends, que alimenta Créditos por Automação)
+// faz busca binária sobre /messages?offset=N assumindo ORDEM CRESCENTE de `created` conforme o
+// offset sobe — o próprio código admite que isso foi "verificado de leve" durante o galope. Se a
+// ordem não for estritamente crescente, ou se a lista mudar sob o pé da busca (automação disparando
+// em paralelo, deslocando offsets), a busca binária devolve fronteira errada SEM erro nenhum —
+// silenciosamente conta mensagem/crédito de menos ou de mais.
+//
+// Duas checagens, com dado real:
+//   1. Ordem: varre offsets consecutivos (0..N) e confirma que `created` nunca RETROCEDE.
+//   2. Estabilidade: pede o MESMO offset duas vezes com uma pausa de 3s no meio — se o item mudar,
+//      a lista se moveu sob concorrência, exatamente o cenário que quebraria uma busca binária em
+//      andamento (que already faz várias chamadas espalhadas ao longo de vários segundos).
+adminRouter.get('/clientes/:id/diagnostico/probe-ordem-mensagens', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const workflowId = parseInt(String(req.query.workflow_id ?? ''), 10);
+  const nodeId = req.query.node_id != null && req.query.node_id !== '' ? parseInt(String(req.query.node_id), 10) : undefined;
+  if (!workflowId) {
+    res.status(400).json({ error: 'workflow_id é obrigatório — use ?workflow_id=123 (opcionalmente &node_id=456)' });
+    return;
+  }
+
+  const contas = await getSlickTextAccounts(clientId);
+  const acc = contas[0];
+  if (!acc) {
+    res.status(404).json({ error: 'Nenhuma conta SlickText configurada para este cliente.' });
+    return;
+  }
+  const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+
+  const baseParams: Record<string, any> = { source: 'Workflow', source_id: workflowId };
+  if (nodeId) baseParams._sub_source_id = nodeId;
+
+  // offset_inicial: por padrão 0, que é a ponta MAIS ANTIGA da lista (ordem crescente) — dados
+  // parados, sem chance nenhuma de flagrar instabilidade. Pra testar de verdade a ponta VIVA
+  // (onde a automação escreve agora e onde a busca binária realmente opera pra período recente),
+  // passe ?offset_inicial=<perto do total vitalício do workflow/node>.
+  let offsetInicial = Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0);
+  const N = Math.min(50, Math.max(5, parseInt(String(req.query.n ?? '30'), 10) || 30));
+
+  // A lista cresce com o tempo (a automação continua disparando) — um offset que era "a ponta"
+  // numa medição anterior vira "meio da lista" depois de tempo suficiente, então SEMPRE descobre
+  // a ponta REAL de novo, não só quando o offset pedido já vem vazio: pra isso, galopa PRA FRENTE
+  // a partir do offset pedido (dobrando o passo, igual ao galope de countWorkflowNodeMessages())
+  // até achar um offset vazio, depois busca binária entre o último cheio e o primeiro vazio. Se o
+  // offset pedido em si já vier vazio, o galope começa do zero (comportamento antigo preservado).
+  //
+  // Orçamento de tempo, não só de passos: achado em produção (504 do nginx) que /messages?offset=N
+  // pode ficar mais lenta quanto MAIOR o offset (paginação por OFFSET costuma escanear os N
+  // registros por baixo dos panos) — um número fixo de passos não protege contra isso, porque
+  // passos em offsets grandes podem ser bem mais caros que os primeiros. Corta a descoberta com
+  // base em tempo decorrido, e usa a melhor fronteira encontrada até ali (aproximada, não exata).
+  const inicioDaSonda = Date.now();
+  const ORCAMENTO_DESCOBERTA_MS = 15000;
+  const dentroDoOrcamento = () => Date.now() - inicioDaSonda < ORCAMENTO_DESCOBERTA_MS;
+
+  let limiteRealDescoberto: number | null = null;
+  let descobertaParcial = false;
+  const primeiraChecagem = await st.rawMessages({ ...baseParams, offset: offsetInicial, limit: 1 }).catch(() => []);
+
+  let loCheio: number;
+  let hiVazio: number | null;
+  if (primeiraChecagem.length > 0) {
+    loCheio = offsetInicial;
+    hiVazio = null;
+    let passo = Math.max(1000, offsetInicial || 1000);
+    for (let tentativa = 0; tentativa < 30 && hiVazio === null && dentroDoOrcamento(); tentativa++) {
+      const candidato = loCheio + passo;
+      const item = await st.rawMessages({ ...baseParams, offset: candidato, limit: 1 }).catch(() => []);
+      if (item.length > 0) { loCheio = candidato; passo *= 2; } else { hiVazio = candidato; }
+    }
+    if (hiVazio === null) descobertaParcial = true; // saiu do galope por orçamento/tentativas, nunca achou o vazio
+  } else {
+    loCheio = 0;
+    hiVazio = offsetInicial > 0 ? offsetInicial : 1;
+  }
+
+  if (hiVazio !== null) {
+    let lo = loCheio;
+    let hi = hiVazio;
+    while (lo < hi && dentroDoOrcamento()) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const item = await st.rawMessages({ ...baseParams, offset: mid, limit: 1 }).catch(() => []);
+      if (item.length > 0) lo = mid; else hi = mid - 1;
+    }
+    if (lo < hi) descobertaParcial = true; // saiu por orçamento, não por convergência da busca
+    limiteRealDescoberto = lo; // melhor fronteira encontrada até o orçamento acabar
+    offsetInicial = Math.max(0, lo - N + 1);
+  }
+
+  // Em lotes paralelos, não um offset de cada vez: com N até 50 + a busca binária de descoberta
+  // acima, uma chamada por vez virou ~50 round-trips sequenciais pra SlickText — bateu no timeout
+  // do nginx (502) em produção. Cada offset é independente (não depende do anterior), então lotes
+  // de 10 em paralelo cortam o tempo de parede em ~10x sem mudar o que é medido.
+  //
+  // Orçamento total (descoberta + amostragem), não só da descoberta: se ofsets grandes forem
+  // individualmente lentos (ver comentário acima), a amostragem perto da ponta viva sofre do
+  // mesmo jeito. Pára de pedir lotes novos quando o tempo acabar, devolvendo o que já tem em vez
+  // de arriscar outro 502/504.
+  const ORCAMENTO_TOTAL_MS = 25000;
+  const dentroDoOrcamentoTotal = () => Date.now() - inicioDaSonda < ORCAMENTO_TOTAL_MS;
+  const LOTE = 10;
+  const itens: Array<{ offset: number; created: string | null; id: any }> = [];
+  let amostragemParcial = false;
+  buscaDeItens:
+  for (let base = 0; base < N; base += LOTE) {
+    if (!dentroDoOrcamentoTotal()) { amostragemParcial = true; break; }
+    const tamanhoDoLote = Math.min(LOTE, N - base);
+    const respostas = await Promise.all(
+      Array.from({ length: tamanhoDoLote }, (_, k) =>
+        st.rawMessages({ ...baseParams, offset: offsetInicial + base + k, limit: 1 }).catch(() => [])
+      )
+    );
+    for (let k = 0; k < respostas.length; k++) {
+      const linha = respostas[k];
+      if (linha.length === 0) break buscaDeItens;
+      itens.push({ offset: offsetInicial + base + k, created: linha[0]?.created ?? null, id: linha[0]?._id ?? linha[0]?.id ?? null });
+    }
+  }
+
+  const violacoesDeOrdem: Array<{ offset_anterior: number; created_anterior: string; offset: number; created: string }> = [];
+  for (let i = 1; i < itens.length; i++) {
+    const anterior = itens[i - 1].created;
+    const atual = itens[i].created;
+    if (anterior && atual && atual < anterior) {
+      violacoesDeOrdem.push({ offset_anterior: itens[i - 1].offset, created_anterior: anterior, offset: itens[i].offset, created: atual });
+    }
+  }
+
+  // Estabilidade: repete o primeiro e o offset do meio (por VALOR de offset, não por posição no
+  // array) depois de uma pausa — se a automação deste workflow dispara com frequência, é aqui
+  // que aparece. Pulado se o orçamento já estiver apertado, pra não estourar timeout por causa só
+  // da checagem extra.
+  const instabilidades: Array<{ offset: number; item_antes: any; item_depois: any; created_antes: string | null; created_depois: string | null }> = [];
+  let estabilidadeTestada = false;
+  if (itens.length > 0 && dentroDoOrcamentoTotal()) {
+    estabilidadeTestada = true;
+    const offsetsParaRepetir = [...new Set([itens[0]?.offset, itens[Math.floor(itens.length / 2)]?.offset])]
+      .filter((o): o is number => o != null);
+    await new Promise(r => setTimeout(r, 3000));
+    for (const offset of offsetsParaRepetir) {
+      const antes = itens.find(x => x.offset === offset)!;
+      const repetida = await st.rawMessages({ ...baseParams, offset, limit: 1 }).catch(() => []);
+      const depoisId = repetida[0]?._id ?? repetida[0]?.id ?? null;
+      if (antes.id != null && depoisId != null && antes.id !== depoisId) {
+        instabilidades.push({ offset, item_antes: antes.id, item_depois: depoisId, created_antes: antes.created, created_depois: repetida[0]?.created ?? null });
+      }
+    }
+  }
+
+  res.json({
+    workflow_id: workflowId,
+    node_id: nodeId ?? null,
+    offset_inicial_pedido: Math.max(0, parseInt(String(req.query.offset_inicial ?? '0'), 10) || 0),
+    offset_inicial_usado: offsetInicial,
+    ultimo_offset_real_descoberto: limiteRealDescoberto,
+    descoberta_parcial_por_orcamento: descobertaParcial,
+    amostragem_parcial_por_orcamento: amostragemParcial,
+    estabilidade_testada: estabilidadeTestada,
+    tempo_total_ms: Date.now() - inicioDaSonda,
+    nota_descoberta: limiteRealDescoberto != null
+      ? `Ponta viva descoberta por galope+busca binária: o último offset com item de verdade é ${limiteRealDescoberto}${descobertaParcial ? ' (aproximado — o orçamento de tempo acabou antes de convergir de vez, ver descoberta_parcial_por_orcamento)' : ''}. A lista cresce com o tempo (a automação continua disparando), então o offset pedido pode virar "meio da lista" entre uma medição e outra — reamostrado a partir dali pra testar a ponta de verdade de agora.`
+      : 'Galope não achou o fim da lista no orçamento de tempo — lista gigante, ou /messages fica mais lenta em offsets grandes (achado real: já causou 502/504 aqui). Testado com o offset pedido mesmo, sem ponta descoberta.',
+    offsets_testados: itens.length,
+    itens,
+    violacoes_de_ordem: violacoesDeOrdem,
+    instabilidades_sob_3s: instabilidades,
+    veredito: violacoesDeOrdem.length > 0
+      ? `ORDEM QUEBRADA — ${violacoesDeOrdem.length} inversão(ões) encontradas. countWorkflowNodeMessages() pode devolver contagem/crédito errados pra este workflow/node.`
+      : instabilidades.length > 0
+        ? 'ORDEM ok, mas a lista MUDOU sob o pé em 3s — automação ativa disparando durante a sonda. Uma busca binária em andamento (que leva vários segundos) corre risco real de fronteira inconsistente aqui.'
+        : itens.length === 0
+          ? 'Nenhum item testado — orçamento de tempo acabou antes da amostragem (ver amostragem_parcial_por_orcamento) ou este workflow/node não tem volume no offset alcançado.'
+          : itens.length < N
+            ? `Só ${itens.length} item(ns) a partir do offset_inicial=${offsetInicial} (acabou a lista, ou orçamento de tempo esgotado — ver amostragem_parcial_por_orcamento).`
+            : !estabilidadeTestada
+              ? 'Ordem crescente confirmada nesta amostra, mas a checagem de estabilidade foi pulada (orçamento de tempo apertado) — sem conclusão sobre escrita concorrente.'
+              : offsetInicial === 0
+                ? 'Ordem crescente confirmada e lista estável em 3s nesta amostra — mas offset_inicial=0 é a ponta MAIS ANTIGA, sem risco de escrita concorrente. Repita com ?offset_inicial=<perto do total vitalício> pra testar a ponta viva.'
+                : 'Ordem crescente confirmada e lista estável em 3s — sem evidência do problema nesta amostra, incluindo perto da ponta viva.',
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/espelho-automacao?utm_campaign=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+//   (ou &workflow_id=X&node_id=Y no lugar de utm_campaign, pra testar um node ainda sem vínculo)
+//
+// Compara o espelho local (automacao_envios/automacao_sync_estado) contra o caminho ao vivo
+// (countWorkflowNodeMessages) pro MESMO período — é o teste de aceitação do espelho: sem esta
+// rota não tem como provar que ele bate com a API antes de servir número pra usuário de verdade.
+// Também compara contra o vitalício (getWorkflowNodeAnalytics) como terceira régua independente.
+adminRouter.get('/clientes/:id/diagnostico/espelho-automacao', asyncHandler(async (req: Request, res: Response) => {
+  const clientIdNum = parseInt(req.params.id as string, 10);
+  const from = String(req.query.from ?? '');
+  const to = String(req.query.to ?? '');
+  if (!Number.isFinite(clientIdNum)) {
+    res.status(400).json({ error: 'ID de cliente inválido' });
+    return;
+  }
+  if (!DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from/to obrigatórios, formato YYYY-MM-DD' });
+    return;
+  }
+  const clientId = String(clientIdNum);
+
+  let workflowId: number | null = null;
+  let nodeId: number | null = null;
+  let stAccountId: number | null = null;
+
+  const utmCampaign = req.query.utm_campaign as string | undefined;
+  if (utmCampaign) {
+    const mapping = await queryOne<{ slicktext_campaign_id: number | null; workflow_node_id: number | null; st_account_id: number | null }>(
+      `SELECT slicktext_campaign_id, workflow_node_id, st_account_id FROM sms_campaign_map
+       WHERE client_id = $1 AND utm_campaign = $2 AND source_type = 'Workflow'`,
+      [clientId, utmCampaign]
+    );
+    if (!mapping || mapping.slicktext_campaign_id == null || mapping.workflow_node_id == null) {
+      res.status(404).json({ error: `Sem vínculo Workflow+node pra utm_campaign="${utmCampaign}"` });
+      return;
+    }
+    workflowId = mapping.slicktext_campaign_id;
+    nodeId = mapping.workflow_node_id;
+    stAccountId = mapping.st_account_id;
+  } else {
+    workflowId = parseInt(String(req.query.workflow_id ?? ''), 10) || null;
+    nodeId = parseInt(String(req.query.node_id ?? ''), 10) || null;
+    // "|| null" trata NaN (st_account_id não-numérico na query string) e 0 igual — mesmo
+    // sentinel de "conta principal" usado em todo COALESCE(st_account_id, 0) deste arquivo.
+    stAccountId = req.query.st_account_id != null && req.query.st_account_id !== ''
+      ? (parseInt(String(req.query.st_account_id), 10) || null) : null;
+    if (!workflowId || !nodeId) {
+      res.status(400).json({ error: 'utm_campaign, ou workflow_id+node_id (opcionalmente st_account_id), são obrigatórios' });
+      return;
+    }
+  }
+
+  const chave = { clientId: clientIdNum, stAccountId, workflowId, nodeId };
+
+  const [espelho, estadoRow, credenciais] = await Promise.all([
+    enviosDoEspelho(chave, from, to),
+    queryOne<{
+      situacao: string; motivo_degradado: string | null; offset_semente: number | null;
+      proximo_offset: number; ancora_offset: number | null; cobre_desde: string | null;
+      vitalicio_na_semente: number | null; linhas_totais: number; ultima_sync_em: string | null;
+      requisicoes_ultimo_tick: number | null; ms_ultimo_tick: number | null; deriva_ultimo_tick: number | null;
+    }>(
+      `SELECT situacao, motivo_degradado, offset_semente, proximo_offset, ancora_offset,
+              cobre_desde::text, vitalicio_na_semente, linhas_totais, ultima_sync_em::text,
+              requisicoes_ultimo_tick, ms_ultimo_tick, deriva_ultimo_tick
+       FROM automacao_sync_estado
+       WHERE client_id = $1 AND COALESCE(st_account_id, 0) = COALESCE($2::int, 0)
+         AND workflow_id = $3 AND node_id = $4`,
+      [clientId, stAccountId, workflowId, nodeId]
+    ).catch(() => null),
+    getSlickTextAccountById(clientId, stAccountId),
+  ]);
+
+  let aoVivo: { count: number | null; credits: number | null; pages: number | null; ms: number; erro: string | null };
+  let vitalicioAgora: number | null = null;
+  if (!credenciais) {
+    aoVivo = { count: null, credits: null, pages: null, ms: 0, erro: 'Credenciais da conta SlickText não encontradas' };
+  } else {
+    const st = new SlickTextClient(credenciais.st_api_token, credenciais.st_brand_id);
+    const inicioAoVivo = Date.now();
+    try {
+      const contado = await st.countWorkflowNodeMessages(workflowId, nodeId, from, to);
+      aoVivo = { count: contado.count, credits: contado.credits, pages: contado.pages, ms: Date.now() - inicioAoVivo, erro: null };
+    } catch (err: any) {
+      // Timeout aqui É DADO, não é bug — é a prova exata do problema que o espelho resolve.
+      aoVivo = { count: null, credits: null, pages: null, ms: Date.now() - inicioAoVivo, erro: err.message };
+    }
+    vitalicioAgora = await st.getWorkflowNodeAnalytics(workflowId, nodeId, '2000-01-01', '2100-01-01')
+      .then((d: any) => (typeof d?.totals?.messages === 'number' ? d.totals.messages : null))
+      .catch(() => null);
+  }
+
+  const divergencia = espelho.ok && aoVivo.count != null
+    ? { envios: espelho.envios - aoVivo.count, creditos: aoVivo.credits != null ? espelho.creditos - aoVivo.credits : null }
+    : null;
+
+  const esperadoDesdeASemente = vitalicioAgora != null && estadoRow?.vitalicio_na_semente != null
+    ? vitalicioAgora - estadoRow.vitalicio_na_semente : null;
+
+  res.json({
+    chave: { client_id: chave.clientId, st_account_id: chave.stAccountId, workflow_id: workflowId, node_id: nodeId },
+    periodo: { from, to },
+    estado: estadoRow,
+    espelho,
+    ao_vivo: aoVivo,
+    divergencia,
+    regua_vitalicia: {
+      vitalicio_na_semente: estadoRow?.vitalicio_na_semente ?? null,
+      vitalicio_agora: vitalicioAgora,
+      esperado_desde_a_semente: esperadoDesdeASemente,
+      linhas_no_espelho: estadoRow?.linhas_totais ?? null,
+      diferenca: esperadoDesdeASemente != null && estadoRow?.linhas_totais != null
+        ? esperadoDesdeASemente - estadoRow.linhas_totais : null,
+    },
+    veredito: !estadoRow
+      ? 'Node ainda não apareceu na enumeração do job (rode de novo em alguns minutos).'
+      : divergencia && divergencia.envios === 0 && (divergencia.creditos === null || divergencia.creditos === 0)
+        ? 'ESPELHO BATE COM O AO VIVO — envios e créditos idênticos no período.'
+        : divergencia
+          ? `DIVERGÊNCIA — envios ${divergencia.envios > 0 ? '+' : ''}${divergencia.envios}, créditos ${divergencia.creditos ?? 'n/d'}.`
+          : espelho.ok
+            ? 'Espelho respondeu; ao vivo não respondeu neste período (timeout ou erro — ver ao_vivo.erro). Sem contra-prova possível, mas é exatamente o cenário que motivou o espelho.'
+            : `Espelho não respondeu (${espelho.motivo}: ${espelho.detalhe}) — caindo pro ao vivo, como a rota real faria.`,
+  });
+}));
+
+// GET /admin/clientes/:id/afiliado-cards?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// Os 5 cards de comissão de afiliado (skill99) pra ESTE cliente — quanto a MailX ganhou na
+// operação dele. Fonte: afiliado_eventos (postback S2S da Digistore24, ver
+// digistore24-afiliado.handler.ts), cruzado com clients.digistore24_merchant_id. Cliente sem
+// merchant_id mapeado ainda devolve ok:false/motivo:'sem-vinculo' — a tela mostra "sem vínculo
+// configurado", nunca um card zerado com cara de zero de verdade.
+adminRouter.get('/clientes/:id/afiliado-cards', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string, 10);
+  const from = String(req.query.from ?? '');
+  const to = String(req.query.to ?? '');
+  if (!Number.isFinite(clientId)) {
+    res.status(400).json({ error: 'ID de cliente inválido' });
+    return;
+  }
+  if (!DATE_YMD_RE.test(from) || !DATE_YMD_RE.test(to)) {
+    res.status(400).json({ error: 'from/to obrigatórios, formato YYYY-MM-DD' });
+    return;
+  }
+  const resultado = await cardsDeAfiliadoDoCliente(clientId, from, to);
+  res.json(resultado);
+}));
+
 // GET /admin/clientes/:id/diagnostico/probe-envios - O total de /analytics/messages é MENSAGEM ou
 // CRÉDITO?
 //
@@ -3493,6 +4575,181 @@ adminRouter.get('/clientes/:id/diagnostico/probe-envios', asyncHandler(async (re
       cuidado: 'Ao conferir contra o painel, confirme de qual brand a tela é. As duas contas do cliente têm volumes parecidos e comparar marcas trocadas produz uma divergência de 2,9x que não existe.',
     },
     contas: saida,
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/probe-data-de-entrada?list_id=XXXXX - A SlickText devolve,
+// por CONTATO, a data em que ele entrou NAQUELA LISTA?
+//
+// Por que importa: hoje "leads do período" é a diferença entre dois retratos diários da lista —
+// funciona, mas tem margem de ±1 dia (o retrato pode não bater exatamente com a virada do dia) e
+// só existe série a partir do dia em que o retrato começou a ser gravado. Se a API devolver, por
+// contato, uma data de ENTRADA NA LISTA (não confundir com data de criação do contato em geral,
+// que pode ser bem anterior — a pessoa pode ter entrado em outra lista meses atrás e só ter
+// entrado NESTA agora), dá pra contar leads exatos de qualquer período, incluindo período de
+// ANTES do primeiro retrato.
+//
+// Não SUBSTITUI o retrato — o retrato continua sendo a fonte para clientes sem esse campo, ou
+// enquanto o probe não confirmar. É só o que decide se vale migrar.
+//
+// Sonda em duas camadas: primeiro pega uma amostra pequena e mostra TODOS os campos que vieram
+// (pra decidir olhando os nomes reais, não adivinhando); depois, se algum campo parecer data de
+// lista, cruza contra o próprio retrato: um contato com data de entrada dentro da janela dos
+// últimos dois retratos tem que estar entre os que a diferença de retrato também contou. Se as
+// contagens não baterem, o campo existe mas significa outra coisa, e o probe diz isso em vez de
+// assumir que serve.
+adminRouter.get('/clientes/:id/diagnostico/probe-data-de-entrada', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const listIdParam = req.query.list_id ? parseInt(String(req.query.list_id)) : null;
+  const contas = await getSlickTextAccounts(clientId);
+
+  if (contas.length === 0) {
+    res.json({ erro: 'Cliente sem conta SlickText configurada.' });
+    return;
+  }
+
+  // Sem list_id, usa a primeira lista de compra vinculada — sonda tem que ter algo concreto pra
+  // olhar, e lista de compra é a que mais importa pro caso de uso (leads exatos de comprador).
+  let listId = listIdParam;
+  let listaEscolhidaAutomaticamente = false;
+  if (!listId) {
+    const kit = await queryOne<{ st_list_compra_id: string | null }>(
+      `SELECT st_list_compra_id FROM kits WHERE client_id = $1 AND enabled = true AND st_list_compra_id IS NOT NULL LIMIT 1`,
+      [clientId]
+    );
+    if (kit?.st_list_compra_id) { listId = parseInt(kit.st_list_compra_id); listaEscolhidaAutomaticamente = true; }
+  }
+
+  if (!listId) {
+    res.json({ erro: 'Nenhuma lista de compra vinculada e nenhum ?list_id= informado.' });
+    return;
+  }
+
+  const amostras: any[] = [];
+  const errosPorConta: Array<{ conta: string; erro: string }> = [];
+
+  for (const acc of contas) {
+    const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+    try {
+      const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+      const registros = await st.rawListContacts(listId, { offset: 0, limit: 5 });
+      if (registros.length === 0) continue; // lista não existe nesta conta — esperado, não é erro
+      amostras.push({ conta: rotulo, brand_id: acc.st_brand_id, registros });
+    } catch (err: any) {
+      errosPorConta.push({ conta: rotulo, erro: err.message });
+    }
+  }
+
+  // Candidatos a "data de entrada NESTA lista": qualquer campo cujo nome sugira isso. Nome
+  // literal, sem adivinhar semântica — quem lê decide olhando o valor.
+  const padraoCampoData = /list.*(date|added|joined|created)|date.*(list|added|joined)|added_at|joined_at|list_created|added_to_list/i;
+  const camposEncontrados = new Set<string>();
+  for (const a of amostras) {
+    for (const r of a.registros) {
+      for (const campo of Object.keys(r ?? {})) {
+        if (padraoCampoData.test(campo)) camposEncontrados.add(campo);
+      }
+    }
+  }
+
+  // ── Teste cruzado: `created` é do CONTATO ou da ENTRADA NESTA LISTA? ──
+  //
+  // Amostra sozinha não decide isso: numa conta NOVA, alimentada por API direto na lista de
+  // compra, todo contato nasce já naquela lista — `created` bate com "entrou na lista" só porque
+  // não existe passado nenhum antes disso, não porque o campo signifique isso.
+  //
+  // O teste real: achar a MESMA PESSOA em duas listas do MESMO produto (abandonou o carrinho,
+  // comprou depois) e comparar o `created` lido via cada lista. Se vier IGUAL nas duas, o campo é
+  // do CONTATO (não muda por lista) e não serve pra medir entrada — o retrato continua sendo a
+  // única fonte. Se vier DIFERENTE, `created` muda por lista e é candidato real.
+  let testeCruzado: any = { executado: false, motivo: 'nenhum kit com abandono e compra vinculados foi encontrado' };
+  // TODOS os pares abandono/compra, não só o primeiro kit: um produto pode ter migrado (como o
+  // NeuroMind) e ter as duas listas em CONTAS DIFERENTES — nesse caso não existe conta onde as
+  // duas respondam juntas, e o teste não é possível com aquele produto. Sem tentar outros pares,
+  // o resultado ficava indistinguível de "nenhum produto tem as duas listas vinculadas", que é
+  // outra situação (e falsa aqui: 21 dos 24 kits têm as duas colunas preenchidas).
+  const paresParaCruzar = await query<{ nome: string; abandono: string; compra: string }>(
+    `SELECT DISTINCT name AS nome, st_list_abandono_id AS abandono, st_list_compra_id AS compra
+     FROM kits
+     WHERE client_id = $1 AND enabled = true
+       AND st_list_abandono_id IS NOT NULL AND st_list_compra_id IS NOT NULL`,
+    [clientId]
+  );
+
+  const paresTentados: Array<{ produto: string; motivo: string }> = [];
+  buscaDoTesteCruzado:
+  for (const par of paresParaCruzar) {
+    for (const acc of contas) {
+      const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+      try {
+        const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+        const [doAbandono, doCompra] = await Promise.all([
+          st.rawListContacts(parseInt(par.abandono), { offset: 0, limit: 200 }),
+          st.rawListContacts(parseInt(par.compra), { offset: 0, limit: 200 }),
+        ]);
+        // As duas listas do produto têm que existir NESTA conta — se uma vier vazia, as listas
+        // do kit vivem em contas diferentes (caso do NeuroMind: abandono na principal, compra na
+        // 32935) e a comparação não é válida aqui. Tenta a próxima conta, depois o próximo par.
+        if (doAbandono.length === 0 || doCompra.length === 0) continue;
+
+        const porId = new Map(doAbandono.map((c: any) => [c.contact_id, c]));
+        const comum = doCompra.filter((c: any) => porId.has(c.contact_id));
+        if (comum.length === 0) {
+          paresTentados.push({ produto: par.nome, motivo: `sem contato em comum na amostra (200 de cada) na conta ${rotulo}` });
+          continue;
+        }
+
+        const comparacoes = comum.slice(0, 5).map((c: any) => {
+          const doLadoAbandono = porId.get(c.contact_id);
+          return {
+            contact_id: c.contact_id,
+            created_via_lista_abandono: doLadoAbandono.created,
+            created_via_lista_compra: c.created,
+            iguais: doLadoAbandono.created === c.created,
+          };
+        });
+        const todasIguais = comparacoes.every((c: any) => c.iguais);
+        testeCruzado = {
+          executado: true,
+          conta: rotulo,
+          produto: par.nome,
+          contatos_em_comum_na_amostra: comum.length,
+          comparacoes,
+          veredito: todasIguais
+            ? '`created` veio IGUAL nas duas listas pra mesma pessoa — é a data de criação do CONTATO, não de entrada NESTA lista. NÃO usar para leads-por-período; o retrato diário continua sendo a única fonte confiável.'
+            : '`created` MUDOU entre as duas listas pra mesma pessoa — candidato real a data de entrada por lista. Vale aprofundar: comparar contra webhook_logs.created_at antes de migrar o cálculo.',
+        };
+        break buscaDoTesteCruzado;
+      } catch {
+        continue; // conta sem essa lista — tenta a próxima
+      }
+    }
+  }
+  if (!testeCruzado.executado && paresParaCruzar.length > 0) {
+    testeCruzado = {
+      executado: false,
+      motivo: paresTentados.length > 0
+        ? `${paresParaCruzar.length} produto(s) com abandono+compra vinculados, mas nenhum teve as duas listas respondendo na MESMA conta com contato em comum. Detalhe: ${JSON.stringify(paresTentados)}`
+        : `${paresParaCruzar.length} produto(s) com abandono+compra vinculados, mas as listas de cada um vivem em contas diferentes (produto migrado, ver /diagnostico/inventario-de-listas) — não há onde comparar.`,
+    };
+  }
+
+  res.json({
+    pergunta: 'A SlickText devolve, por contato, a data em que ele entrou NESTA lista (não a data de criação do contato)?',
+    lista_sondada: { list_id: listId, escolhida_automaticamente: listaEscolhidaAutomaticamente },
+    cobertura: {
+      contas_lidas: contas.length - errosPorConta.length,
+      contas_com_erro: errosPorConta,
+    },
+    campos_candidatos_a_data_de_entrada: [...camposEncontrados],
+    veredito: camposEncontrados.size === 0
+      ? 'NENHUM campo com nome de data de entrada apareceu na amostra. Ou o endpoint não devolve isso, ou o nome do campo não bate com o padrão procurado — olhe "todos_os_campos_da_amostra" abaixo e leia os nomes um por um antes de concluir que não existe.'
+      : `${camposEncontrados.size} campo(s) candidato(s) encontrado(s): ${[...camposEncontrados].join(', ')}. Ver "teste_cruzado" abaixo — é ele que decide se o campo serve, não a presença sozinha.`,
+    teste_cruzado: testeCruzado,
+    // Todos os campos crus de uma amostra, para ler manualmente quando o padrão de nome não achar
+    // nada — a SlickText pode nomear o campo de um jeito que ninguém adivinha de primeira.
+    todos_os_campos_da_amostra: amostras[0]?.registros?.[0] ? Object.keys(amostras[0].registros[0]) : null,
+    amostras_completas: amostras,
   });
 }));
 
@@ -3822,10 +5079,11 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
 
   const kits = await query<{
     id: number; name: string; enabled: boolean; external_id: string | null;
-    st_list_compra_id: string | null; st_list_abandono_id: string | null;
+    st_list_compra_id: string | null; st_list_compra_id_2: string | null;
+    st_list_abandono_id: string | null; st_list_abandono_id_2: string | null;
     ac_tag_compra_id: string | null; ac_tag_abandono_id: string | null;
-  }>(`SELECT id, name, enabled, external_id, st_list_compra_id, st_list_abandono_id,
-             ac_tag_compra_id, ac_tag_abandono_id
+  }>(`SELECT id, name, enabled, external_id, st_list_compra_id, st_list_compra_id_2,
+             st_list_abandono_id, st_list_abandono_id_2, ac_tag_compra_id, ac_tag_abandono_id
       FROM kits WHERE client_id = $1 ORDER BY enabled DESC, name`, [clientId]);
 
   // Nomes reais das listas da conta e das tags do AC — pra distinguir "não existe" de
@@ -3897,7 +5155,9 @@ adminRouter.get('/clientes/:id/diagnostico/vinculos', asyncHandler(async (req: R
     ativado: k.enabled,
     origem: k.external_id ? 'descoberto automaticamente' : 'cadastrado à mão',
     st_lista_compra: !!k.st_list_compra_id,
+    st_lista_compra_2: !!k.st_list_compra_id_2,
     st_lista_abandono: !!k.st_list_abandono_id,
+    st_lista_abandono_2: !!k.st_list_abandono_id_2,
     ac_tag_compra: !!k.ac_tag_compra_id,
     ac_tag_abandono: !!k.ac_tag_abandono_id,
     // Listas da conta cujo nome de produto aparece no nome do kit, ignorando espaço/hífen/caixa —
@@ -3977,7 +5237,7 @@ adminRouter.get('/clientes/:id/sms-campaigns', asyncHandler(async (req: Request,
 async function resolveSlickTextDateRange(req: Request): Promise<{ start: string; end: string }> {
   const period = resolvePeriodFilter(req);
   if (period.isToday) {
-    const todayRow = await queryOne<{ today: string }>(`SELECT CURRENT_DATE::text as today`);
+    const todayRow = await queryOne<{ today: string }>(`SELECT ${HOJE_LOCAL}::text as today`);
     const today = todayRow?.today || new Date().toISOString().slice(0, 10);
     return { start: `${today} 00:00:00`, end: `${today} 23:59:59` };
   }
@@ -4441,12 +5701,31 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
   try {
     const stClients = accounts.map(acc => new SlickTextClient(acc.st_api_token, acc.st_brand_id));
 
-    // Fetch all data em paralelo, pra cada conta, e soma
-    const perAccount = await Promise.all(stClients.map(async (st) => ({
-      contactAnalytics: await st.getContactAnalytics().catch(() => null),
-      brandUsage: await st.getBrandUsage().catch(() => null),
-      lists: await st.getLists().catch(() => []),
-    })));
+    // Fetch all data em paralelo, pra cada conta, e soma. allSettled em vez de .catch(() => null)
+    // por chamada: precisamos saber se a conta respondeu vazio (dado real) ou se a chamada FALHOU
+    // (timeout, 500, token vencido) — as duas viravam a mesma coisa antes, e o card de
+    // Créditos/Listas mostrava "0" como se fosse saldo real quando, na verdade, ninguém conseguiu
+    // perguntar pra SlickText. Só quando TODAS as contas falham de verdade é que marcamos
+    // indisponível; se ALGUMA respondeu, a soma das que responderam já é o comportamento de antes.
+    const perAccount = await Promise.all(stClients.map(async (st) => {
+      const [analyticsR, usageR, listsR] = await Promise.allSettled([
+        st.getContactAnalytics(),
+        st.getBrandUsage(),
+        st.getLists(),
+      ]);
+      return {
+        contactAnalytics: analyticsR.status === 'fulfilled' ? analyticsR.value : null,
+        contactAnalyticsOk: analyticsR.status === 'fulfilled',
+        brandUsage: usageR.status === 'fulfilled' ? usageR.value : null,
+        brandUsageOk: usageR.status === 'fulfilled',
+        lists: listsR.status === 'fulfilled' ? listsR.value : [],
+        listsOk: listsR.status === 'fulfilled',
+      };
+    }));
+
+    const contactAnalyticsIndisponivel = perAccount.every(a => !a.contactAnalyticsOk);
+    const brandUsageIndisponivel = perAccount.every(a => !a.brandUsageOk);
+    const listsIndisponivel = perAccount.every(a => !a.listsOk);
 
     const contactAnalyticsTotal = perAccount.reduce((sum, a) => sum + (a.contactAnalytics?.totals?.total ?? a.contactAnalytics?.total ?? 0), 0);
     const contactAnalytics = perAccount.some(a => a.contactAnalytics) ? { totals: { total: contactAnalyticsTotal } } : null;
@@ -4459,15 +5738,29 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const messageAnalytics = null; // não usado no frontend hoje — ver getMessageAnalytics
     const creditAnalytics = null; // getCreditAnalytics sempre retorna null (endpoint 404 confirmado)
 
+    // Histórico de retrato — mesma tabela que já alimenta "leads do período" no card de Conversão
+    // por Segmento, reaproveitada aqui pra dizer desde quando o painel vem medindo o tamanho das
+    // listas de contato (pedido ao revisar esta seção).
+    const retratoContatos = await queryOne<{ primeiro: string | null; dias: string }>(
+      `SELECT MIN(snapshot_date)::text AS primeiro, COUNT(DISTINCT snapshot_date) AS dias
+       FROM list_contact_snapshots WHERE client_id = $1`,
+      [clientId]
+    ).catch(() => null);
+    const contatosRetratoHistorico = retratoContatos?.primeiro
+      ? { primeiro_retrato: retratoContatos.primeiro.slice(0, 10), dias_com_retrato: parseInt(retratoContatos.dias) }
+      : null;
+
     // Contagem de contatos por lista de produto. Só produtos ATIVADOS: os descobertos
     // automaticamente entram desativados e só ganham lista no bootstrap da ativação, então
     // incluí-los só produzia ruído de "produto sem lista".
     const kits = await query<{
       name: string;
       st_list_compra_id: string | null;
+      st_list_compra_id_2: string | null;
       st_list_abandono_id: string | null;
+      st_list_abandono_id_2: string | null;
     }>(
-      `SELECT name, st_list_compra_id, st_list_abandono_id
+      `SELECT name, st_list_compra_id, st_list_compra_id_2, st_list_abandono_id, st_list_abandono_id_2
        FROM kits WHERE client_id = $1 AND enabled = true`,
       [clientId]
     );
@@ -4475,46 +5768,109 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     // Vários SKUs do mesmo produto COMPARTILHAM a mesma lista (confirmado: as três variações de
     // Glyco Pulse apontam para o mesmo par de listas). Buscar por kit contava a mesma lista uma
     // vez por SKU — era o que inflava o card de contatos para várias vezes o tamanho da conta.
-    // Aqui cada lista é buscada UMA vez, e o total soma listas distintas.
+    // Aqui cada lista é buscada UMA vez, e o total soma listas distintas — incluindo a segunda
+    // lista de produto vendido por mais de um gateway de lead (ver listasDoKit).
     const distinctListIds = new Set<number>();
     for (const kit of kits) {
-      if (kit.st_list_compra_id) distinctListIds.add(parseInt(kit.st_list_compra_id));
-      if (kit.st_list_abandono_id) distinctListIds.add(parseInt(kit.st_list_abandono_id));
+      const l = listasDoKit(kit);
+      l.compra.forEach(id => distinctListIds.add(parseInt(id)));
+      l.abandono.forEach(id => distinctListIds.add(parseInt(id)));
     }
-    // Um list_id só é válido numa das contas; as outras devolvem 0 (getListContactCount engole o erro).
-    const countByList = new Map<number, number>();
+    // Um list_id só é válido numa das contas; as outras devolvem 0 via 404 (esperado). null =
+    // NENHUMA conta respondeu de verdade (falha real, não "não é desta conta") — nesse caso a
+    // lista fica com contagem desconhecida, não zero: 0 aqui pareceria "a lista esvaziou".
+    const countByList = new Map<number, number | null>();
     await Promise.all([...distinctListIds].map(async (listId) => {
-      const perAccount = await Promise.all(stClients.map(st => st.getListContactCount(listId)));
-      countByList.set(listId, perAccount.reduce((a, b) => a + b, 0));
+      const porConta = await Promise.all(stClients.map(st => st.getListContactCount(listId)));
+      const validos = porConta.filter((c): c is number => c !== null);
+      countByList.set(listId, validos.length > 0 ? validos.reduce((a, b) => a + b, 0) : null);
     }));
 
+    // Quem mais usa a MESMA lista — pra tabela poder avisar em vez de deixar a pessoa somar a
+    // coluna e achar inconsistência. Achado ao auditar: com uma lista de 500 contatos usada por 3
+    // produtos, a tabela mostrava "500" em 3 linhas e o total dedupicado acima batia 500 — soma
+    // da coluna dava 1.500, os dois números "certos" no próprio universo, sem nada dizendo por
+    // quê. É a MESMA classe de erro do card de Conversão por Segmento (duas fontes divergindo na
+    // mesma tela sem legenda) — a diferença é que aqui a informação que falta é simples: dizer
+    // que a lista é compartilhada.
+    const produtosPorListaCompra = new Map<number, string[]>();
+    const produtosPorListaAbandono = new Map<number, string[]>();
+    for (const kit of kits) {
+      const l = listasDoKit(kit);
+      l.compra.forEach(id => {
+        const n = parseInt(id);
+        produtosPorListaCompra.set(n, [...(produtosPorListaCompra.get(n) ?? []), kit.name]);
+      });
+      l.abandono.forEach(id => {
+        const n = parseInt(id);
+        produtosPorListaAbandono.set(n, [...(produtosPorListaAbandono.get(n) ?? []), kit.name]);
+      });
+    }
+    const outrosProdutosDaMesmaLista = (ids: string[], mapa: Map<number, string[]>, produtoAtual: string): string[] => {
+      const outros = new Set<string>();
+      for (const id of ids) {
+        for (const nome of mapa.get(parseInt(id)) ?? []) {
+          if (nome !== produtoAtual) outros.add(nome);
+        }
+      }
+      return [...outros];
+    };
+
     const listStats = kits.map((kit) => {
-      const compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
-      const abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+      const l = listasDoKit(kit);
+      // null se QUALQUER lista do produto, desse lado, tiver contagem desconhecida — somar 0 no
+      // lugar do desconhecido daria um total menor que o real, sem avisar. O front-end mostra
+      // "indisponível" em vez de um número (mesmo padrão já usado pra envios sem retrato).
+      const somar = (ids: string[]): number | null => {
+        let total = 0;
+        for (const id of ids) {
+          const v = countByList.get(parseInt(id));
+          if (v == null) return null;
+          total += v;
+        }
+        return total;
+      };
       return {
         product: kit.name,
-        compra_list_id: compraId,
-        compra_contacts: compraId != null ? (countByList.get(compraId) ?? 0) : 0,
-        abandono_list_id: abandonoId,
-        abandono_contacts: abandonoId != null ? (countByList.get(abandonoId) ?? 0) : 0,
+        compra_list_id: kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null,
+        compra_list_id_2: kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null,
+        compra_contacts: somar(l.compra),
+        compra_compartilhada_com: outrosProdutosDaMesmaLista(l.compra, produtosPorListaCompra, kit.name),
+        abandono_list_id: kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null,
+        abandono_list_id_2: kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null,
+        abandono_contacts: somar(l.abandono),
+        abandono_compartilhada_com: outrosProdutosDaMesmaLista(l.abandono, produtosPorListaAbandono, kit.name),
       };
     });
 
-    // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez.
-    const compraListIds = new Set(kits.map(k => k.st_list_compra_id).filter(Boolean).map(v => parseInt(v as string)));
-    const abandonoListIds = new Set(kits.map(k => k.st_list_abandono_id).filter(Boolean).map(v => parseInt(v as string)));
-    const totalCompra = [...compraListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
-    const totalAbandono = [...abandonoListIds].reduce((sum, id) => sum + (countByList.get(id) ?? 0), 0);
+    // Totais por LISTA DISTINTA — nunca somando a mesma lista mais de uma vez. Lista com contagem
+    // desconhecida (falha real na SlickText) fica de fora da soma E acende contatosIncompletos —
+    // sem a flag, o total ficaria menor que o real e pareceria uma queda de contatos.
+    const compraListIds = new Set(kits.flatMap(k => listasDoKit(k).compra).map(v => parseInt(v)));
+    const abandonoListIds = new Set(kits.flatMap(k => listasDoKit(k).abandono).map(v => parseInt(v)));
+    let contatosIncompletos = false;
+    const somarConhecidas = (ids: Set<number>): number => [...ids].reduce((sum, id) => {
+      const v = countByList.get(id);
+      if (v == null) { contatosIncompletos = true; return sum; }
+      return sum + v;
+    }, 0);
+    const totalCompra = somarConhecidas(compraListIds);
+    const totalAbandono = somarConhecidas(abandonoListIds);
 
     // ── SMS-attributed sales KPIs (UTM contains 'mailxsms') — respeita o período de análise ──
     const period = resolvePeriodFilter(req);
     const periodActive = period.isToday || !!(period.from && period.to);
     const smsSalesParams: (string | number)[] = [clientId];
     const smsSalesPeriod = periodSql(period, smsSalesParams);
+    // status IN ('processed', 'processing') nas tr\u00EAs consultas abaixo, igual ao clientTotal logo
+    // adiante (e ao padr\u00E3o usado no resto do arquivo) \u2014 de prop\u00F3sito, n\u00E3o por acaso. Sem isso, um
+    // pedido SMS com status='failed' (cen\u00E1rio real do pipeline da Digistore) entrava no numerador
+    // da Representatividade SMS mas n\u00E3o no denominador (clientTotal j\u00E1 filtrava), e o card podia
+    // passar de 100% \u2014 um n\u00FAmero que n\u00E3o existe fisicamente, achado ao auditar esta se\u00E7\u00E3o.
     const smsSales = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         ${smsSalesPeriod ? `AND ${smsSalesPeriod}` : ''}
     `, smsSalesParams);
@@ -4523,7 +5879,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const smsRecoveries = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_RECOVERY}
         ${smsRecPeriod ? `AND ${smsRecPeriod}` : ''}
@@ -4533,7 +5889,7 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
     const smsUpsell = await queryOne<{ count: string; revenue: string }>(`
       SELECT COUNT(*) as count, ${SQL_REVENUE} as revenue
       FROM webhook_logs
-      WHERE event_type = 'order.paid' AND client_id = $1
+      WHERE event_type = 'order.paid' AND status IN ('processed', 'processing') AND client_id = $1
         AND ${SQL_MAILX_SMS}
         AND ${SQL_IS_UPSELL}
         ${smsUpsellPeriod ? `AND ${smsUpsellPeriod}` : ''}
@@ -4571,6 +5927,14 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
       },
       revenue: {
         faturamento_sms: fmtBRL(smsRevenue),
+        // Valor bruto (número, não string formatada) — o resumo do negócio no front precisa dividir
+        // por isso pra calcular "% da receita do SMS" da mensagem campeã. Sem ele, a única soma
+        // numérica disponível no cliente era a da tabela granular (/sms-granular), que exige
+        // utm_medium/utm_source EXATOS ('auto-sms'/'mailx-sms') — mais estreito que o SQL_IS_SMS
+        // usado aqui, que também aceita formato não padrão (ex.: Horse Peak manda utm_medium=WFI001).
+        // Resultado visto em produção: tabela granular somando $6.619 contra $7.936 do faturamento
+        // real, e a mensagem campeã aparecendo com 58% de receita quando o certo era 48%.
+        receita_sms: smsRevenue,
         vendas_sms: smsVendas,
         ticket_medio_sms: fmtBRL(smsTicketMedio),
         recuperacoes_sms: parseInt(smsRecoveries?.count || '0'),
@@ -4589,16 +5953,26 @@ adminRouter.get('/clientes/:id/sms-stats', asyncHandler(async (req: Request, res
         total: totalCompra + totalAbandono,
         compradores: totalCompra,
         carrinhos_abandonados: totalAbandono,
+        // true quando pelo menos uma lista de produto não pôde ser consultada agora — os totais
+        // acima ficam MENORES que o real nesse caso, não errados por conta própria.
+        contatos_incompletos: contatosIncompletos,
         analytics: contactAnalytics,
+        // A SlickText não respondeu o analytics de marca pra NENHUMA conta — o front-end não pode
+        // usar o total de listas de produto como substituto silencioso (é um número menor e com
+        // significado diferente: só produto vinculado, não a marca inteira).
+        analytics_indisponivel: contactAnalyticsIndisponivel,
+        retrato_historico: contatosRetratoHistorico,
       },
       messages: messageAnalytics,
       credits: {
         usage: brandUsage,
         analytics: creditAnalytics,
+        indisponivel: brandUsageIndisponivel,
       },
       lists: {
         total: lists.length,
         per_product: listStats,
+        indisponivel: listsIndisponivel,
       },
     });
   } catch (err: any) {
@@ -4662,3 +6036,656 @@ adminRouter.post('/clientes/:id/repair-webhooks', asyncHandler(async (req: Reque
   res.json({ ok: true, orphans: orphans.length, matched, products_discovered: productsDiscovered });
 }));
 
+
+// GET /admin/clientes/:id/diagnostico/probe-digistore-api?order=XXXXXXXX
+//
+// A PERGUNTA: a API da Digistore devolve o utm_campaign do pedido?
+//
+// Por que importa: em 03/08/2026 21:34 o banco caiu, os webhooks passaram a tomar erro e a
+// Digistore DESATIVOU as duas conexões de IPN sozinha. Ficaram 4 dias sem gravar nada — 1.023
+// pagamentos e 384 reembolsos. O CSV do painel recupera dinheiro, produto e comprador, mas a
+// coluna "Tracking key" vem VAZIA nas 34.696 linhas do arquivo inteiro, então o CSV não recupera
+// atribuição: sem utm_campaign não se sabe de qual mensagem de automação a venda veio.
+//
+// O que a sonda faz: chama VÁRIAS funções candidatas da API com um pedido real e, em cada
+// resposta, lista os nomes de campo que existem e destaca os que casam com utm/tracking/custom.
+// Ela não procura um campo que eu imaginei — ela mostra os que existem. Essa distinção é o
+// aprendizado de uma sonda anterior que reportou "não achado" porque eu chutei o nome do campo
+// (short_url) em vez de listar as chaves; o dado estava lá, com outro nome (_link_ids).
+//
+// Requer DS24_API_KEY no .env do servidor (não vai pro repositório).
+adminRouter.get('/clientes/:id/diagnostico/probe-digistore-api', asyncHandler(async (req: Request, res: Response) => {
+  const order = String(req.query.order ?? '').trim();
+
+  if (!ds24KeyConfigurada()) {
+    res.json({
+      pergunta: 'A API da Digistore devolve o utm_campaign do pedido?',
+      erro: 'DS24_API_KEY não configurada',
+      como_configurar: 'Adicionar DS24_API_KEY=<chave> no /var/www/mailx/.env e rodar pm2 restart mailx-api. A chave NÃO entra no repositório.',
+    });
+    return;
+  }
+
+  if (!order) {
+    res.json({
+      erro: 'Falta o parâmetro ?order=',
+      como_usar: 'Pegar um Order ID do CSV dentro da janela perdida (ex: 3LMXMRTJ) e chamar ?order=3LMXMRTJ',
+    });
+    return;
+  }
+
+  // Catálogo resolvido na primeira rodada (pedido 3LMXMRTJ, 08/08/2026):
+  //   getPurchase?purchase_id=<order>  → FUNCIONA, devolve o pedido com 80+ campos
+  //   getPurchase/<order> na URL       → 400, "1. argument is missing: 'purchase_id'"
+  //   getOrder / listOrders / getPurchaseDetails → "Invalid API function called"
+  //   listPurchases?purchase_id / ?order_id → IGNORAM o filtro e devolvem a lista geral
+  //     paginada (300 registros de outras compras). Responder 200 com o resultado de controle é
+  //     indistinguível de funcionar — mesmo comportamento que a SlickText já apresentou duas
+  //     vezes. Ficam de fora daqui: só poluíam a resposta com centenas de linhas alheias.
+  const candidatas: Array<{ nome: string; fn: string; params?: Record<string, any>; pathArg?: string }> = [
+    { nome: 'getPurchase (purchase_id na query)', fn: 'getPurchase', params: { purchase_id: order } },
+    { nome: 'listTransactions (purchase_id)', fn: 'listTransactions', params: { purchase_id: order } },
+  ];
+
+  const resultados: any[] = [];
+
+  for (const c of candidatas) {
+    const r = await ds24Call(c.fn, c.params, c.pathArg);
+
+    // O corpo útil pode estar em data, em data.data ou na raiz — a sonda olha os três, pra não
+    // afirmar "vazio" quando o dado está um nível abaixo.
+    const alvo = r.data?.data ?? r.data;
+
+    // As duas perguntas, separadas de propósito. A primeira versão desta sonda respondeu só a
+    // primeira e reportou como se fosse a segunda: declarou "SIM, achei atribuição" com
+    // campaignkey, custom e tracking_param todos "". Nome de campo não é dado; só valor é.
+    const camposQueExistem = r.ok ? acharChavesInteressantes(alvo, 4, '', false) : {};
+    const camposComValor = r.ok ? acharChavesInteressantes(alvo, 4, '', true) : {};
+
+    resultados.push({
+      candidata: c.nome,
+      http: r.http,
+      ok: r.ok,
+      erro: r.erro ?? null,
+      chaves_no_topo: alvo && typeof alvo === 'object' ? Object.keys(alvo).slice(0, 100) : null,
+      campos_de_atribuicao_que_existem: Object.keys(camposQueExistem).length ? Object.keys(camposQueExistem) : null,
+      campos_de_atribuicao_COM_VALOR: Object.keys(camposComValor).length ? camposComValor : null,
+    });
+  }
+
+  const comValor = resultados.filter((r) => r.campos_de_atribuicao_COM_VALOR);
+  const responderam = resultados.filter((r) => r.ok);
+
+  res.json({
+    pergunta: 'A API da Digistore devolve o utm_campaign do pedido?',
+    pedido_testado: order,
+    veredito: comValor.length
+      ? `SIM — campo de atribuição veio PREENCHIDO em ${comValor.length} de ${candidatas.length} candidatas. Dá pra reconstruir a janela perdida com utm real, sem inferir nada.`
+      : responderam.length
+        ? `NÃO — ${responderam.length} candidatas responderam e os campos de atribuição existem, mas TODOS vazios. Se este pedido tem utm_campaign gravado no nosso banco, está provado que a Digistore só REPASSA os parâmetros da URL no IPN e não os PERSISTE no pedido: a API não recupera atribuição. Se o pedido não tinha utm, o teste é inconclusivo — repetir com um que tenha.`
+        : 'NENHUMA candidata respondeu — olhe o campo erro de cada linha antes de concluir qualquer coisa.',
+    aviso_de_leitura:
+      'campos_de_atribuicao_que_existem lista NOMES; campos_de_atribuicao_COM_VALOR lista os que têm conteúdo. Só o segundo prova algo.',
+    resultados,
+  });
+}));
+
+// GET /admin/clientes/:id/saude-da-coleta?start=&end=
+//
+// Responde duas perguntas que o painel não sabia responder e que custaram 4 dias em agosto/2026:
+//
+//   1. A coleta está funcionando AGORA? (último webhook, cadência normal, silêncio anormal)
+//   2. O período que estou olhando tem buraco conhecido de coleta?
+//
+// A segunda é a que evita ler falha de coleta como queda de venda. Em 03/08 21:34 a Digistore
+// desativou sozinha as conexões de IPN e ficamos 4 dias sem gravar 1.023 pagamentos. Decidido não
+// importar (o CSV do painel não traz UTM; recuperaria total sem atribuição). Mas o buraco tem que
+// aparecer na tela: total incompleto sem aviso vira conclusão errada sobre o canal.
+adminRouter.get('/clientes/:id/saude-da-coleta', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = parseInt(req.params.id as string, 10);
+  // company_name: a tabela clients não tem coluna `name` (o mesmo engano quebrou o vigia inteiro
+  // na primeira subida, com "column c.name does not exist" a cada verificação).
+  const cliente = await queryOne<{ id: number; nome: string }>(
+    `SELECT id, company_name AS nome FROM clients WHERE id = $1`, [clientId]
+  );
+  if (!cliente) {
+    res.status(404).json({ error: 'Cliente não encontrado' });
+    return;
+  }
+
+  const start = String(req.query.start ?? '').trim();
+  const end = String(req.query.end ?? '').trim();
+
+  const estado = await estadoDoCliente(cliente.id, cliente.nome);
+
+  // Sobreposição de intervalos, com fim nulo significando "ainda aberta". Comparar só o início
+  // deixaria passar a janela que começou antes do período e invadiu metade dele — que é
+  // exatamente o formato desta que aconteceu.
+  const janelas = start && end
+    ? await query<any>(
+        `SELECT id, fonte, inicio::text, fim::text, motivo,
+                vendas_perdidas_estimadas, valor_perdido_estimado
+         FROM janelas_sem_coleta
+         WHERE client_id = $1
+           AND inicio <= ($3::date + INTERVAL '1 day')
+           AND (fim IS NULL OR fim >= $2::date)
+         ORDER BY inicio`,
+        [clientId, start, end]
+      )
+    : await query<any>(
+        `SELECT id, fonte, inicio::text, fim::text, motivo,
+                vendas_perdidas_estimadas, valor_perdido_estimado
+         FROM janelas_sem_coleta WHERE client_id = $1 ORDER BY inicio DESC LIMIT 10`,
+        [clientId]
+      );
+
+  res.json({
+    coleta_agora: {
+      ultimo_webhook: estado.ultimoWebhook,
+      horas_em_silencio: estado.horasEmSilencio != null ? Number(estado.horasEmSilencio.toFixed(1)) : null,
+      limite_horas: estado.limiteHoras,
+      intervalo_normal_minutos: estado.intervaloMedioMinutos != null
+        ? Math.round(estado.intervaloMedioMinutos) : null,
+      em_silencio: estado.emSilencio,
+      // O limite é derivado da cadência do próprio cliente (mediana dos últimos 14 dias × 8,
+      // entre 3h e 30h), não de um número fixo — cliente que vende de 10 em 10 minutos e cliente
+      // que vende 3 vezes por dia não podem ter o mesmo alarme.
+      como_o_limite_e_calculado: estado.intervaloMedioMinutos != null
+        ? `mediana de ${Math.round(estado.intervaloMedioMinutos)} min entre vendas nos últimos 14 dias × 8, limitado a [3h, 30h]`
+        : 'sem histórico suficiente de vendas — usando o teto de 30h',
+    },
+    janelas_sem_coleta: janelas.map((j: any) => ({
+      ...j,
+      valor_perdido_estimado: j.valor_perdido_estimado != null ? parseFloat(j.valor_perdido_estimado) : null,
+      em_aberto: j.fim === null,
+    })),
+    periodo_tem_buraco: janelas.length > 0 && !!start && !!end,
+    notificacao: {
+      canais_configurados: canaisConfigurados(),
+      // Sem canal o vigia continua rodando e registrando em log; só o empurrão pro celular é que
+      // não sai. Dizer isso evita alguém supor que está protegido quando não está.
+      aviso: canaisConfigurados().length === 0
+        ? 'Nenhum canal configurado: o silêncio é detectado e vai pro log, mas ninguém é avisado no celular.'
+        : null,
+    },
+  });
+}));
+
+// GET /admin/clientes/:id/vendas-fora-do-escopo?limit=20
+//
+// QUAIS vendas ficam fora da tabela de Conversão por Segmento, uma a uma.
+//
+// A tabela mostra só a quantidade agregada ("70 vendas de fluxo de comprador e 52 recuperações de
+// carrinho do período não aparecem aqui"). Quantidade agregada não dá pra conferir: o Nicollas
+// pediu 5 ou 6 exemplos reais pra analisar, e ele está certo — número que ninguém consegue abrir
+// vira crença, não medição.
+//
+// Cada linha traz o pedido, a data, o produto, o valor e o utm_campaign que a gerou. Com o
+// utm_campaign em mãos dá pra ir na SlickText e ver qual mensagem é, ou concluir que o link saiu
+// sem marcação.
+adminRouter.get('/clientes/:id/vendas-fora-do-escopo', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const limite = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+
+  const params: (string | number)[] = [clientId];
+  const periodo = periodSql(period, params);
+
+  const linhas = await query<any>(`
+    SELECT
+      payload->>'order_id' AS pedido,
+      created_at::text     AS quando,
+      product_name         AS produto,
+      total_price          AS valor,
+      utm_campaign,
+      utm_medium,
+      (${SQL_IS_RECOVERY}) AS e_recuperacao
+    FROM webhook_logs
+    WHERE event_type = 'order.paid' AND client_id = $1 AND ${SQL_MAILX_SMS}
+      ${periodo ? `AND ${periodo}` : ''}
+      AND NOT EXISTS (
+        SELECT 1 FROM sms_campaign_map m
+        WHERE m.client_id = $1 AND m.utm_campaign = webhook_logs.utm_campaign
+      )
+    ORDER BY created_at DESC
+    LIMIT ${limite}
+  `, params);
+
+  const semUtm = linhas.filter((l: any) => !l.utm_campaign || !String(l.utm_campaign).trim()).length;
+
+  res.json({
+    pergunta: 'Quais vendas ficam fora da tabela de Conversão por Segmento, e por quê?',
+    periodo: period.from && period.to ? { de: period.from, ate: period.to } : 'todo o histórico',
+    total_listado: linhas.length,
+    limite_aplicado: limite,
+    // Limite explícito na resposta: lista cortada sem dizer que foi cortada faz alguém concluir
+    // que o problema é menor do que é.
+    aviso: linhas.length === limite
+      ? `Lista truncada em ${limite}. Use ?limit= para ver mais.`
+      : null,
+    resumo: {
+      sem_utm_campaign: semUtm,
+      com_utm_mas_nao_vinculada: linhas.length - semUtm,
+      o_que_significa: 'Sem utm_campaign, o link não identifica a mensagem e não há como vincular — o conserto é no link, na SlickText. Com utm_campaign mas sem vínculo, é só rodar o Auto-vincular na aba SMS.',
+    },
+    vendas: linhas.map((l: any) => ({
+      pedido: l.pedido,
+      quando: l.quando,
+      produto: l.produto,
+      valor: l.valor != null ? parseFloat(l.valor) : null,
+      utm_campaign: l.utm_campaign,
+      utm_medium: l.utm_medium,
+      fluxo: l.e_recuperacao ? 'carrinho abandonado' : 'comprador (pós-compra/upsell)',
+      motivo: !l.utm_campaign || !String(l.utm_campaign).trim()
+        ? 'venda sem utm_campaign — o link não identifica a mensagem'
+        : 'mensagem não vinculada a nenhuma automação — rode o Auto-vincular',
+    })),
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/invariantes
+//
+// Todas as identidades que o painel deve satisfazer, com os dois lados de cada uma e se fecha.
+//
+// Serve para auditar a tela inteira em segundos, sem depender de alguém estranhar um número por
+// acaso — que foi como os três bugs de sobreposição de 08/08/2026 apareceram, depois de meses no
+// ar. `fecha: null` significa NÃO VERIFICÁVEL (faltou um dos lados, geralmente porque a SlickText
+// não respondeu), e é diferente de `false`: tratar ausência como falha ensinaria a ignorar o
+// alarme.
+adminRouter.get('/clientes/:id/diagnostico/invariantes', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const period = resolvePeriodFilter(req);
+  const params: (string | number)[] = [clientId];
+  const periodo = periodSql(period, params);
+
+  // MESMA função que a aba SMS usa. Antes este endpoint refazia a conta por conta própria e
+  // conferia 1 das 4 identidades — a ferramenta feita para achar inconsistência estava, ela
+  // mesma, incompleta pelo motivo que ela existe para combater.
+  const a = await apurarSms(query, clientId, periodo, params);
+
+  const resultado = conferirInvariantes({
+    segmentoSms: {
+      recuperacoes: a.recuperacoes,
+      compradores: a.compradores,
+      naoClassificado: a.naoClassificado,
+      totalCanal: a.total,
+    },
+    escopoSms: {
+      dentroRec: a.dentroRec,
+      dentroCompra: a.dentroCompra,
+      foraRec: a.foraRec,
+      foraCompra: a.foraCompra,
+      naoClassificado: a.naoClassificado,
+      totalCanal: a.total,
+    },
+  });
+
+  res.json({
+    periodo: period.from && period.to ? { de: period.from, ate: period.to } : 'todo o histórico',
+    tudo_fecha: resultado.tudoFecha,
+    veredito: resultado.tudoFecha
+      ? 'Todas as identidades verificáveis fecham neste período.'
+      : `${resultado.quebradas.length} identidade(s) NÃO fecham — há número errado na tela.`,
+    como_ler: 'fecha=true bate; fecha=false há erro; fecha=null não foi possível verificar (faltou um dos lados) — que é diferente de estar errado.',
+    invariantes: resultado.invariantes,
+  });
+}));
+
+// GET /admin/clientes/:id/diagnostico/inventario-de-listas
+//
+// TODAS as listas da conta, com a contagem atual e o vínculo (se houver), pra achar lista
+// abandonada e lista nova que ninguém vinculou.
+//
+// Por que existe: em 10/08/2026 a lista de compradores do NeuroMind (107460) apareceu com 19.706
+// contatos em OITO retratos consecutivos — zero variação em 11 dias, num produto que vende
+// centenas por semana. A lista de abandono do MESMO produto crescia todo dia (+632 no período),
+// então não era a conta, nem a marca, nem a API.
+//
+// Número perfeitamente imóvel não parece automação quebrada; parece lista ABANDONADA — alguém
+// criou uma nova, os compradores passaram a entrar nela, e a antiga congelou no valor do dia da
+// troca. O auto-vínculo casa por NOME e pegou a velha, então o denominador do segmento de
+// compradores virou zero e a taxa ficou incalculável, sem nada na tela explicando por quê.
+//
+// Este endpoint mostra o inventário inteiro justamente porque o problema NÃO está no que a gente
+// já conhece: está numa lista que o painel nunca olhou.
+adminRouter.get('/clientes/:id/diagnostico/inventario-de-listas', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const contas = await getSlickTextAccounts(clientId);
+
+  // Vínculos atuais, pra marcar cada lista como usada por qual produto e em qual papel — incluindo
+  // a segunda lista, quando o produto é vendido por mais de um gateway de lead (ver listasDoKit).
+  // Sem isso, a segunda lista continuaria aparecendo aqui como "NÃO VINCULADA" mesmo depois de
+  // vinculada, porque este inventário lia só a coluna 1.
+  const vinculos = await query<{ nome: string; compra: string | null; compra_2: string | null; abandono: string | null; abandono_2: string | null }>(
+    `SELECT name AS nome, st_list_compra_id AS compra, st_list_compra_id_2 AS compra_2,
+            st_list_abandono_id AS abandono, st_list_abandono_id_2 AS abandono_2
+     FROM kits WHERE client_id = $1 AND enabled = true`,
+    [clientId]
+  );
+  const usoPorLista = new Map<string, string[]>();
+  for (const v of vinculos) {
+    const l = listasDoKit({ st_list_compra_id: v.compra, st_list_compra_id_2: v.compra_2, st_list_abandono_id: v.abandono, st_list_abandono_id_2: v.abandono_2 });
+    l.compra.forEach(id => usoPorLista.set(id, [...(usoPorLista.get(id) ?? []), `${v.nome} (compra)`]));
+    l.abandono.forEach(id => usoPorLista.set(id, [...(usoPorLista.get(id) ?? []), `${v.nome} (abandono)`]));
+  }
+
+  // Variação medida pelos retratos: é ela que distingue lista viva de lista congelada. Sem isso
+  // o inventário mostraria só tamanhos, e tamanho grande não quer dizer lista em uso.
+  const variacao = await query<{ list_id: string; primeiro: string; ultimo: string; dias: string }>(
+    `SELECT list_id,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date))[1]::text AS primeiro,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date DESC))[1]::text AS ultimo,
+            COUNT(*)::text AS dias
+     FROM list_contact_snapshots WHERE client_id = $1 GROUP BY list_id`,
+    [clientId]
+  );
+  const varPorLista = new Map(variacao.map(v => [v.list_id, v]));
+
+  const saida: any[] = [];
+
+  for (const acc of contas) {
+    const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+    let listas: any[] = [];
+    let erro: string | null = null;
+    try {
+      listas = await st.getLists();
+    } catch (err: any) {
+      erro = err.message;
+    }
+
+    const detalhadas = [];
+    for (const l of listas) {
+      const id = String(l.contact_list_id);
+      // Contagem é chamada por lista; erro em uma não pode zerar as outras nem virar 0 na tela —
+      // 0 e "não sei" são coisas diferentes.
+      let contatos: number | null = null;
+      try {
+        contatos = await st.getListContactCount(l.contact_list_id);
+      } catch { contatos = null; }
+
+      const v = varPorLista.get(id);
+      const cresceu = v ? parseInt(v.ultimo) - parseInt(v.primeiro) : null;
+
+      detalhadas.push({
+        list_id: id,
+        nome: l.name,
+        criada: l.created ?? null,
+        contatos_agora: contatos,
+        vinculada_a: usoPorLista.get(id) ?? null,
+        retratos: v ? { dias: parseInt(v.dias), variacao_no_periodo: cresceu } : null,
+        // O rótulo que responde a pergunta de uma vez.
+        situacao: v == null
+          ? (usoPorLista.has(id) ? 'vinculada, mas sem retrato ainda' : 'NÃO VINCULADA — o painel nunca olhou esta lista')
+          : cresceu === 0
+            ? 'CONGELADA — nenhum contato novo no período coberto pelos retratos'
+            : 'viva',
+      });
+    }
+
+    saida.push({
+      conta: acc.accountId == null ? 'principal' : `extra #${acc.accountId}`,
+      brand_id: acc.st_brand_id,
+      erro,
+      total_de_listas: detalhadas.length,
+      listas: detalhadas.sort((a, b) => (b.contatos_agora ?? 0) - (a.contatos_agora ?? 0)),
+    });
+  }
+
+  const congeladas = saida.flatMap(c => c.listas.filter((l: any) => l.situacao.startsWith('CONGELADA')));
+  const orfas = saida.flatMap(c => c.listas.filter((l: any) => l.situacao.startsWith('NÃO VINCULADA') && (l.contatos_agora ?? 0) > 0));
+
+  res.json({
+    pergunta: 'Existe lista abandonada (congelada) ou lista nova que ninguém vinculou?',
+    veredito: congeladas.length > 0 && orfas.length > 0
+      ? `Suspeita CONFIRMÁVEL: ${congeladas.length} lista(s) congelada(s) e ${orfas.length} lista(s) com contatos que o painel não olha. Compare os nomes — se houver par do mesmo produto, a antiga foi abandonada e a nova é a que está em uso.`
+      : congeladas.length > 0
+        ? `${congeladas.length} lista(s) congelada(s), mas nenhuma lista nova com contatos apareceu. Aí a hipótese muda: a automação que alimenta essa lista pode estar desligada na SlickText.`
+        : 'Nenhuma lista congelada no período coberto pelos retratos.',
+    resumo: { congeladas: congeladas.map((l: any) => l.nome), nao_vinculadas_com_contatos: orfas.map((l: any) => l.nome) },
+    contas: saida,
+  });
+}));
+
+/**
+ * Normaliza UTM para comparar grafias. Minúscula e sem separador: `mailx-sms`, `mailx_sms` e
+ * `MailxSMS` colapsam no mesmo valor.
+ *
+ * Existe porque a grafia já custou uma conclusão errada: uma consulta com `ILIKE '%mailxsms%'`
+ * devolveu zero venda de SMS em toda a janela investigada, e a leitura foi "não houve venda de
+ * SMS" quando o valor real era `mailx-sms`, com hífen. Duas grafias da mesma coisa são,
+ * para qualquer filtro, duas coisas diferentes — e o filtro não avisa que perdeu linha.
+ */
+function normalizarUtm(v: string | null | undefined): string {
+  return String(v ?? '').trim().toLowerCase().replace(/[-_\s.]/g, '');
+}
+
+/** Extrai os utm_* da query string de um link. Devolve strings vazias no lugar de null. */
+function utmDaUrl(url: string | null | undefined): { source: string; medium: string; campaign: string } {
+  const vazio = { source: '', medium: '', campaign: '' };
+  if (!url) return vazio;
+  try {
+    // Base fictícia para aceitar URL relativa sem lançar; o que interessa é só a query.
+    const q = new URL(String(url), 'https://x.invalid').searchParams;
+    return {
+      source: q.get('utm_source') ?? '',
+      medium: q.get('utm_medium') ?? '',
+      campaign: q.get('utm_campaign') ?? '',
+    };
+  } catch {
+    return vazio;
+  }
+}
+
+// GET /admin/clientes/:id/diagnostico/inventario-de-utm
+//
+// Todas as UTM que os links da SlickText CARREGAM, contra todas as UTM que de fato CHEGAM nas
+// vendas — e a diferença entre as duas.
+//
+// Por que existe: a UTM não está no n8n. O n8n move contato entre listas; quem carrega a UTM é o
+// link dentro do texto do SMS, e esse link vive na SlickText (`GET /links` traz a `url` com a query
+// string inteira). Auditar fluxo no n8n nunca vai encontrar erro de UTM, porque a UTM não passa por
+// lá — foi por isso que uma auditoria dos workflows voltou sem essa informação.
+//
+// O que este endpoint responde, que nenhum dos dois lados responde sozinho:
+//
+//   1. CONFIGURADO E NUNCA CHEGOU — link existe com aquela UTM, mas nenhuma venda veio com ela.
+//      Ou a mensagem não está sendo enviada, ou ninguém clica, ou a plataforma perde o parâmetro.
+//      Nos três casos a receita daquela mensagem aparece como zero no painel, e zero de receita é
+//      indistinguível de mensagem que não converte.
+//   2. CHEGA E NÃO ESTÁ CONFIGURADO — venda com UTM que nenhum link nosso carrega. É atribuição
+//      que o painel está aceitando sem saber de onde vem.
+//   3. GRAFIA DIVERGENTE — duas escritas da mesma coisa (`mailx-sms` vs `mailx_sms`). É o caso mais
+//      perigoso porque some silenciosamente: o filtro casa uma e descarta a outra, e a venda
+//      descartada não aparece em lugar nenhum como "descartada" — aparece como se não existisse.
+//   4. CAMPANHA SEM VÍNCULO — utm_campaign que chega mas não está em `sms_campaign_map`, ou seja,
+//      venda que fica fora do escopo por automação e não entra em taxa nenhuma.
+adminRouter.get('/clientes/:id/diagnostico/inventario-de-utm', asyncHandler(async (req: Request, res: Response) => {
+  const clientId = req.params.id as string;
+  const dias = Math.min(365, Math.max(1, parseInt(String(req.query.dias ?? '45')) || 45));
+  const contas = await getSlickTextAccounts(clientId);
+
+  // ── Lado CONFIGURADO: os links da SlickText ──
+  //
+  // getAllLinks, e não getLinks({source:'Workflow'}): os links dos disparos via N8N são criados à
+  // mão no encurtador e têm source='manual', então o filtro por Workflow nunca os enxerga. Filtrar
+  // aqui esconderia justamente os links que este cliente mais usa.
+  type LinkUtm = { conta: string; brand_id: string; source: string; workflow_id: number | null; node_id: number | null; url: string; utm: { source: string; medium: string; campaign: string } };
+  const links: LinkUtm[] = [];
+  const errosPorConta: Array<{ conta: string; erro: string }> = [];
+
+  for (const acc of contas) {
+    const rotulo = acc.accountId == null ? 'principal' : `extra #${acc.accountId}`;
+    try {
+      const st = new SlickTextClient(acc.st_api_token, acc.st_brand_id);
+      for (const l of await st.getAllLinks()) {
+        const url = String(l.url ?? l.long_url ?? '');
+        links.push({
+          conta: rotulo,
+          brand_id: acc.st_brand_id,
+          source: String(l.source ?? 'desconhecido'),
+          workflow_id: l._source_id != null ? Number(l._source_id) : null,
+          node_id: l._sub_source_id != null ? Number(l._sub_source_id) : null,
+          url,
+          utm: utmDaUrl(url),
+        });
+      }
+    } catch (err: any) {
+      // Conta que falhou NÃO pode virar "nenhum link configurado": isso transformaria falha de
+      // leitura em achado ("chega e não está configurado") para todas as UTM daquela conta.
+      errosPorConta.push({ conta: rotulo, erro: err.message });
+    }
+  }
+
+  const chave = (u: { source: string; medium: string; campaign: string }) => `${u.source}|${u.medium}|${u.campaign}`;
+
+  const configurado = new Map<string, { utm: { source: string; medium: string; campaign: string }; links: number; contas: Set<string>; workflows: Set<number>; nodes: Set<number>; exemplo_url: string }>();
+  for (const l of links) {
+    // Link sem utm_source nenhum não é erro: encurtador tem link de suporte, de opt-out, de
+    // rastreio interno. Só entra no inventário o que carrega alguma atribuição.
+    if (!l.utm.source && !l.utm.medium && !l.utm.campaign) continue;
+    const k = chave(l.utm);
+    const e = configurado.get(k) ?? { utm: l.utm, links: 0, contas: new Set<string>(), workflows: new Set<number>(), nodes: new Set<number>(), exemplo_url: l.url };
+    e.links++;
+    e.contas.add(l.conta);
+    if (l.workflow_id != null) e.workflows.add(l.workflow_id);
+    if (l.node_id != null) e.nodes.add(l.node_id);
+    configurado.set(k, e);
+  }
+
+  // ── Lado QUE CHEGA: as vendas gravadas ──
+  const chegando = await query<{ source: string | null; medium: string | null; campaign: string | null; vendas: string; receita: string | null; primeira: string; ultima: string }>(
+    `SELECT utm_source AS source, utm_medium AS medium, utm_campaign AS campaign,
+            COUNT(*)::text AS vendas,
+            COALESCE(SUM(total_price), 0)::text AS receita,
+            MIN(created_at)::text AS primeira,
+            MAX(created_at)::text AS ultima
+     FROM webhook_logs
+     WHERE client_id = $1 AND event_type = 'order.paid'
+       AND created_at >= NOW() - ($2 || ' days')::interval
+       AND COALESCE(utm_source, '') <> ''
+     GROUP BY utm_source, utm_medium, utm_campaign
+     ORDER BY COUNT(*) DESC`,
+    [clientId, String(dias)]
+  );
+
+  // ── Campanhas com vínculo de mensagem ──
+  const mapeadas = await query<{ utm_campaign: string }>(
+    `SELECT DISTINCT utm_campaign FROM sms_campaign_map WHERE client_id = $1`,
+    [clientId]
+  );
+  const campanhasMapeadas = new Set(mapeadas.map(m => m.utm_campaign));
+
+  // ── Cruzamento ──
+  //
+  // O casamento é feito na forma NORMALIZADA. Comparar cru diria que `mailx-sms` e `mailx_sms` são
+  // duas coisas sem relação, e o relatório sairia com um "configurado e nunca chegou" e um "chega e
+  // não está configurado" que na verdade são o MESMO par, separados por um caractere.
+  const chaveNorm = (u: { source: string; medium: string; campaign: string }) =>
+    `${normalizarUtm(u.source)}|${normalizarUtm(u.medium)}|${normalizarUtm(u.campaign)}`;
+
+  const normConfigurado = new Set([...configurado.values()].map(c => chaveNorm(c.utm)));
+  const normChegando = new Set(chegando.map(c => chaveNorm({ source: c.source ?? '', medium: c.medium ?? '', campaign: c.campaign ?? '' })));
+
+  const configuradoENuncaChegou = [...configurado.values()]
+    .filter(c => !normChegando.has(chaveNorm(c.utm)))
+    .map(c => ({
+      utm: c.utm,
+      links: c.links,
+      contas: [...c.contas],
+      workflows: [...c.workflows],
+      nodes: [...c.nodes],
+      exemplo_url: c.exemplo_url.slice(0, 200),
+    }));
+
+  const chegaENaoConfigurado = chegando
+    .filter(c => !normConfigurado.has(chaveNorm({ source: c.source ?? '', medium: c.medium ?? '', campaign: c.campaign ?? '' })))
+    .map(c => ({
+      utm: { source: c.source, medium: c.medium, campaign: c.campaign },
+      vendas: parseInt(c.vendas),
+      receita: parseFloat(c.receita ?? '0'),
+      primeira: c.primeira,
+      ultima: c.ultima,
+    }));
+
+  // ── Grafia divergente ──
+  //
+  // Agrupa por forma normalizada e denuncia todo grupo com mais de uma escrita crua. Olha os dois
+  // lados juntos de propósito: o caso perigoso é justamente o link estar escrito de um jeito e a
+  // venda chegar do outro.
+  const porNormalizado = new Map<string, Set<string>>();
+  const registrar = (campo: string, valor: string | null | undefined) => {
+    const cru = String(valor ?? '').trim();
+    if (!cru) return;
+    const k = `${campo}:${normalizarUtm(cru)}`;
+    porNormalizado.set(k, (porNormalizado.get(k) ?? new Set<string>()).add(cru));
+  };
+  for (const c of configurado.values()) {
+    registrar('utm_source', c.utm.source);
+    registrar('utm_medium', c.utm.medium);
+    registrar('utm_campaign', c.utm.campaign);
+  }
+  for (const c of chegando) {
+    registrar('utm_source', c.source);
+    registrar('utm_medium', c.medium);
+    registrar('utm_campaign', c.campaign);
+  }
+  const grafiaDivergente = [...porNormalizado.entries()]
+    .filter(([, escritas]) => escritas.size > 1)
+    .map(([k, escritas]) => ({ campo: k.split(':')[0], escritas: [...escritas] }));
+
+  // ── Campanhas que chegam sem vínculo de mensagem ──
+  const campanhaSemVinculo = [...new Set(chegando.map(c => c.campaign).filter((v): v is string => !!v))]
+    .filter(c => !campanhasMapeadas.has(c))
+    .map(c => {
+      const linhas = chegando.filter(x => x.campaign === c);
+      return {
+        utm_campaign: c,
+        vendas: linhas.reduce((a, b) => a + parseInt(b.vendas), 0),
+        receita: linhas.reduce((a, b) => a + parseFloat(b.receita ?? '0'), 0),
+      };
+    })
+    .sort((a, b) => b.vendas - a.vendas);
+
+  const leituraIncompleta = errosPorConta.length > 0;
+
+  res.json({
+    pergunta: 'As UTM que os links carregam são as mesmas que chegam nas vendas?',
+    periodo_das_vendas: `últimos ${dias} dias`,
+    // A cobertura vem ANTES dos achados: conta que falhou faz toda UTM dela parecer "não
+    // configurada", e quem lê precisa saber disso antes de acreditar na lista.
+    cobertura: {
+      contas_lidas: contas.length - errosPorConta.length,
+      contas_com_erro: errosPorConta,
+      links_lidos: links.length,
+      links_com_utm: [...configurado.values()].reduce((a, b) => a + b.links, 0),
+      aviso: leituraIncompleta
+        ? 'LEITURA INCOMPLETA — uma ou mais contas falharam. O bloco "chega_e_nao_configurado" está inflado: as UTM dessas contas não foram lidas e por isso parecem inexistentes.'
+        : null,
+    },
+    veredito: leituraIncompleta
+      ? 'Não dá para concluir: faltou ler pelo menos uma conta.'
+      : grafiaDivergente.length > 0
+        ? `${grafiaDivergente.length} valor(es) escrito(s) de mais de uma forma — isso faz filtro perder venda em silêncio. Comece por aqui.`
+        : chegaENaoConfigurado.length > 0
+          ? `${chegaENaoConfigurado.length} UTM chegando sem link nosso que a carregue — atribuição de origem desconhecida.`
+          : configuradoENuncaChegou.length > 0
+            ? `Grafias consistentes. ${configuradoENuncaChegou.length} UTM configurada(s) que nunca trouxe venda — verificar se a mensagem está sendo enviada.`
+            : 'Os dois lados batem.',
+    grafia_divergente: grafiaDivergente,
+    chega_e_nao_configurado: chegaENaoConfigurado,
+    configurado_e_nunca_chegou: configuradoENuncaChegou,
+    campanha_sem_vinculo_de_mensagem: campanhaSemVinculo,
+    // As duas listas cruas, para colar em planilha.
+    configurado: [...configurado.values()]
+      .map(c => ({ utm: c.utm, links: c.links, contas: [...c.contas], workflows: [...c.workflows], nodes: [...c.nodes] }))
+      .sort((a, b) => b.links - a.links),
+    chegando: chegando.map(c => ({
+      utm: { source: c.source, medium: c.medium, campaign: c.campaign },
+      vendas: parseInt(c.vendas),
+      receita: parseFloat(c.receita ?? '0'),
+      primeira: c.primeira,
+      ultima: c.ultima,
+      campanha_com_vinculo: c.campaign ? campanhasMapeadas.has(c.campaign) : null,
+    })),
+  });
+}));

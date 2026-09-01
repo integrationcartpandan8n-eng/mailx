@@ -6,7 +6,7 @@
  */
 
 import { SlickTextClient } from '../services/slicktext';
-import { query } from '../db/database';
+import { query, queryOne } from '../db/database';
 import { logger } from '../utils/logger';
 import type { StoreContext } from './store-lookup';
 import type { KitRecord } from './product-upsert';
@@ -241,6 +241,41 @@ function normalizeForMatch(s: string): string {
     .toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/**
+ * Uma lista só é aceita como SEGUNDA lista (slot 2) se tiver crescido de verdade nos retratos —
+ * "de verdade" significando mais que ruído, não só "mais que zero".
+ *
+ * Por que existe, e por que "mais que zero" não bastava: o NeuroMind provou o risco DUAS vezes.
+ * Primeiro com a lista 107460 (parada em 19.706 exatos, zero variação — essa a versão anterior
+ * desta checagem já rejeitava). Depois com a lista 119972 — outra sobra da mesma migração, também
+ * abandonada — que tinha ido de 20.095 para 20.096 num contato isolado ao longo de 9 dias de
+ * retrato. Tecnicamente "cresceu" (20.096 > 20.095), e a versão anterior aceitou. O resultado:
+ * 6 dos 8 kits do NeuroMind passaram a excluir a venda real do cálculo exato, porque a query de
+ * leads via webhook só cobre produto com list_compra_id_2 vazio.
+ *
+ * MINIMO_LEADS_REAIS existe pra separar as duas coisas: uma lista que recebe LEAD de verdade
+ * ganha dezenas ou centenas em poucos dias; uma lista morta que alguém tocou por engano ganha 1.
+ * O valor é um julgamento, não uma medição — mas rejeitar +1 e aceitar +50 no mesmo teste é uma
+ * escolha melhor que aceitar os dois igualmente por serem ambos "positivos".
+ *
+ * Sem retrato ainda (menos de 2 dias de série): NÃO aceita. Não dá pra provar que cresce, e
+ * escrever sem prova é o mesmo erro que esta função existe para não repetir — a lista entra assim
+ * que tiver dois dias de retrato e mostrar crescimento acima do ruído.
+ */
+const MINIMO_LEADS_REAIS_PARA_SEGUNDA_LISTA = 5;
+
+async function candidataDeSegundaListaCresceu(clientId: number, listId: number): Promise<boolean> {
+  const r = await queryOne<{ primeiro: string; ultimo: string; dias: string }>(
+    `SELECT (ARRAY_AGG(contact_count ORDER BY snapshot_date))[1]::text AS primeiro,
+            (ARRAY_AGG(contact_count ORDER BY snapshot_date DESC))[1]::text AS ultimo,
+            COUNT(*)::text AS dias
+     FROM list_contact_snapshots WHERE client_id = $1 AND list_id = $2`,
+    [clientId, String(listId)]
+  );
+  if (!r || parseInt(r.dias) < 2) return false;
+  return (parseInt(r.ultimo) - parseInt(r.primeiro)) >= MINIMO_LEADS_REAIS_PARA_SEGUNDA_LISTA;
+}
+
 export async function autoLinkSlickTextLists(
   st: SlickTextClient,
   clientId: number
@@ -262,8 +297,8 @@ export async function autoLinkSlickTextLists(
   // Só produtos ATIVADOS: os descobertos automaticamente entram desativados e só ganham lista no
   // bootstrap da ativação — contá-los como "sem lista vinculada" enchia o aviso de ruído
   // (13 dos 15 avisos no cliente de referência eram produtos que ninguém ativou).
-  const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_compra_id: string | null }>(
-    `SELECT id, name, st_list_abandono_id, st_list_compra_id
+  const kits = await query<{ id: number; name: string; st_list_abandono_id: string | null; st_list_abandono_id_2: string | null; st_list_compra_id: string | null; st_list_compra_id_2: string | null }>(
+    `SELECT id, name, st_list_abandono_id, st_list_abandono_id_2, st_list_compra_id, st_list_compra_id_2
      FROM kits WHERE client_id = $1 AND enabled = true`,
     [clientId]
   );
@@ -273,7 +308,9 @@ export async function autoLinkSlickTextLists(
 
   for (const kit of kits) {
     let abandonoId = kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null;
+    let abandonoId2 = kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null;
     let compraId = kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null;
+    let compraId2 = kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null;
 
     // Comparação normalizada (sem espaço, hífen, pontuação ou caixa): as listas são nomeadas por
     // FAMÍLIA de produto ("[NeuroMind Pro]") e os produtos vêm do gateway por SKU
@@ -282,22 +319,32 @@ export async function autoLinkSlickTextLists(
     // diferente. Normalizar remove essa classe inteira de falso negativo.
     const kitKey = normalizeForMatch(kit.name);
 
-    if (!abandonoId) {
-      for (const [product, listId] of abandonoByProduct) {
-        if (kitKey.includes(normalizeForMatch(product))) { abandonoId = listId; break; }
-      }
+    // Esta função roda uma vez PARA CADA CONTA da SlickText do cliente (o chamador itera as
+    // contas). O slot 1 fica com a primeira lista encontrada e nunca é sobrescrito — mesmo
+    // comportamento de sempre. A novidade é o slot 2: se o produto já tem uma lista (de uma
+    // chamada anterior, outra conta) e ESTA conta tem outra lista da MESMA família com ID
+    // diferente, essa segunda lista é candidata a sinal de que o produto é vendido por mais de um
+    // gateway de lead (Digistore, JVZoo, BuyGoods) — mas só ENTRA se o retrato provar que ela
+    // recebe contato de verdade (ver candidataDeSegundaListaCresceu). Lista congelada nunca é
+    // aceita, mesmo com o nome batendo perfeito.
+    for (const [product, listId] of abandonoByProduct) {
+      if (!kitKey.includes(normalizeForMatch(product))) continue;
+      if (!abandonoId) { abandonoId = listId; break; }
+      if (listId !== abandonoId && !abandonoId2 && await candidataDeSegundaListaCresceu(clientId, listId)) { abandonoId2 = listId; break; }
     }
-    if (!compraId) {
-      for (const [product, listId] of compraByProduct) {
-        if (kitKey.includes(normalizeForMatch(product))) { compraId = listId; break; }
-      }
+    for (const [product, listId] of compraByProduct) {
+      if (!kitKey.includes(normalizeForMatch(product))) continue;
+      if (!compraId) { compraId = listId; break; }
+      if (listId !== compraId && !compraId2 && await candidataDeSegundaListaCresceu(clientId, listId)) { compraId2 = listId; break; }
     }
 
     if (abandonoId !== (kit.st_list_abandono_id ? parseInt(kit.st_list_abandono_id) : null)
-        || compraId !== (kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null)) {
+        || abandonoId2 !== (kit.st_list_abandono_id_2 ? parseInt(kit.st_list_abandono_id_2) : null)
+        || compraId !== (kit.st_list_compra_id ? parseInt(kit.st_list_compra_id) : null)
+        || compraId2 !== (kit.st_list_compra_id_2 ? parseInt(kit.st_list_compra_id_2) : null)) {
       await query(
-        `UPDATE kits SET st_list_abandono_id = $1, st_list_compra_id = $2 WHERE id = $3`,
-        [abandonoId ? String(abandonoId) : null, compraId ? String(compraId) : null, kit.id]
+        `UPDATE kits SET st_list_abandono_id = $1, st_list_abandono_id_2 = $2, st_list_compra_id = $3, st_list_compra_id_2 = $4 WHERE id = $5`,
+        [abandonoId ? String(abandonoId) : null, abandonoId2 ? String(abandonoId2) : null, compraId ? String(compraId) : null, compraId2 ? String(compraId2) : null, kit.id]
       );
       linked++;
     }
