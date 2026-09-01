@@ -246,6 +246,29 @@ export const PRODUTOR_SCHEMA_SQL = `
     ON produtor_faturas (client_id, LOWER(fornecedor), numero)
     WHERE numero IS NOT NULL;
 
+  -- Recuperação para os bancos onde produtor_faturas já foi criada por uma versão anterior deste
+  -- arquivo, antes de origem/origem_id existirem. Aconteceu de verdade: um deploy subiu a branch
+  -- num commit antigo, o initDatabase rodou, e a tabela nasceu sem as duas colunas — e
+  -- CREATE TABLE IF NOT EXISTS nunca mais as acrescentaria.
+  --
+  -- O DO com a checagem no information_schema é o ponto todo. Um
+  -- "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" solto pega ACCESS EXCLUSIVE mesmo quando não tem
+  -- nada a fazer, e este arquivo roda a CADA tentativa de reconexão — ou seja, exatamente quando o
+  -- banco já está em dificuldade, ele travaria a tabela contra todo mundo. Com a checagem antes, o
+  -- caminho normal é só uma leitura de catálogo e nenhum lock.
+  DO $do$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'produtor_faturas' AND column_name = 'origem'
+    ) THEN
+      ALTER TABLE produtor_faturas
+        ADD COLUMN origem VARCHAR(20) NOT NULL DEFAULT 'manual',
+        ADD COLUMN origem_id VARCHAR(120);
+    END IF;
+  END
+  $do$;
+
   -- ─────────────────────────────────────────────────────────────────────
   -- Credencial de leitura de um sistema de terceiro (hoje: a Client
   -- Financial API da Red Rock).
