@@ -22,6 +22,11 @@ import {
 } from './service';
 import { preverInvoice, lerTabelaFulfillment } from './previsao';
 import { parseExportDigistore } from './import-digistore';
+import { ErroRedRock, RedRockClient } from './redrock-api';
+import {
+  PROVEDOR_REDROCK, apagarCredencial, custoReal, fretePorPais, historicoSync, lerCredencial,
+  resumoCredencial, salvarCredencial, sincronizar,
+} from './redrock-sync';
 
 const CTX = 'ProdutorAdmin';
 
@@ -786,6 +791,136 @@ produtorAdminRouter.get('/clientes/:id/kits/:kitId/resumo', asyncHandler(async (
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Integração com a Red Rock (Client Financial API)
+//
+// A token entra AQUI, por formulário, e nunca sai: o GET devolve só os quatro últimos caracteres.
+// Não existe rota que leia a credencial inteira, nem no corpo nem em log — a única coisa que sai
+// daqui com ela dentro é a requisição para a própria Red Rock.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.get('/clientes/:id/integracoes', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  res.json({
+    redrock: await resumoCredencial(clientId),
+    sincronizacoes: await historicoSync(clientId, 10),
+  });
+}));
+
+produtorAdminRouter.post('/clientes/:id/integracoes/redrock', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const token = String(req.body?.token ?? '').trim();
+  if (token.length < 16) {
+    throw new ErroDeEntrada(
+      'A token parece incompleta. Copie o valor inteiro que a Red Rock mostrou uma única vez, ' +
+      'na hora de criar — depois ela não é exibida de novo.'
+    );
+  }
+  if (token.length > 500) throw new ErroDeEntrada('A token é longa demais para ser uma token.');
+
+  // Cadastrar já valida contra o /me: se a token não funcionar, ela não entra no banco. Guardar
+  // uma credencial inválida faria a falha aparecer só na primeira sincronização automática, longe
+  // de quem digitou.
+  const resumo = await salvarCredencial(clientId, token);
+  res.status(201).json(resumo);
+}));
+
+produtorAdminRouter.post('/clientes/:id/integracoes/redrock/testar', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const cred = await lerCredencial(clientId);
+  if (!cred) throw new ErroDeEntrada('Nenhuma token da Red Rock cadastrada para este cliente.');
+  const identidade = await new RedRockClient(cred.token).identidade();
+  await query(
+    `UPDATE produtor_credenciais SET ultimo_ok = NOW(), ultimo_erro = NULL, ultimo_erro_em = NULL,
+            updated_at = NOW()
+      WHERE client_id = $1 AND provedor = $2`,
+    [clientId, PROVEDOR_REDROCK]
+  );
+  res.json({ ok: true, ...identidade });
+}));
+
+produtorAdminRouter.delete('/clientes/:id/integracoes/redrock', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const apagou = await apagarCredencial(clientId);
+  // O dado já sincronizado FICA. Ele é histórico de custo, não é da credencial — apagar junto
+  // faria "trocar a token" virar "perder o custo real de três meses".
+  res.json({ removida: apagou });
+}));
+
+/**
+ * Puxa o período pedido.
+ *
+ * Teto de 400 dias por chamada: a janela de /deliveries é de no máximo um ano, e pedir mais do que
+ * isso devolveria pedido de dois anos com um frete de um, o que sai da tela como se fosse a mesma
+ * janela. Períodos maiores se faz em pedaços, e a resposta diz isso.
+ */
+produtorAdminRouter.post('/clientes/:id/redrock/sincronizar', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const de = data(req.body?.from, 'Início do período');
+  const ate = data(req.body?.to, 'Fim do período');
+  if (de > ate) throw new ErroDeEntrada('O início do período é depois do fim.');
+
+  const dias = (Date.parse(`${ate}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`)) / 86_400_000;
+  if (dias > 400) {
+    throw new ErroDeEntrada(
+      'O período passa de 400 dias. A consulta de frete da Red Rock só aceita até um ano, então ' +
+      'um período maior misturaria janelas diferentes na mesma tela. Sincronize por partes.'
+    );
+  }
+
+  res.json(await sincronizar(clientId, de, ate));
+}));
+
+produtorAdminRouter.get('/clientes/:id/redrock/custo-real', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+  if (!from || !to || !DATA_QUERY_RE.test(from) || !DATA_QUERY_RE.test(to) || from > to) {
+    throw new ErroDeEntrada('Informe from e to no formato AAAA-MM-DD.');
+  }
+  res.json(await custoReal(clientId, from, to));
+}));
+
+produtorAdminRouter.get('/clientes/:id/redrock/frete', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const medido = await fretePorPais(clientId);
+  res.json({ medido, cadastrado: await lerTabelaFulfillment(clientId) });
+}));
+
+/**
+ * Aplica a faixa medida na tabela de fulfillment.
+ *
+ * Rota própria, e não um efeito colateral da sincronização, de propósito: o valor cadastrado é uma
+ * decisão de alguém e a previsão inteira sai dele. Trocar sozinho faria o número da tela mudar sem
+ * nenhum evento que explicasse a mudança — e o jeito de descobrir seria comparar com um print.
+ */
+produtorAdminRouter.post('/clientes/:id/redrock/frete/aplicar', asyncHandler(async (req, res) => {
+  const clientId = idNaRota(req, 'id');
+  const { sugestao, janela } = await fretePorPais(clientId);
+  if (!sugestao) {
+    throw new ErroDeEntrada(
+      'Ainda não há frete medido para sugerir uma faixa. Sincronize a Red Rock primeiro.'
+    );
+  }
+  const atual = await lerTabelaFulfillment(clientId);
+  if (!atual) throw new ErroDeEntrada('Cadastre a tabela de fulfillment antes de aplicar a faixa medida.');
+
+  await query(
+    `UPDATE produtor_fulfillment
+        SET frete_pedido_min = $2, frete_pedido_tipico = $3, frete_pedido_max = $4,
+            observacao = TRIM(BOTH E'\\n' FROM COALESCE(observacao, '') || $5),
+            updated_at = NOW()
+      WHERE client_id = $1`,
+    [clientId, sugestao.min, sugestao.tipico, sugestao.max,
+     `\nFaixa de frete medida pela Red Rock na janela ${janela?.inicio} a ${janela?.fim}, ` +
+     `aplicada em ${new Date().toISOString().slice(0, 10)}.`]
+  );
+
+  res.json({ aplicada: sugestao, janela, anterior: {
+    min: atual.frete_pedido_min, tipico: atual.frete_pedido_tipico, max: atual.frete_pedido_max,
+  } });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Erros de entrada viram 400 com a mensagem que a tela mostra ao usuário.
 // Qualquer outro erro segue para o handler global (500), porque um erro que ninguém previu não
 // deve ser apresentado como se fosse culpa de quem preencheu o formulário.
@@ -793,6 +928,13 @@ produtorAdminRouter.get('/clientes/:id/kits/:kitId/resumo', asyncHandler(async (
 produtorAdminRouter.use((err: any, _req: Request, res: Response, next: NextFunction) => {
   if (err instanceof ErroDeEntrada) {
     res.status(400).json({ error: err.message });
+    return;
+  }
+  // Falha da Red Rock é falha de OUTRO sistema, e a tela precisa saber a diferença entre "arruma a
+  // credencial" e "tenta de novo mais tarde" — daí o 400 para o permanente e o 502 para o
+  // passageiro, com a mensagem já higienizada lá no cliente.
+  if (err instanceof ErroRedRock) {
+    res.status(err.permanente ? 400 : 502).json({ error: err.message, origem: 'redrock' });
     return;
   }
   next(err);

@@ -508,6 +508,29 @@
         </div>
     </div>
 
+    <!-- ═══ Red Rock: custo real, direto de quem cobra ═══ -->
+    <div class="grid2">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-plug"></i> Red Rock</div>
+                <span class="card-sub">o custo real por pedido, sem esperar o PDF da semana</span>
+            </div>
+            <div class="card-body" id="corpoIntegracao">
+                <div class="ajuda">Carregando…</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-receipt"></i> Custo medido no período</div>
+                <span class="card-sub" id="subCustoReal">apurado pela Red Rock</span>
+            </div>
+            <div class="card-body" id="corpoCustoReal">
+                <div class="ajuda">Cadastre a token da Red Rock para ver o custo real aqui.</div>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ Faturas ═══ -->
     <div class="grid2">
         <div class="card">
@@ -616,6 +639,13 @@ let produtosDoCliente = [];
 let sugestoes = [];       // ofertas encontradas nas vendas importadas
 let faturasDoKit = [];
 let importacoes = [];
+let integracao = null;    // { redrock: credencial|null, sincronizacoes: [] }
+let custoRedRock = null;  // custo real do período apurado pelo fornecedor
+let freteRedRock = null;  // frete medido por país + faixa sugerida
+// Resultado da última sincronização feita nesta aba. Fica no estado, e não só no DOM, porque
+// terminar a sincronização recarrega a tela inteira — e era isso que apagava o "deu certo, foram
+// tantos pedidos" no mesmo instante em que ele aparecia.
+let ultimoSync = null;
 
 /** Custo unitário do produto selecionado. null = não cadastrado — diferente de zero. */
 function custoDoProduto() {
@@ -756,6 +786,21 @@ async function carregarResumo() {
             document.getElementById('nomesDeFornecedor').innerHTML =
                 (sug.fornecedores || []).map(n => `<option value="${esc(n)}">`).join('');
         } catch (_) { sugestoes = []; importacoes = []; }
+        // A Red Rock é um sistema de terceiro: quando ela estiver fora, o resto da tela continua
+        // funcionando e o card dela mostra o motivo, em vez de a página inteira virar erro.
+        try {
+            [integracao, freteRedRock] = await Promise.all([
+                api(`/admin/produtor/clientes/${clienteId}/integracoes`),
+                api(`/admin/produtor/clientes/${clienteId}/redrock/frete`).catch(() => null),
+            ]);
+        } catch (_) { integracao = null; }
+        custoRedRock = null;
+        if (integracao?.redrock && periodo) {
+            try {
+                custoRedRock = await api(
+                    `/admin/produtor/clientes/${clienteId}/redrock/custo-real?from=${periodo.from}&to=${periodo.to}`);
+            } catch (e) { custoRedRock = { erro: e.message }; }
+        }
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
         renderPrevisao();
         renderFulfillment();
@@ -765,6 +810,8 @@ async function carregarResumo() {
         renderKpis();
         renderPrevistoVsReal();
         renderOfertas();
+        renderIntegracao();
+        renderCustoReal();
         await renderFaturas();
         previa();
     } catch (e) {
@@ -772,6 +819,348 @@ async function carregarResumo() {
         mostrarErro(e.message);
         document.getElementById('kpis').innerHTML = '';
         document.getElementById('compPrevReal').innerHTML = '';
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Red Rock
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "há 2 h" é mais útil que um timestamp: a pergunta é sempre "isso está velho?". */
+function desde(iso) {
+    if (!iso) return null;
+    const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (!isFinite(min)) return null;
+    if (min < 2) return 'agora há pouco';
+    if (min < 60) return `há ${min} min`;
+    const h = Math.round(min / 60);
+    if (h < 24) return `há ${h} h`;
+    return `há ${Math.round(h / 24)} dia(s)`;
+}
+
+/**
+ * Card da credencial — heurísticas 1 (visibilidade), 5 (prevenção) e 9 (recuperação de erro).
+ *
+ * Três coisas ficam explícitas de propósito. De QUEM é a token (o nome da empresa que a Red Rock
+ * devolve): cadastrar a token de outra conta não daria erro, daria o custo de outra operação com
+ * cara de número plausível. QUANDO foi a última sincronização: sem isso a tela mostra dado de
+ * antes de ontem com a mesma aparência de dado de hoje. E, quando a última tentativa falhou, o
+ * MOTIVO fica no lugar do número, não num canto.
+ */
+function renderIntegracao() {
+    const el = document.getElementById('corpoIntegracao');
+    const c = integracao?.redrock;
+
+    if (!c) {
+        el.innerHTML = `
+            <div class="ajuda" style="margin-bottom:0.8rem">
+                Com a token de leitura da Red Rock, o custo real deixa de ser um total por semana no
+                PDF e passa a ser <b>custo por pedido</b>, já quebrado em produto, fulfillment, frete
+                e embalagem — e as faturas entram sozinhas.
+                <br><br>
+                Crie em <b>API Tokens</b> no portal financeiro, com a permissão <b>client:read</b>.
+                Ela é somente-leitura e enxerga só a sua empresa. O portal mostra o valor
+                <b>uma única vez</b>: cole aqui direto de lá.
+            </div>
+            <form id="formToken">
+                <div class="campo">
+                    <label for="tokenRR">Token da Red Rock</label>
+                    <input id="tokenRR" type="password" autocomplete="off" spellcheck="false" required
+                           placeholder="cole aqui o valor que a Red Rock mostrou">
+                </div>
+                <span class="ajuda">
+                    Ela é testada antes de ser guardada: se não funcionar, não entra — e você
+                    descobre agora, não na primeira sincronização de madrugada.
+                </span>
+                <button class="btn" type="submit" style="width:100%; margin-top:0.7rem" id="btnSalvarToken">
+                    Testar e salvar
+                </button>
+            </form>`;
+        document.getElementById('formToken').onsubmit = salvarToken;
+        return;
+    }
+
+    const falhou = c.ultimo_erro && (!c.ultimo_ok || new Date(c.ultimo_erro_em) > new Date(c.ultimo_ok));
+    const hoje = ymd(new Date());
+    const de = periodo ? periodo.from : ymd(new Date(Date.now() - 89 * 86400000));
+    const ate = periodo ? periodo.to : hoje;
+
+    el.innerHTML = `
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.6rem">
+            <i class="fas fa-circle-check" style="color:var(--success)"></i>
+            <b>${esc(c.rotulo || 'Conta conectada')}</b>
+            <span class="ajuda">token ••••${esc(c.final)}</span>
+        </div>
+        ${falhou ? `
+            <div class="aviso" style="background:var(--danger-bg); border-color:var(--danger)">
+                <i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i>
+                <span><b>A última tentativa falhou ${esc(desde(c.ultimo_erro_em) || '')}.</b><br>${esc(c.ultimo_erro)}</span>
+            </div>` : `
+            <div class="ajuda" style="margin-bottom:0.8rem">
+                Última leitura bem-sucedida ${esc(desde(c.ultimo_ok) || 'ainda não houve')}.
+            </div>`}
+
+        <form id="formSync">
+            <div class="dupla">
+                <div class="campo">
+                    <label for="syncDe">Sincronizar — de</label>
+                    <input id="syncDe" type="date" value="${de}" max="${hoje}">
+                </div>
+                <div class="campo">
+                    <label for="syncAte">até</label>
+                    <input id="syncAte" type="date" value="${ate}" max="${hoje}">
+                </div>
+            </div>
+            <span class="ajuda">
+                Puxa pedidos, faturas e frete do intervalo. Rodar de novo o mesmo período reescreve as
+                mesmas linhas — não duplica nada.
+            </span>
+            <button class="btn" type="submit" style="width:100%; margin-top:0.7rem" id="btnSincronizar">
+                <i class="fas fa-rotate"></i> Sincronizar
+            </button>
+        </form>
+        <div id="statusSync" style="margin-top:0.7rem">${ultimoSync ? `
+            <div class="aviso" style="background:var(--success-bg); border-color:var(--success)">
+                <i class="fas fa-circle-check" style="color:var(--success)"></i>
+                <span>${inteiro(ultimoSync.pedidos.gravados)} pedido(s), ${inteiro(ultimoSync.cobrancas.gravadas)}
+                linha(s) de cobrança e ${inteiro(ultimoSync.faturas.gravadas)} fatura(s) de
+                ${dataBR(ultimoSync.periodo.inicio)} a ${dataBR(ultimoSync.periodo.fim)}.</span>
+            </div>
+            ${(ultimoSync.avisos || []).map(a =>
+                `<div class="aviso"><i class="fas fa-circle-info"></i><span>${esc(a)}</span></div>`).join('')}
+        ` : ''}</div>
+        <div style="display:flex; gap:0.5rem; margin-top:0.8rem">
+            <button class="btn mini ghost" type="button" id="btnTestarRR">Testar conexão</button>
+            <button class="btn mini perigo" type="button" id="btnRemoverRR" style="margin-left:auto">Remover token</button>
+        </div>
+        <span class="ajuda" style="display:block; margin-top:0.4rem">
+            Remover a token não apaga o custo já sincronizado — ele é histórico, não é da credencial.
+        </span>`;
+
+    document.getElementById('formSync').onsubmit = sincronizarRedRock;
+    document.getElementById('btnTestarRR').onclick = testarRedRock;
+    document.getElementById('btnRemoverRR').onclick = removerTokenRedRock;
+}
+
+async function salvarToken(e) {
+    e.preventDefault();
+    const campo = document.getElementById('tokenRR');
+    const btn = document.getElementById('btnSalvarToken');
+    btn.disabled = true; btn.textContent = 'Testando…';
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock`, {
+            method: 'POST', body: JSON.stringify({ token: campo.value.trim() }),
+        });
+        // Limpa o campo antes de qualquer outra coisa: não há motivo para a token continuar viva
+        // num input depois de gravada.
+        campo.value = '';
+        await carregarResumo();
+    } catch (err) {
+        mostrarErro(err.message);
+        btn.disabled = false; btn.textContent = 'Testar e salvar';
+    }
+}
+
+async function testarRedRock() {
+    const btn = document.getElementById('btnTestarRR');
+    btn.disabled = true; btn.textContent = 'Testando…';
+    try {
+        const r = await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock/testar`, { method: 'POST' });
+        document.getElementById('statusSync').innerHTML =
+            `<div class="aviso" style="background:var(--success-bg); border-color:var(--success)">
+                <i class="fas fa-circle-check" style="color:var(--success)"></i>
+                <span>Conectado como <b>${esc(r.empresa_nome || '—')}</b>${r.usuario_email ? ` (${esc(r.usuario_email)})` : ''}.</span>
+             </div>`;
+    } catch (err) {
+        mostrarErro(err.message);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Testar conexão';
+    }
+}
+
+async function removerTokenRedRock() {
+    if (!confirm('Remover a token da Red Rock? O custo já sincronizado continua na tela; só as próximas sincronizações param.')) return;
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock`, { method: 'DELETE' });
+        await carregarResumo();
+    } catch (err) { mostrarErro(err.message); }
+}
+
+async function sincronizarRedRock(e) {
+    if (e) e.preventDefault();
+    const btn = document.getElementById('btnSincronizar');
+    const status = document.getElementById('statusSync');
+    const de = document.getElementById('syncDe').value;
+    const ate = document.getElementById('syncAte').value;
+    if (!de || !ate) { mostrarErro('Escolha as duas datas do período a sincronizar.'); return; }
+
+    btn.disabled = true;
+    // Heurística 1: sincronizar demora e a pessoa precisa saber que está andando, senão clica de novo.
+    btn.innerHTML = '<i class="fas fa-rotate fa-spin"></i> Lendo a Red Rock…';
+    status.innerHTML = '';
+    try {
+        ultimoSync = await api(`/admin/produtor/clientes/${clienteId}/redrock/sincronizar`, {
+            method: 'POST', body: JSON.stringify({ from: de, to: ate }),
+        });
+        // O resultado é desenhado pelo renderIntegracao, com o resto da tela já atualizada — assim
+        // o "deu certo" e os números novos aparecem juntos, e não um antes do outro.
+        await carregarResumo();
+    } catch (err) {
+        mostrarErro(err.message);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-rotate"></i> Sincronizar';
+    }
+}
+
+/**
+ * Custo real do período — heurística 2 (a linguagem de quem cobra) e a doutrina de dados.
+ *
+ * A média sai só dos pedidos já FATURADOS, e o card diz quantos ficaram de fora. É a diferença
+ * entre um número certo e um número que parece certo: perto do fim do período metade dos pedidos
+ * ainda não foi cobrada, e dividir o custo de metade dos pedidos pelo total deles daria um custo
+ * médio caindo sozinho toda semana — parecendo eficiência, sendo defasagem de cobrança.
+ */
+function renderCustoReal() {
+    const el = document.getElementById('corpoCustoReal');
+    const sub = document.getElementById('subCustoReal');
+
+    if (!integracao?.redrock) {
+        el.innerHTML = `<div class="ajuda">Cadastre a token da Red Rock ao lado para ver o custo real aqui.</div>`;
+        sub.textContent = 'apurado pela Red Rock';
+        return;
+    }
+    if (!periodo) {
+        el.innerHTML = `<div class="ajuda">
+            O custo medido é sempre <b>de um período</b> — a Red Rock cobra por semana. Escolha um
+            período acima para vê-lo.</div>`;
+        sub.textContent = 'escolha um período';
+        return;
+    }
+
+    const c = custoRedRock;
+    sub.textContent = rotuloPeriodo();
+
+    if (!c || c.erro) {
+        el.innerHTML = `<div class="aviso" style="background:var(--danger-bg); border-color:var(--danger)">
+            <i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i>
+            <span>${esc(c?.erro || 'Não foi possível ler o custo medido.')}</span>
+            <button class="btn mini" style="margin-left:auto" onclick="carregarResumo()">Tentar de novo</button>
+        </div>`;
+        return;
+    }
+    if (c.pedidos_total === 0) {
+        el.innerHTML = `<div class="ajuda">
+            Nenhum pedido da Red Rock neste período ainda foi sincronizado. Use o botão
+            <b>Sincronizar</b> ao lado com este mesmo intervalo.</div>`;
+        return;
+    }
+
+    const pendentes = c.pedidos_sem_fatura + c.pedidos_aguardando_frete;
+    const linhas = [
+        ['Produto', c.custo_produto], ['Fulfillment', c.custo_fulfillment],
+        ['Frete', c.custo_frete], ['Embalagem', c.custo_embalagem], ['Outros', c.custo_outros],
+    ].filter(([, v]) => v != null && v !== 0);
+
+    el.innerHTML = `
+        <div class="kpis" style="margin-bottom:0.9rem">
+            <div class="kpi">
+                <span class="k">Custo cobrado</span>
+                <span class="v num">${fmt0(c.custo_total)}</span>
+                <span class="d">${inteiro(c.pedidos_faturados)} pedido(s) já faturado(s)</span>
+            </div>
+            <div class="kpi">
+                <span class="k">Custo por pedido</span>
+                <span class="v num">${fmt(c.custo_medio_pedido)}</span>
+                <span class="d">média só dos faturados</span>
+            </div>
+        </div>
+
+        ${linhas.length ? `<div class="scroll"><table>
+            <thead><tr><th>Linha da cobrança</th><th style="text-align:right">Valor</th><th style="text-align:right">Fatia</th></tr></thead>
+            <tbody>${linhas.map(([nome, v]) => `<tr>
+                <td>${nome}</td>
+                <td class="num" style="text-align:right">${fmt(v)}</td>
+                <td class="num" style="text-align:right">${c.custo_total ? pct(v / c.custo_total) : '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>` : ''}
+
+        ${pendentes > 0 ? `<div class="aviso" style="margin-top:0.8rem">
+            <i class="fas fa-hourglass-half"></i>
+            <span>
+                ${c.pedidos_sem_fatura > 0 ? `<b>${inteiro(c.pedidos_sem_fatura)}</b> pedido(s) deste período ainda não foram cobrados` : ''}
+                ${c.pedidos_sem_fatura > 0 && c.pedidos_aguardando_frete > 0 ? ' e ' : ''}
+                ${c.pedidos_aguardando_frete > 0 ? `<b>${inteiro(c.pedidos_aguardando_frete)}</b> foram cobrados só na parte fixa, com o frete ainda por vir` : ''}.
+                Eles ficam fora dos dois números acima — entrar como zero faria o custo por pedido
+                parecer menor do que é.
+            </span>
+        </div>` : ''}
+
+        ${c.ultima_falha ? `<div class="aviso" style="background:var(--danger-bg); border-color:var(--danger)">
+            <i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i>
+            <span>A sincronização mais recente falhou (${esc(desde(c.ultima_falha.em) || '')}): ${esc(c.ultima_falha.erro)}
+            Os números acima são da leitura anterior.</span>
+        </div>` : `<div class="ajuda" style="margin-top:0.6rem">
+            Lido da Red Rock ${esc(desde(c.atualizado_em) || 'ainda não')}.
+        </div>`}
+
+        ${renderFreteMedido()}`;
+
+    const btn = document.getElementById('btnAplicarFrete');
+    if (btn) btn.onclick = aplicarFreteMedido;
+}
+
+/**
+ * Frete medido por país, ao lado da faixa cadastrada.
+ *
+ * A faixa cadastrada saiu de 12 faturas em que o frete era um total semanal dividido por um número
+ * de pedidos que não era o mesmo número de pedidos — ~17% de erro sem dar para saber de qual
+ * pedaço vinha. Aqui o número vem por país, de quem cobra. Mesmo assim a troca é um BOTÃO: o valor
+ * cadastrado é decisão de alguém, e trocar sozinho faria a previsão mudar sem nenhum evento que
+ * explicasse a mudança.
+ */
+function renderFreteMedido() {
+    const m = freteRedRock?.medido;
+    if (!m?.janela || !m.paises?.length) return '';
+    const cad = freteRedRock?.cadastrado;
+    const s = m.sugestao;
+    const top = m.paises.slice(0, 5);
+
+    return `
+        <div style="margin-top:1rem; padding-top:0.9rem; border-top:1px solid var(--border)">
+            <div style="font-weight:650; margin-bottom:0.15rem">Frete por país, medido</div>
+            <span class="ajuda">janela ${dataBR(m.janela.inicio)} – ${dataBR(m.janela.fim)}, apurada pela Red Rock</span>
+            <div class="scroll" style="margin-top:0.6rem"><table>
+                <thead><tr><th>País</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Frete médio</th></tr></thead>
+                <tbody>${top.map(p => `<tr>
+                    <td>${esc(p.pais)}</td>
+                    <td class="num" style="text-align:right">${inteiro(p.pedidos)}</td>
+                    <td class="num" style="text-align:right">${fmt(p.medio)}</td>
+                </tr>`).join('')}
+                ${m.paises.length > top.length ? `<tr><td colspan="3" class="ajuda">
+                    e mais ${inteiro(m.paises.length - top.length)} país(es) de volume menor</td></tr>` : ''}
+                </tbody>
+            </table></div>
+            ${s ? `<div class="aviso" style="margin-top:0.7rem">
+                <i class="fas fa-ruler-horizontal"></i>
+                <span>
+                    Faixa medida: <b class="num">${fmt(s.min)} – ${fmt(s.max)}</b>, típico
+                    <b class="num">${fmt(s.tipico)}</b>.
+                    ${cad ? `Cadastrado hoje: <span class="num">${fmt(cad.frete_pedido_min)} – ${fmt(cad.frete_pedido_max)}</span>.` : 'A tabela de fulfillment ainda não foi cadastrada.'}
+                </span>
+                ${cad ? `<button class="btn mini" style="margin-left:auto" id="btnAplicarFrete">Usar a medida</button>` : ''}
+            </div>` : ''}
+        </div>`;
+}
+
+async function aplicarFreteMedido() {
+    const btn = document.getElementById('btnAplicarFrete');
+    btn.disabled = true; btn.textContent = 'Aplicando…';
+    try {
+        await api(`/admin/produtor/clientes/${clienteId}/redrock/frete/aplicar`, { method: 'POST' });
+        await carregarResumo();
+    } catch (err) {
+        mostrarErro(err.message);
+        btn.disabled = false; btn.textContent = 'Usar a medida';
     }
 }
 

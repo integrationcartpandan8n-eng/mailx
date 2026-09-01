@@ -224,6 +224,13 @@ export const PRODUTOR_SCHEMA_SQL = `
     -- serve de sugestão para a próxima previsão.
     unidades INTEGER,
 
+    -- 'manual' (alguém digitou olhando o PDF) ou 'redrock' (veio da API do
+    -- fornecedor). A distinção existe para a sincronização nunca sobrescrever
+    -- o que uma pessoa lançou: se os dois discordarem, quem decide é a pessoa,
+    -- e a tela mostra os dois números lado a lado em vez de eleger um.
+    origem VARCHAR(20) NOT NULL DEFAULT 'manual',
+    origem_id VARCHAR(120),
+
     arquivo_url TEXT,
     observacao TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -238,4 +245,162 @@ export const PRODUTOR_SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_faturas_numero
     ON produtor_faturas (client_id, LOWER(fornecedor), numero)
     WHERE numero IS NOT NULL;
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- Credencial de leitura de um sistema de terceiro (hoje: a Client
+  -- Financial API da Red Rock).
+  --
+  -- Uma por cliente e por provedor. O token entra pela UI do painel e NUNCA
+  -- volta por nenhuma rota: o GET devolve só os quatro últimos caracteres,
+  -- o suficiente para alguém conferir que cadastrou a token que pretendia e
+  -- insuficiente para reusar. Guardado em claro porque para chamar a API ele
+  -- precisa ser enviado em claro — cifrar com chave no mesmo servidor
+  -- protegeria contra um invasor que tem o banco e não tem o app, que não é
+  -- um invasor que exista aqui. O que reduz o dano de verdade é o escopo da
+  -- token (read-only, só a própria empresa) e poder revogar no portal.
+  --
+  -- referencia_externa guarda o id da empresa que a própria API devolve no
+  -- /me. Serve para uma coisa específica: recusar uma token que é válida mas
+  -- é de OUTRA empresa. Sem isso, cadastrar a token errada não daria erro —
+  -- daria o custo de outra operação, e o número pareceria plausível.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_credenciais (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    provedor VARCHAR(40) NOT NULL,
+    token TEXT NOT NULL,
+    rotulo VARCHAR(255),
+    referencia_externa VARCHAR(120),
+    ultimo_ok TIMESTAMP,
+    ultimo_erro TEXT,
+    ultimo_erro_em TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_credenciais_provedor
+    ON produtor_credenciais (client_id, provedor);
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- Espelho do que a Red Rock cobrou, pedido a pedido.
+  --
+  -- Isto não é previsão: é o custo REAL que o fornecedor apurou, por pedido,
+  -- já quebrado em produto / fulfillment / frete / embalagem. Enquanto só
+  -- havia o PDF da fatura, o custo real era um número por semana e a única
+  -- forma de saber quanto custou UM pedido era dividir pela quantidade.
+  --
+  -- Duas colunas mudam a previsão de lugar:
+  --
+  --   faturado = false → o pedido existe e ainda não foi cobrado. É a
+  --   explicação do buraco entre o que foi vendido numa semana e o que a
+  --   fatura daquela semana traz — o pedido despacha depois.
+  --
+  --   aguardando_frete = true → o pedido já foi cobrado, mas SÓ a parte
+  --   fixa; o frete ainda vai entrar. Sem essa coluna, esse pedido pareceria
+  --   um pedido barato, e a média de custo cairia sozinha perto do fim do
+  --   período — parecendo ganho de eficiência, sendo defasagem de cobrança.
+  --
+  -- total é NULL quando o pedido não foi faturado. NULL de propósito: zero
+  -- ali significaria "custou nada", e entraria numa média como se fosse.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_redrock_pedidos (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    external_order_id VARCHAR(160) NOT NULL,
+    numero_pedido VARCHAR(160),
+    cliente_nome VARCHAR(255),
+    pais VARCHAR(16),
+    criado_em TIMESTAMP,
+    faturado BOOLEAN NOT NULL DEFAULT false,
+    aguardando_frete BOOLEAN NOT NULL DEFAULT false,
+    total NUMERIC(12,4),
+    total_produto NUMERIC(12,4),
+    total_fulfillment NUMERIC(12,4),
+    total_frete NUMERIC(12,4),
+    total_embalagem NUMERIC(12,4),
+    total_outros NUMERIC(12,4),
+    faturas TEXT[] NOT NULL DEFAULT '{}',
+    sincronizado_em TIMESTAMP DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_ext
+    ON produtor_redrock_pedidos (client_id, external_order_id);
+  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_data
+    ON produtor_redrock_pedidos (client_id, criado_em);
+
+  -- Linha a linha da cobrança, como ela sai na fatura. Vem junto do pedido na
+  -- mesma resposta, então guardar custa uma inserção e não uma requisição.
+  --
+  -- É o que permite responder "de onde veio esse custo" sem abrir o PDF, e é
+  -- também de onde sai a COMPETÊNCIA de cada fatura: o cabeçalho da fatura só
+  -- diz quando ela foi emitida, e emitir não é o período que ela cobre. A data
+  -- da cobrança diz.
+  CREATE TABLE IF NOT EXISTS produtor_redrock_cobrancas (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    external_order_id VARCHAR(160) NOT NULL,
+    linha INTEGER NOT NULL,
+    data DATE,
+    atividade VARCHAR(255),
+    cobranca VARCHAR(255),
+    descricao TEXT,
+    quantidade NUMERIC(12,4),
+    valor NUMERIC(12,4),
+    numero_fatura VARCHAR(160)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_linha
+    ON produtor_redrock_cobrancas (client_id, external_order_id, linha);
+  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_fatura
+    ON produtor_redrock_cobrancas (client_id, numero_fatura);
+  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_data
+    ON produtor_redrock_cobrancas (client_id, data);
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- Frete médio por país, medido pelo próprio fornecedor.
+  --
+  -- Substitui adivinhação por medição. A faixa de frete em
+  -- produtor_fulfillment nasceu de 12 faturas e erra ~17%, porque frete muda
+  -- com destino e a fatura só traz o total. Aqui o número vem quebrado por
+  -- país e direto de quem cobra.
+  --
+  -- A linha com pais = '*' é o agregado que a própria API devolve, guardado
+  -- separado em vez de somado por nós: somar país a país daria um total
+  -- parecido e silenciosamente diferente sempre que a API filtrar ou
+  -- arredondar algo que não vemos.
+  -- ─────────────────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS produtor_redrock_frete (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    pais VARCHAR(16) NOT NULL,
+    janela_inicio DATE NOT NULL,
+    janela_fim DATE NOT NULL,
+    pedidos INTEGER,
+    linhas_cobranca INTEGER,
+    frete_total NUMERIC(12,4),
+    frete_medio_pedido NUMERIC(12,4),
+    sincronizado_em TIMESTAMP DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_frete_janela
+    ON produtor_redrock_frete (client_id, pais, janela_inicio, janela_fim);
+
+  -- Histórico de cada sincronização, inclusive as que falharam.
+  --
+  -- Existe porque a tela precisa poder dizer "o número é de ontem às 4h" e
+  -- "a última tentativa falhou por isto". Sincronização que falha calada é
+  -- pior que sincronização que não existe: o painel continua mostrando um
+  -- número antigo com cara de número de hoje.
+  CREATE TABLE IF NOT EXISTS produtor_redrock_sync (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    recurso VARCHAR(40) NOT NULL,
+    periodo_inicio DATE,
+    periodo_fim DATE,
+    paginas INTEGER NOT NULL DEFAULT 0,
+    registros INTEGER NOT NULL DEFAULT 0,
+    gravados INTEGER NOT NULL DEFAULT 0,
+    status VARCHAR(20) NOT NULL,
+    erro TEXT,
+    duracao_ms INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_sync_cliente
+    ON produtor_redrock_sync (client_id, created_at DESC);
 `;
