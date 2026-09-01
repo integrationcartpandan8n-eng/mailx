@@ -81,18 +81,18 @@ export function mascarar(token: string): string {
   return t.length >= 4 ? t.slice(-4) : '';
 }
 
-export async function lerCredencial(clientId: number, provedor = PROVEDOR_REDROCK) {
+export async function lerCredencial(contaId: number, provedor = PROVEDOR_REDROCK) {
   return queryOne<CredencialRow>(
     `SELECT token, rotulo, referencia_externa, ultimo_ok, ultimo_erro, ultimo_erro_em, created_at
-       FROM produtor_credenciais WHERE client_id = $1 AND provedor = $2`,
-    [clientId, provedor]
+       FROM produtor_credenciais WHERE conta_id = $1 AND provedor = $2`,
+    [contaId, provedor]
   );
 }
 
 export async function resumoCredencial(
-  clientId: number, provedor = PROVEDOR_REDROCK
+  contaId: number, provedor = PROVEDOR_REDROCK
 ): Promise<CredencialResumo | null> {
-  const r = await lerCredencial(clientId, provedor);
+  const r = await lerCredencial(contaId, provedor);
   if (!r) return null;
   return {
     provedor,
@@ -115,16 +115,16 @@ export async function resumoCredencial(
  * para conferir que é a certa.
  */
 export async function salvarCredencial(
-  clientId: number, token: string, provedor = PROVEDOR_REDROCK
+  contaId: number, token: string, provedor = PROVEDOR_REDROCK
 ): Promise<CredencialResumo> {
   const cliente = new RedRockClient(token);
   const id = await cliente.identidade();
 
   await query(
     `INSERT INTO produtor_credenciais
-       (client_id, provedor, token, rotulo, referencia_externa, ultimo_ok, ultimo_erro, ultimo_erro_em)
+       (conta_id, provedor, token, rotulo, referencia_externa, ultimo_ok, ultimo_erro, ultimo_erro_em)
      VALUES ($1, $2, $3, $4, $5, NOW(), NULL, NULL)
-     ON CONFLICT (client_id, provedor) DO UPDATE
+     ON CONFLICT (conta_id, provedor) DO UPDATE
        SET token = EXCLUDED.token,
            rotulo = EXCLUDED.rotulo,
            referencia_externa = EXCLUDED.referencia_externa,
@@ -132,34 +132,34 @@ export async function salvarCredencial(
            ultimo_erro = NULL,
            ultimo_erro_em = NULL,
            updated_at = NOW()`,
-    [clientId, provedor, token.trim(), id.empresa_nome, id.empresa_id]
+    [contaId, provedor, token.trim(), id.empresa_nome, id.empresa_id]
   );
 
-  logger.info(CTX, `Credencial ${provedor} cadastrada para cliente ${clientId} (${id.empresa_nome ?? 'sem nome'})`);
-  return (await resumoCredencial(clientId, provedor))!;
+  logger.info(CTX, `Credencial ${provedor} cadastrada para a conta ${contaId} (${id.empresa_nome ?? 'sem nome'})`);
+  return (await resumoCredencial(contaId, provedor))!;
 }
 
-export async function apagarCredencial(clientId: number, provedor = PROVEDOR_REDROCK): Promise<boolean> {
+export async function apagarCredencial(contaId: number, provedor = PROVEDOR_REDROCK): Promise<boolean> {
   const r = await query(
-    `DELETE FROM produtor_credenciais WHERE client_id = $1 AND provedor = $2 RETURNING id`,
-    [clientId, provedor]
+    `DELETE FROM produtor_credenciais WHERE conta_id = $1 AND provedor = $2 RETURNING id`,
+    [contaId, provedor]
   );
   return r.length > 0;
 }
 
-async function registrarFalhaDaCredencial(clientId: number, provedor: string, erro: string) {
+async function registrarFalhaDaCredencial(contaId: number, provedor: string, erro: string) {
   await query(
     `UPDATE produtor_credenciais SET ultimo_erro = $3, ultimo_erro_em = NOW(), updated_at = NOW()
-      WHERE client_id = $1 AND provedor = $2`,
-    [clientId, provedor, erro.slice(0, 500)]
+      WHERE conta_id = $1 AND provedor = $2`,
+    [contaId, provedor, erro.slice(0, 500)]
   );
 }
 
-async function clienteDoBanco(clientId: number): Promise<RedRockClient> {
-  const c = await lerCredencial(clientId);
+async function clienteDoBanco(contaId: number): Promise<RedRockClient> {
+  const c = await lerCredencial(contaId);
   if (!c) {
     throw new ErroRedRock(
-      'A token da Red Rock ainda não foi cadastrada para este cliente. Cadastre em Integrações.',
+      'A token da Red Rock ainda não foi cadastrada para esta conta. Cadastre em Integrações.',
       null, true
     );
   }
@@ -177,7 +177,7 @@ function lotes<T>(itens: T[], tamanho: number): T[][] {
   return out;
 }
 
-async function gravarPedidos(clientId: number, pedidos: RROrderCost[]): Promise<number> {
+async function gravarPedidos(contaId: number, pedidos: RROrderCost[]): Promise<number> {
   let gravados = 0;
   const COLUNAS = 14;
 
@@ -191,7 +191,7 @@ async function gravarPedidos(clientId: number, pedidos: RROrderCost[]): Promise<
         `$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13},$${b + 14})`
       );
       valores.push(
-        clientId,
+        contaId,
         p.order,
         p.order_number ?? null,
         p.customer_name ?? null,
@@ -210,11 +210,11 @@ async function gravarPedidos(clientId: number, pedidos: RROrderCost[]): Promise<
 
     const r = await query(
       `INSERT INTO produtor_redrock_pedidos
-         (client_id, external_order_id, numero_pedido, cliente_nome, pais, criado_em,
+         (conta_id, external_order_id, numero_pedido, cliente_nome, pais, criado_em,
           faturado, aguardando_frete, total, total_produto, total_fulfillment, total_frete,
           total_embalagem, total_outros)
        VALUES ${linhas.join(',')}
-       ON CONFLICT (client_id, external_order_id) DO UPDATE SET
+       ON CONFLICT (conta_id, external_order_id) DO UPDATE SET
          numero_pedido = EXCLUDED.numero_pedido,
          cliente_nome = EXCLUDED.cliente_nome,
          pais = EXCLUDED.pais,
@@ -243,9 +243,9 @@ async function gravarPedidos(clientId: number, pedidos: RROrderCost[]): Promise<
       `UPDATE produtor_redrock_pedidos p
           SET faturas = COALESCE(string_to_array(NULLIF(v.txt, ''), '|'), '{}')
          FROM (SELECT unnest($2::text[]) AS ext, unnest($3::text[]) AS txt) v
-        WHERE p.client_id = $1 AND p.external_order_id = v.ext`,
+        WHERE p.conta_id = $1 AND p.external_order_id = v.ext`,
       [
-        clientId,
+        contaId,
         lote.map(p => p.order),
         lote.map(p => (p.invoice_numbers ?? []).filter(Boolean).join('|')),
       ]
@@ -264,7 +264,7 @@ async function gravarPedidos(clientId: number, pedidos: RROrderCost[]): Promise<
  * anterior em que o pedido tinha mais linhas — nessa ordem, porque o estado intermediário passa a
  * ser "linha demais" e não "pedido sem custo nenhum".
  */
-async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promise<number> {
+async function gravarCobrancas(contaId: number, pedidos: RROrderCost[]): Promise<number> {
   const linhas: Array<{ ext: string; i: number; c: RRChargeLine }> = [];
   for (const p of pedidos) {
     (p.charges ?? []).forEach((c, i) => linhas.push({ ext: p.order, i, c }));
@@ -273,8 +273,8 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
     // Pedido que perdeu todas as cobranças precisa ficar sem nenhuma, não com as antigas.
     await query(
       `DELETE FROM produtor_redrock_cobrancas
-        WHERE client_id = $1 AND external_order_id = ANY($2::text[])`,
-      [clientId, pedidos.map(p => p.order)]
+        WHERE conta_id = $1 AND external_order_id = ANY($2::text[])`,
+      [contaId, pedidos.map(p => p.order)]
     );
     return 0;
   }
@@ -288,7 +288,7 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
       const b = i * COLUNAS;
       sql.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9})`);
       valores.push(
-        clientId, l.ext, l.i,
+        contaId, l.ext, l.i,
         dataSo(l.c.date),
         l.c.activity ?? null,
         l.c.charge ?? null,
@@ -299,9 +299,9 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
     });
     const r = await query(
       `INSERT INTO produtor_redrock_cobrancas
-         (client_id, external_order_id, linha, data, atividade, cobranca, descricao, quantidade, valor)
+         (conta_id, external_order_id, linha, data, atividade, cobranca, descricao, quantidade, valor)
        VALUES ${sql.join(',')}
-       ON CONFLICT (client_id, external_order_id, linha) DO UPDATE SET
+       ON CONFLICT (conta_id, external_order_id, linha) DO UPDATE SET
          data = EXCLUDED.data, atividade = EXCLUDED.atividade, cobranca = EXCLUDED.cobranca,
          descricao = EXCLUDED.descricao, quantidade = EXCLUDED.quantidade, valor = EXCLUDED.valor
        RETURNING id`,
@@ -318,9 +318,9 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
           SET numero_fatura = v.fatura
          FROM (SELECT unnest($2::text[]) AS ext, unnest($3::int[]) AS linha,
                       unnest($4::text[]) AS fatura) v
-        WHERE c.client_id = $1 AND c.external_order_id = v.ext AND c.linha = v.linha`,
+        WHERE c.conta_id = $1 AND c.external_order_id = v.ext AND c.linha = v.linha`,
       [
-        clientId,
+        contaId,
         lote.map(l => l.ext),
         lote.map(l => l.i),
         lote.map(l => l.c.invoice_number ?? null),
@@ -334,8 +334,8 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
   await query(
     `DELETE FROM produtor_redrock_cobrancas c
       USING (SELECT unnest($2::text[]) AS ext, unnest($3::int[]) AS qtd) v
-      WHERE c.client_id = $1 AND c.external_order_id = v.ext AND c.linha >= v.qtd`,
-    [clientId, [...porPedido.keys()], [...porPedido.values()]]
+      WHERE c.conta_id = $1 AND c.external_order_id = v.ext AND c.linha >= v.qtd`,
+    [contaId, [...porPedido.keys()], [...porPedido.values()]]
   );
 
   return gravadas;
@@ -352,7 +352,7 @@ async function gravarCobrancas(clientId: number, pedidos: RROrderCost[]): Promis
  * de fato cobre.
  */
 async function gravarFaturas(
-  clientId: number, faturas: RRInvoice[]
+  contaId: number, faturas: RRInvoice[]
 ): Promise<{ gravadas: number; conflitos: string[] }> {
   const conflitos: string[] = [];
   let gravadas = 0;
@@ -364,8 +364,8 @@ async function gravarFaturas(
     const periodo = await queryOne<{ inicio: string | null; fim: string | null }>(
       `SELECT MIN(data)::text AS inicio, MAX(data)::text AS fim
          FROM produtor_redrock_cobrancas
-        WHERE client_id = $1 AND numero_fatura = $2 AND data IS NOT NULL`,
-      [clientId, numero]
+        WHERE conta_id = $1 AND numero_fatura = $2 AND data IS NOT NULL`,
+      [contaId, numero]
     );
 
     // Sem nenhuma linha de cobrança sincronizada, não dá para dizer o que a fatura cobre. Cair
@@ -381,8 +381,8 @@ async function gravarFaturas(
 
     const existente = await queryOne<{ id: number; origem: string; valor: string }>(
       `SELECT id, origem, valor FROM produtor_faturas
-        WHERE client_id = $1 AND LOWER(fornecedor) = LOWER($2) AND numero = $3`,
-      [clientId, FORNECEDOR_REDROCK, numero]
+        WHERE conta_id = $1 AND LOWER(fornecedor) = LOWER($2) AND numero = $3`,
+      [contaId, FORNECEDOR_REDROCK, numero]
     );
 
     const valor = num(f.total);
@@ -414,10 +414,10 @@ async function gravarFaturas(
     } else {
       await query(
         `INSERT INTO produtor_faturas
-           (client_id, kit_id, fornecedor, numero, categoria, competencia_inicio, competencia_fim,
+           (conta_id, kit_id, fornecedor, numero, categoria, competencia_inicio, competencia_fim,
             emitida_em, valor, moeda, origem, origem_id, observacao)
          VALUES ($1, NULL, $2, $3, 'produto_frete', $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [clientId, FORNECEDOR_REDROCK, numero, periodo.inicio, periodo.fim,
+        [contaId, FORNECEDOR_REDROCK, numero, periodo.inicio, periodo.fim,
          dataSo(f.invoiced_at), valor, (f.currency || 'USD').slice(0, 3), PROVEDOR_REDROCK, f.id,
          `Importada da Client Financial API. Situação de pagamento: ${f.payment_status}.`]
       );
@@ -429,7 +429,7 @@ async function gravarFaturas(
 }
 
 async function gravarEntregas(
-  clientId: number, de: string, ate: string, e: RREntregas
+  contaId: number, de: string, ate: string, e: RREntregas
 ): Promise<number> {
   const linhas: Array<[string, number | null, number | null, number | null, number | null]> = [
     ['*', num(e.total_orders), num(e.total_charge_lines), num(e.total_shipping_cost),
@@ -455,14 +455,14 @@ async function gravarEntregas(
   linhas.forEach((l, i) => {
     const b = i * 8;
     sql.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8})`);
-    valores.push(clientId, l[0], inicio, fim, l[1], l[2], l[3], l[4]);
+    valores.push(contaId, l[0], inicio, fim, l[1], l[2], l[3], l[4]);
   });
 
   const r = await query(
     `INSERT INTO produtor_redrock_frete
-       (client_id, pais, janela_inicio, janela_fim, pedidos, linhas_cobranca, frete_total, frete_medio_pedido)
+       (conta_id, pais, janela_inicio, janela_fim, pedidos, linhas_cobranca, frete_total, frete_medio_pedido)
      VALUES ${sql.join(',')}
-     ON CONFLICT (client_id, pais, janela_inicio, janela_fim) DO UPDATE SET
+     ON CONFLICT (conta_id, pais, janela_inicio, janela_fim) DO UPDATE SET
        pedidos = EXCLUDED.pedidos, linhas_cobranca = EXCLUDED.linhas_cobranca,
        frete_total = EXCLUDED.frete_total, frete_medio_pedido = EXCLUDED.frete_medio_pedido,
        sincronizado_em = NOW()
@@ -473,14 +473,14 @@ async function gravarEntregas(
 }
 
 async function anotarSync(
-  clientId: number, recurso: string, de: string | null, ate: string | null,
+  contaId: number, recurso: string, de: string | null, ate: string | null,
   dados: { paginas?: number; registros?: number; gravados?: number; status: 'ok' | 'erro'; erro?: string; ms: number }
 ) {
   await query(
     `INSERT INTO produtor_redrock_sync
-       (client_id, recurso, periodo_inicio, periodo_fim, paginas, registros, gravados, status, erro, duracao_ms)
+       (conta_id, recurso, periodo_inicio, periodo_fim, paginas, registros, gravados, status, erro, duracao_ms)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [clientId, recurso, de, ate, dados.paginas ?? 0, dados.registros ?? 0, dados.gravados ?? 0,
+    [contaId, recurso, de, ate, dados.paginas ?? 0, dados.registros ?? 0, dados.gravados ?? 0,
      dados.status, dados.erro ? dados.erro.slice(0, 1000) : null, Math.round(dados.ms)]
   );
 }
@@ -509,9 +509,9 @@ export interface ResultadoSync {
  * a tela saiba dizer o que ficou faltando, e é para isso que o aviso volta na resposta.
  */
 export async function sincronizar(
-  clientId: number, de: string, ate: string
+  contaId: number, de: string, ate: string
 ): Promise<ResultadoSync> {
-  const cliente = await clienteDoBanco(clientId);
+  const cliente = await clienteDoBanco(contaId);
   const avisos: string[] = [];
 
   const r: ResultadoSync = {
@@ -539,18 +539,18 @@ export async function sincronizar(
     }
     if (pedidos.length > 0) {
       for (const lote of lotes(pedidos, 500)) {
-        r.pedidos.gravados += await gravarPedidos(clientId, lote);
-        r.cobrancas.gravadas += await gravarCobrancas(clientId, lote);
+        r.pedidos.gravados += await gravarPedidos(contaId, lote);
+        r.cobrancas.gravadas += await gravarCobrancas(contaId, lote);
       }
     }
-    await anotarSync(clientId, 'pedidos', de, ate, {
+    await anotarSync(contaId, 'pedidos', de, ate, {
       paginas, registros: pedidos.length, gravados: r.pedidos.gravados, status: 'ok', ms: Date.now() - t0,
     });
   } catch (err: any) {
     const msg = limparSegredo(err?.message || 'Falha ao ler pedidos.');
-    await anotarSync(clientId, 'pedidos', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
+    await anotarSync(contaId, 'pedidos', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
     if (err instanceof ErroRedRock && err.permanente) {
-      await registrarFalhaDaCredencial(clientId, PROVEDOR_REDROCK, msg);
+      await registrarFalhaDaCredencial(contaId, PROVEDOR_REDROCK, msg);
     }
     throw err;
   }
@@ -561,15 +561,15 @@ export async function sincronizar(
     const { faturas, truncado } = await cliente.faturas(de, ate);
     r.faturas.lidas = faturas.length;
     if (truncado) avisos.push('A lista de faturas foi cortada no teto de páginas — o período pode estar incompleto.');
-    const g = await gravarFaturas(clientId, faturas);
+    const g = await gravarFaturas(contaId, faturas);
     r.faturas.gravadas = g.gravadas;
     avisos.push(...g.conflitos);
-    await anotarSync(clientId, 'faturas', de, ate, {
+    await anotarSync(contaId, 'faturas', de, ate, {
       registros: faturas.length, gravados: g.gravadas, status: 'ok', ms: Date.now() - t0,
     });
   } catch (err: any) {
     const msg = limparSegredo(err?.message || 'Falha ao ler faturas.');
-    await anotarSync(clientId, 'faturas', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
+    await anotarSync(contaId, 'faturas', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
     avisos.push(`Os pedidos entraram, mas as faturas não: ${msg}`);
   }
 
@@ -577,7 +577,7 @@ export async function sincronizar(
   t0 = Date.now();
   try {
     const e = await cliente.entregas(de, ate);
-    const n = await gravarEntregas(clientId, de, ate, e);
+    const n = await gravarEntregas(contaId, de, ate, e);
     r.entregas.paises = Math.max(0, n - 1); // a linha '*' é o agregado, não é país
     r.entregas.janela = { inicio: dataSo(e.date_from) ?? de, fim: dataSo(e.date_to) ?? ate };
     if (r.entregas.janela.inicio !== de || r.entregas.janela.fim !== ate) {
@@ -587,21 +587,21 @@ export async function sincronizar(
         `máximo um ano.`
       );
     }
-    await anotarSync(clientId, 'entregas', de, ate, { registros: n, gravados: n, status: 'ok', ms: Date.now() - t0 });
+    await anotarSync(contaId, 'entregas', de, ate, { registros: n, gravados: n, status: 'ok', ms: Date.now() - t0 });
   } catch (err: any) {
     const msg = limparSegredo(err?.message || 'Falha ao ler entregas.');
-    await anotarSync(clientId, 'entregas', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
+    await anotarSync(contaId, 'entregas', de, ate, { status: 'erro', erro: msg, ms: Date.now() - t0 });
     avisos.push(`O frete por país não foi atualizado: ${msg}`);
   }
 
   await query(
     `UPDATE produtor_credenciais SET ultimo_ok = NOW(), ultimo_erro = NULL, ultimo_erro_em = NULL,
             updated_at = NOW()
-      WHERE client_id = $1 AND provedor = $2`,
-    [clientId, PROVEDOR_REDROCK]
+      WHERE conta_id = $1 AND provedor = $2`,
+    [contaId, PROVEDOR_REDROCK]
   );
 
-  logger.info(CTX, `Cliente ${clientId}: ${r.pedidos.gravados} pedidos, ${r.cobrancas.gravadas} cobranças, ${r.faturas.gravadas} faturas`);
+  logger.info(CTX, `Conta ${contaId}: ${r.pedidos.gravados} pedidos, ${r.cobrancas.gravadas} cobranças, ${r.faturas.gravadas} faturas`);
   return r;
 }
 
@@ -637,7 +637,7 @@ export interface CustoRealPeriodo {
  * cobrado antes de olhar para a média.
  */
 export async function custoReal(
-  clientId: number, de: string, ate: string
+  contaId: number, de: string, ate: string
 ): Promise<CustoRealPeriodo> {
   const t = await queryOne<any>(
     `SELECT
@@ -653,21 +653,21 @@ export async function custoReal(
        SUM(total_outros)      FILTER (WHERE faturado)             AS outros,
        AVG(total)             FILTER (WHERE faturado)             AS medio
      FROM produtor_redrock_pedidos
-      WHERE client_id = $1 AND criado_em >= $2::date AND criado_em < ($3::date + 1)`,
-    [clientId, de, ate]
+      WHERE conta_id = $1 AND criado_em >= $2::date AND criado_em < ($3::date + 1)`,
+    [contaId, de, ate]
   );
 
   const ok = await queryOne<{ created_at: Date | string }>(
     `SELECT created_at FROM produtor_redrock_sync
-      WHERE client_id = $1 AND recurso = 'pedidos' AND status = 'ok'
+      WHERE conta_id = $1 AND recurso = 'pedidos' AND status = 'ok'
       ORDER BY created_at DESC LIMIT 1`,
-    [clientId]
+    [contaId]
   );
   const falha = await queryOne<{ created_at: Date | string; erro: string }>(
     `SELECT created_at, erro FROM produtor_redrock_sync
-      WHERE client_id = $1 AND status = 'erro'
+      WHERE conta_id = $1 AND status = 'erro'
       ORDER BY created_at DESC LIMIT 1`,
-    [clientId]
+    [contaId]
   );
 
   return {
@@ -709,20 +709,20 @@ export interface FreteMedido {
  * valor cadastrado é uma decisão de alguém; trocar por outro em silêncio faria a previsão mudar
  * sem nenhum evento que explicasse a mudança.
  */
-export async function fretePorPais(clientId: number): Promise<FreteMedido> {
+export async function fretePorPais(contaId: number): Promise<FreteMedido> {
   const janela = await queryOne<{ janela_inicio: string; janela_fim: string }>(
     `SELECT janela_inicio::text, janela_fim::text FROM produtor_redrock_frete
-      WHERE client_id = $1 ORDER BY janela_fim DESC, janela_inicio DESC LIMIT 1`,
-    [clientId]
+      WHERE conta_id = $1 ORDER BY janela_fim DESC, janela_inicio DESC LIMIT 1`,
+    [contaId]
   );
   if (!janela) return { janela: null, geral: null, paises: [], sugestao: null };
 
   const linhas = await query<any>(
     `SELECT pais, pedidos, frete_total, frete_medio_pedido
        FROM produtor_redrock_frete
-      WHERE client_id = $1 AND janela_inicio = $2::date AND janela_fim = $3::date
+      WHERE conta_id = $1 AND janela_inicio = $2::date AND janela_fim = $3::date
       ORDER BY (pais = '*') DESC, frete_total DESC NULLS LAST`,
-    [clientId, janela.janela_inicio, janela.janela_fim]
+    [contaId, janela.janela_inicio, janela.janela_fim]
   );
 
   const geralRow = linhas.find(l => l.pais === '*');
@@ -759,12 +759,12 @@ export async function fretePorPais(clientId: number): Promise<FreteMedido> {
 }
 
 /** Histórico recente de sincronizações, para a tela poder dizer de quando é o número. */
-export async function historicoSync(clientId: number, limite = 10) {
+export async function historicoSync(contaId: number, limite = 10) {
   return query<any>(
     `SELECT recurso, periodo_inicio::text, periodo_fim::text, paginas, registros, gravados,
             status, erro, duracao_ms, created_at
-       FROM produtor_redrock_sync WHERE client_id = $1
+       FROM produtor_redrock_sync WHERE conta_id = $1
       ORDER BY created_at DESC LIMIT $2`,
-    [clientId, Math.min(50, Math.max(1, limite))]
+    [contaId, Math.min(50, Math.max(1, limite))]
   );
 }

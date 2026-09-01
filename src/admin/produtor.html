@@ -238,7 +238,7 @@
         <div class="acoes" id="guiaAcoes"></div>
     </div>
 
-    <div class="barra-periodo">
+    <div class="barra-periodo" id="barraPeriodo">
         <span class="rot"><i class="fas fa-box"></i> Produto</span>
         <div style="min-width:16rem; flex:0 1 22rem"><select id="seletorProduto"></select></div>
         <div class="pills" id="pillsPeriodo">
@@ -256,8 +256,77 @@
 
     <div class="kpis" id="kpis"></div>
 
+    <!-- ═══ Produtos da conta ═══
+         Primeiro passo do cadastro. Antes, produto só nascia de um webhook da MailX — o que nunca
+         ia acontecer para uma conta de produtor, cujas vendas chegam por export e pela Red Rock. -->
+    <div class="grid2" id="secProdutos">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-box"></i> Produtos</div>
+                <span class="card-sub">o que esta conta vende, e quanto custa cada unidade</span>
+            </div>
+            <div class="card-body" style="padding:0">
+                <div class="scroll">
+                    <table>
+                        <thead><tr>
+                            <th>Produto</th><th>Nome na fatura</th><th style="text-align:right">Custo/unid.</th>
+                            <th style="text-align:right">Ofertas</th><th></th>
+                        </tr></thead>
+                        <tbody id="corpoProdutos"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fas fa-plus"></i> <span id="tituloFormProduto">Cadastrar produto</span></div>
+                <span class="card-sub">o nome de casa, o nome na fatura e o custo por unidade</span>
+            </div>
+            <div class="card-body">
+                <form id="formProduto">
+                    <div class="campo">
+                        <label for="pNome">Nome do produto</label>
+                        <input id="pNome" type="text" required placeholder="Divine Purity">
+                    </div>
+                    <div class="dupla">
+                        <div class="campo">
+                            <label for="pNomeFatura">Nome na fatura do fulfillment</label>
+                            <input id="pNomeFatura" type="text" placeholder="Divine Purity Drops" list="nomesDeProduto">
+                        </div>
+                        <div class="campo">
+                            <label for="pCusto">Custo por unidade</label>
+                            <input id="pCusto" class="num-input" type="number" min="0" step="0.0001" placeholder="3.00">
+                        </div>
+                    </div>
+                    <span class="ajuda">
+                        A Red Rock cobra "Divine Purity Drops" pelo que aqui é "Divine Purity". Sem o vínculo
+                        escrito, casar por semelhança acertaria hoje e erraria calado no dia que aparecesse um
+                        nome parecido.
+                    </span>
+                    <div class="campo" style="margin-top:0.7rem">
+                        <label for="pNomesVenda">Nomes que aparecem no export da Digistore</label>
+                        <input id="pNomesVenda" type="text" placeholder="separados por vírgula — opcional">
+                    </div>
+                    <div class="campo" id="campoKit" style="display:none">
+                        <label for="pKit">Kit correspondente na MailX</label>
+                        <select id="pKit"></select>
+                        <span class="ajuda">
+                            Opcional. Serve para cruzar o custo daqui com a atribuição de SMS e email do lado
+                            da MailX — e é o que permite saber o LUCRO gerado por campanha, não só o faturamento.
+                        </span>
+                    </div>
+                    <div style="display:flex; gap:0.5rem">
+                        <button class="btn" type="submit" style="flex:1" id="btnSalvarProduto">Cadastrar produto</button>
+                        <button class="btn ghost" type="button" id="btnCancelarProduto" style="display:none">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ Importar vendas ═══ -->
-    <div class="card">
+    <div class="card" id="secImportar">
         <div class="card-header">
             <div class="card-title"><i class="fas fa-file-arrow-up"></i> Importar vendas da Digistore</div>
             <span class="card-sub">o export de transações — é daqui que sai a previsão do invoice</span>
@@ -279,7 +348,7 @@
     <div id="notaReceita" style="display:none; font-size:0.74rem; color:var(--text-muted); margin:-0.6rem 0 1.25rem; line-height:1.6"></div>
 
     <!-- ═══ Previsão do invoice — o pedido do chefe ═══ -->
-    <div class="card">
+    <div class="card" id="secPrevisao">
         <div class="card-header">
             <div class="card-title"><i class="fas fa-file-invoice"></i> Previsão do invoice</div>
             <span class="escopo" id="escopoPrevisao">—</span>
@@ -293,7 +362,7 @@
     </div>
 
     <!-- ═══ Previsto vs Real — o card do briefing ═══ -->
-    <div class="card">
+    <div class="card" id="secPrevReal">
         <div class="card-header">
             <div class="card-title"><i class="fas fa-scale-balanced"></i> Previsto vs Real</div>
             <span class="escopo" id="escopoPrevReal">—</span>
@@ -306,7 +375,7 @@
     </div>
 
     <!-- ═══ Ofertas ═══ -->
-    <div class="grid2">
+    <div class="grid2" id="secOfertas">
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-tags"></i> Ofertas</div>
@@ -401,48 +470,12 @@
         </div>
     </div>
 
-    <!-- ═══ Tabela de preços do fulfillment ═══ -->
-    <div class="grid2">
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title"><i class="fas fa-truck-fast"></i> Custo por produto</div>
-                <span class="card-sub">o custo de uma unidade, como o fornecedor cobra</span>
-            </div>
-            <div class="card-body" style="padding:0">
-                <div class="scroll">
-                    <table>
-                        <thead><tr><th>Produto</th><th>Nome na fatura</th><th>Custo/unidade</th><th></th></tr></thead>
-                        <tbody id="corpoCustos"></tbody>
-                    </table>
-                </div>
-                <div style="padding:1rem 1.25rem; border-top:1px solid var(--border)">
-                    <form id="formCusto">
-                        <div class="dupla">
-                            <div class="campo">
-                                <label for="cProduto">Produto</label>
-                                <select id="cProduto"></select>
-                            </div>
-                            <div class="campo">
-                                <label for="cNomeFatura">Nome na fatura</label>
-                                <input id="cNomeFatura" type="text" placeholder="Divine Purity Drops" required list="nomesDeProduto">
-                                <datalist id="nomesDeProduto"></datalist>
-                            </div>
-                        </div>
-                        <div class="campo">
-                            <label for="cCusto">Custo por unidade</label>
-                            <input id="cCusto" class="num-input" type="number" min="0" step="0.0001" placeholder="3.00" required>
-                        </div>
-                        <span class="ajuda">
-                            O nome tem que ser <b>exatamente</b> como aparece na fatura. A Red Rock cobra
-                            "Divine Purity Drops" pelo Divine Purity e "divinedetox" pelo Divine Detox —
-                            casar por semelhança acertaria hoje e erraria calado amanhã.
-                        </span>
-                        <button class="btn" type="submit" style="width:100%; margin-top:0.7rem">Salvar custo do produto</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-
+    <!-- ═══ Tabela de preços do fulfillment ═══
+         O card "Custo por produto" que ficava aqui saiu: ele editava exatamente os mesmos campos
+         que o card Produtos, lá em cima. Dois formulários para o mesmo dado é como um deles vira o
+         desatualizado, e ninguém sabe qual dos dois valeu. -->
+    <div class="grid2" id="secFulfillment">
+        <datalist id="nomesDeProduto"></datalist>
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-list-check"></i> Preços do fulfillment</div>
@@ -514,7 +547,7 @@
     </div>
 
     <!-- ═══ Red Rock: custo real, direto de quem cobra ═══ -->
-    <div class="grid2">
+    <div class="grid2" id="secRedRock">
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-plug"></i> Red Rock</div>
@@ -537,7 +570,7 @@
     </div>
 
     <!-- ═══ Faturas ═══ -->
-    <div class="grid2">
+    <div class="grid2" id="secFaturas">
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><i class="fas fa-file-invoice-dollar"></i> Faturas lançadas</div>
@@ -630,8 +663,8 @@
 // Estado
 // ─────────────────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
-const clienteId = params.get('id');
-let kitId = params.get('kit') ? parseInt(params.get('kit'), 10) : null;
+let contaId = params.get('id');
+let produtoId = params.get('produto') ? parseInt(params.get('produto'), 10) : null;
 // Embutida na aba Produtor do dashboard: sem cabeçalho próprio e sem a margem de página, porque a
 // moldura já tem os dois. O resto da tela é idêntico — é a MESMA página, não uma segunda versão
 // dela, que é o que garante que corrigir um número aqui corrige nos dois lugares.
@@ -649,9 +682,9 @@ let ofertas = [];
 let editandoOfertaId = null;
 let simbolo = '$';
 let tabelaFulfillment = null;   // preços do fornecedor (null = não cadastrada, NÃO zero)
-let custosProduto = [];         // custo unitário por produto
 let previsao = null;
-let produtosDoCliente = [];
+let produtosDaConta = [];
+let conta = null;          // { id, nome, moeda, cliente_id, cliente_mailx }
 let sugestoes = [];       // ofertas encontradas nas vendas importadas
 let faturasDoKit = [];
 let importacoes = [];
@@ -665,8 +698,8 @@ let ultimoSync = null;
 
 /** Custo unitário do produto selecionado. null = não cadastrado — diferente de zero. */
 function custoDoProduto() {
-    const c = custosProduto.find(x => x.kit_id === kitId);
-    return c ? c.custo_unidade : null;
+    const p = produtosDaConta.find(x => x.id === produtoId);
+    return p ? p.custo_unidade : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -748,27 +781,45 @@ function rotuloPeriodo() {
 // ─────────────────────────────────────────────────────────────────────────────
 async function carregarTudo() {
     limparErro();
-    if (!clienteId) { mostrarErro('Falta o cliente na URL (?id=...).'); return; }
     try {
-        const cliente = await api(`/admin/clientes/${clienteId}`);
-        document.getElementById('tituloCliente').textContent = `Produtor — ${cliente.company_name || 'Cliente'}`;
+        // A conta vem da rota do Produtor, não da rota de cliente da MailX. Era ler /admin/clientes
+        // que fazia o título dizer "Produtor — Caleb" e a tela mostrar o faturamento de um cliente
+        // de SMS como se fosse do produtor.
+        const contas = await api('/admin/produtor/contas');
 
-        const produtos = await api(`/admin/produtor/clientes/${clienteId}/produtos`);
+        // Sem conta nenhuma, ou sem id na URL: a tela abre no cadastro da conta em vez de num erro.
+        // O link do dashboard chega aqui sem id de propósito — quem escolhe é esta tela.
+        if (contas.length === 0) { renderPrimeiraConta(); return; }
+        if (!contaId) {
+            contaId = String(contas[0].id);
+            history.replaceState(null, '', `?id=${contaId}`);
+        }
+        conta = contas.find(c => String(c.id) === String(contaId)) || null;
+        if (!conta) { mostrarErro('Conta de produtor não encontrada.'); return; }
+        document.getElementById('tituloCliente').textContent = `Produtor — ${conta.nome}`;
+        document.getElementById('subtitulo').textContent = conta.cliente_mailx
+            ? `Custo, fatura do fulfillment e margem · vinculada ao cliente ${conta.cliente_mailx} da MailX`
+            : 'Custo, fatura do fulfillment e margem — dados próprios, isolados dos da MailX';
+
+        const produtos = await api(`/admin/produtor/contas/${contaId}/produtos`);
         const sel = document.getElementById('seletorProduto');
+        produtosDaConta = produtos;
         if (produtos.length === 0) {
-            sel.innerHTML = '<option>Nenhum produto ainda</option>';
-            mostrarErro('Este cliente ainda não tem produto nenhum registrado. O produto aparece sozinho quando chega a primeira venda pelo webhook.');
+            // Não é erro: é o primeiro passo do cadastro. O erro vermelho de antes mandava esperar
+            // um webhook que, para uma conta de produtor, nunca vai chegar.
+            sel.parentElement.style.display = 'none';
+            renderPrimeiroProduto();
             return;
         }
-        produtosDoCliente = produtos;
+        sel.parentElement.style.display = '';
         sel.innerHTML = produtos.map(p =>
-            `<option value="${p.id}">${esc(p.nome)} — ${inteiro(p.vendas)} venda(s), ${p.ofertas} oferta(s)</option>`
+            `<option value="${p.id}">${esc(p.nome)} — ${inteiro(p.unidades_vendidas)} unidade(s), ${p.ofertas} oferta(s)</option>`
         ).join('');
-        if (!kitId || !produtos.some(p => p.id === kitId)) kitId = produtos[0].id;
-        sel.value = String(kitId);
+        if (!produtoId || !produtos.some(p => p.id === produtoId)) produtoId = produtos[0].id;
+        sel.value = String(produtoId);
         sel.onchange = () => {
-            kitId = parseInt(sel.value, 10);
-            history.replaceState(null, '', `?id=${clienteId}&kit=${kitId}`);
+            produtoId = parseInt(sel.value, 10);
+            history.replaceState(null, '', `?id=${contaId}&produto=${produtoId}`);
             carregarResumo();
         };
         await carregarResumo();
@@ -783,20 +834,19 @@ async function carregarResumo() {
         const qs = periodo ? `?from=${periodo.from}&to=${periodo.to}` : '';
         let ff;
         [resumo, ofertas, ff, previsao] = await Promise.all([
-            api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/resumo${qs}`),
-            api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/ofertas`),
-            api(`/admin/produtor/clientes/${clienteId}/fulfillment`),
-            api(`/admin/produtor/clientes/${clienteId}/previsao${qs}`),
+            api(`/admin/produtor/contas/${contaId}/produtos/${produtoId}/resumo${qs}`),
+            api(`/admin/produtor/contas/${contaId}/produtos/${produtoId}/ofertas`),
+            api(`/admin/produtor/contas/${contaId}/fulfillment`),
+            api(`/admin/produtor/contas/${contaId}/previsao${qs}`),
         ]);
         tabelaFulfillment = ff.tabela;
-        custosProduto = ff.custos;
         // Sugestões e listas de apoio não podem derrubar a tela: são conforto, não o número.
         try {
             [sugestoes, importacoes] = await Promise.all([
-                api(`/admin/produtor/clientes/${clienteId}/ofertas-sugeridas`),
-                api(`/admin/produtor/clientes/${clienteId}/importacoes`),
+                api(`/admin/produtor/contas/${contaId}/ofertas-sugeridas`),
+                api(`/admin/produtor/contas/${contaId}/importacoes`),
             ]);
-            const sug = await api(`/admin/produtor/clientes/${clienteId}/sugestoes`);
+            const sug = await api(`/admin/produtor/contas/${contaId}/sugestoes`);
             document.getElementById('nomesDeProduto').innerHTML =
                 (sug.produtos_nas_vendas || []).map(n => `<option value="${esc(n)}">`).join('');
             document.getElementById('nomesDeFornecedor').innerHTML =
@@ -806,15 +856,15 @@ async function carregarResumo() {
         // funcionando e o card dela mostra o motivo, em vez de a página inteira virar erro.
         try {
             [integracao, freteRedRock] = await Promise.all([
-                api(`/admin/produtor/clientes/${clienteId}/integracoes`),
-                api(`/admin/produtor/clientes/${clienteId}/redrock/frete`).catch(() => null),
+                api(`/admin/produtor/contas/${contaId}/integracoes`),
+                api(`/admin/produtor/contas/${contaId}/redrock/frete`).catch(() => null),
             ]);
         } catch (_) { integracao = null; }
         custoRedRock = null;
         if (integracao?.redrock && periodo) {
             try {
                 custoRedRock = await api(
-                    `/admin/produtor/clientes/${clienteId}/redrock/custo-real?from=${periodo.from}&to=${periodo.to}`);
+                    `/admin/produtor/contas/${contaId}/redrock/custo-real?from=${periodo.from}&to=${periodo.to}`);
             } catch (e) { custoRedRock = { erro: e.message }; }
         }
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
@@ -826,6 +876,7 @@ async function carregarResumo() {
         renderKpis();
         renderPrevistoVsReal();
         renderOfertas();
+        renderProdutos();
         renderIntegracao();
         renderCustoReal();
         await renderFaturas();
@@ -837,6 +888,104 @@ async function carregarResumo() {
         document.getElementById('compPrevReal').innerHTML = '';
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Produtos da conta
+// ─────────────────────────────────────────────────────────────────────────────
+
+let editandoProdutoId = null;
+let kitsDisponiveis = [];
+
+function renderProdutos() {
+    const corpo = document.getElementById('corpoProdutos');
+    corpo.innerHTML = produtosDaConta.length === 0
+        ? '<tr><td colspan="5" class="vazio">Nenhum produto cadastrado ainda.</td></tr>'
+        : produtosDaConta.map(p => `<tr>
+            <td>
+                <b>${esc(p.nome)}</b>
+                ${p.kit_nome ? `<br><span class="ajuda"><i class="fas fa-link"></i> ${esc(p.kit_nome)} na MailX</span>` : ''}
+            </td>
+            <td>${p.nome_na_fatura ? esc(p.nome_na_fatura) : '<span class="ajuda">não informado</span>'}</td>
+            <td class="num" style="text-align:right">${
+                // Travessão, não zero: "não cadastrado" e "custa nada" são coisas diferentes, e a
+                // segunda faria a margem sair 100%.
+                p.custo_unidade == null ? '—' : fmt(p.custo_unidade, 4)}</td>
+            <td class="num" style="text-align:right">${inteiro(p.ofertas)}</td>
+            <td style="text-align:right"><button class="btn mini ghost" onclick="editarProduto(${p.id})">Editar</button></td>
+        </tr>`).join('');
+}
+
+async function carregarKitsDisponiveis() {
+    const campo = document.getElementById('campoKit');
+    if (!conta?.cliente_id) { campo.style.display = 'none'; kitsDisponiveis = []; return; }
+    try {
+        kitsDisponiveis = await api(`/admin/produtor/contas/${contaId}/kits-disponiveis`);
+    } catch (_) { kitsDisponiveis = []; }
+    if (kitsDisponiveis.length === 0) { campo.style.display = 'none'; return; }
+    campo.style.display = '';
+    document.getElementById('pKit').innerHTML =
+        '<option value="">Sem vínculo</option>' +
+        kitsDisponiveis.map(k =>
+            `<option value="${k.id}">${esc(k.nome)}${k.ja_vinculado_a ? ` — já em ${esc(k.ja_vinculado_a)}` : ''}</option>`
+        ).join('');
+}
+
+function editarProduto(id) {
+    const p = produtosDaConta.find(x => x.id === id);
+    if (!p) return;
+    editandoProdutoId = id;
+    document.getElementById('pNome').value = p.nome;
+    document.getElementById('pNomeFatura').value = p.nome_na_fatura || '';
+    document.getElementById('pCusto').value = p.custo_unidade == null ? '' : p.custo_unidade;
+    document.getElementById('pNomesVenda').value = (p.nomes_na_venda || []).join(', ');
+    if (document.getElementById('pKit')) document.getElementById('pKit').value = p.kit_id ?? '';
+    document.getElementById('tituloFormProduto').textContent = 'Editar produto';
+    document.getElementById('btnSalvarProduto').textContent = 'Salvar alterações';
+    document.getElementById('btnCancelarProduto').style.display = '';
+    document.getElementById('pNome').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function limparFormProduto() {
+    editandoProdutoId = null;
+    ['pNome','pNomeFatura','pCusto','pNomesVenda'].forEach(id => document.getElementById(id).value = '');
+    if (document.getElementById('pKit')) document.getElementById('pKit').value = '';
+    document.getElementById('tituloFormProduto').textContent = 'Cadastrar produto';
+    document.getElementById('btnSalvarProduto').textContent = 'Cadastrar produto';
+    document.getElementById('btnCancelarProduto').style.display = 'none';
+}
+
+document.getElementById('btnCancelarProduto').onclick = limparFormProduto;
+
+document.getElementById('formProduto').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById('btnSalvarProduto');
+    btn.disabled = true;
+    const custo = document.getElementById('pCusto').value.trim();
+    const corpo = {
+        nome: document.getElementById('pNome').value.trim(),
+        nome_na_fatura: document.getElementById('pNomeFatura').value.trim() || null,
+        // Campo vazio manda null, não zero: zero seria "custa nada" e o lucro sairia inflado.
+        custo_unidade: custo === '' ? null : custo,
+        nomes_na_venda: document.getElementById('pNomesVenda').value,
+        kit_id: document.getElementById('pKit')?.value || null,
+    };
+    try {
+        if (editandoProdutoId) {
+            await api(`/admin/produtor/contas/${contaId}/produtos/${editandoProdutoId}`,
+                { method: 'PATCH', body: JSON.stringify(corpo) });
+        } else {
+            const novo = await api(`/admin/produtor/contas/${contaId}/produtos`,
+                { method: 'POST', body: JSON.stringify(corpo) });
+            produtoId = novo.id;
+        }
+        limparFormProduto();
+        await carregarTudo();
+    } catch (e) {
+        mostrarErro(e.message);
+    } finally {
+        btn.disabled = false;
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Red Rock
@@ -964,7 +1113,7 @@ async function salvarToken(e) {
     const btn = document.getElementById('btnSalvarToken');
     btn.disabled = true; btn.textContent = 'Testando…';
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock`, {
+        await api(`/admin/produtor/contas/${contaId}/integracoes/redrock`, {
             method: 'POST', body: JSON.stringify({ token: campo.value.trim() }),
         });
         // Limpa o campo antes de qualquer outra coisa: não há motivo para a token continuar viva
@@ -981,7 +1130,7 @@ async function testarRedRock() {
     const btn = document.getElementById('btnTestarRR');
     btn.disabled = true; btn.textContent = 'Testando…';
     try {
-        const r = await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock/testar`, { method: 'POST' });
+        const r = await api(`/admin/produtor/contas/${contaId}/integracoes/redrock/testar`, { method: 'POST' });
         document.getElementById('statusSync').innerHTML =
             `<div class="aviso" style="background:var(--success-bg); border-color:var(--success)">
                 <i class="fas fa-circle-check" style="color:var(--success)"></i>
@@ -997,7 +1146,7 @@ async function testarRedRock() {
 async function removerTokenRedRock() {
     if (!confirm('Remover a token da Red Rock? O custo já sincronizado continua na tela; só as próximas sincronizações param.')) return;
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/integracoes/redrock`, { method: 'DELETE' });
+        await api(`/admin/produtor/contas/${contaId}/integracoes/redrock`, { method: 'DELETE' });
         await carregarResumo();
     } catch (err) { mostrarErro(err.message); }
 }
@@ -1015,7 +1164,7 @@ async function sincronizarRedRock(e) {
     btn.innerHTML = '<i class="fas fa-rotate fa-spin"></i> Lendo a Red Rock…';
     status.innerHTML = '';
     try {
-        ultimoSync = await api(`/admin/produtor/clientes/${clienteId}/redrock/sincronizar`, {
+        ultimoSync = await api(`/admin/produtor/contas/${contaId}/redrock/sincronizar`, {
             method: 'POST', body: JSON.stringify({ from: de, to: ate }),
         });
         // O resultado é desenhado pelo renderIntegracao, com o resto da tela já atualizada — assim
@@ -1172,7 +1321,7 @@ async function aplicarFreteMedido() {
     const btn = document.getElementById('btnAplicarFrete');
     btn.disabled = true; btn.textContent = 'Aplicando…';
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/redrock/frete/aplicar`, { method: 'POST' });
+        await api(`/admin/produtor/contas/${contaId}/redrock/frete/aplicar`, { method: 'POST' });
         await carregarResumo();
     } catch (err) {
         mostrarErro(err.message);
@@ -1184,6 +1333,122 @@ async function aplicarFreteMedido() {
 // Render
 // ─────────────────────────────────────────────────────────────────────────────
 /**
+ * O que a tela mostra depende do que já foi cadastrado.
+ *
+ * Antes ela desenhava tudo, sempre: com a conta vazia dava dois mil pixels de altura, uma tabela
+ * com trinta linhas de $0,00 e cinco avisos amarelos empilhados dizendo a mesma coisa. Quem abria
+ * não tinha como saber por onde começar.
+ *
+ * Agora cada bloco só aparece quando tem o que mostrar, e o guia diz qual é a próxima ação. A tela
+ * cresce junto com o cadastro — e quando está tudo pronto, é a tela inteira.
+ */
+function aplicarVisibilidade(e) {
+    const mostrar = (id, cond) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = cond ? '' : 'none';
+    };
+    // Produtos e importação existem desde o primeiro minuto: são os dois primeiros passos.
+    mostrar('secProdutos', true);
+    mostrar('secImportar', e.temProduto);
+    // Previsão precisa de venda E de custo. Sem custo ela sai só com pick e frete, muito menor do
+    // que a fatura — e um número muito errado é pior que nenhum.
+    mostrar('secPrevisao', e.temVendas && e.temCusto);
+    mostrar('secOfertas', e.temProduto && (e.temVendas || e.temOfertas));
+    mostrar('secFulfillment', e.temCusto);
+    mostrar('secRedRock', e.temProduto);
+    mostrar('secFaturas', e.temTabela || e.temFatura);
+    // Previsto vs Real só faz sentido quando existe um REAL para comparar.
+    mostrar('secPrevReal', e.temFatura);
+    // Os KPIs seguram o lucro. Sem custo não há lucro a mostrar, e mostrar "$0" ali seria dizer
+    // que o lucro é zero quando a verdade é que ele é desconhecido.
+    mostrar('kpis', e.temVendas);
+    document.getElementById('barraPeriodo').style.display = e.temVendas ? '' : 'none';
+}
+
+/** Estado do cadastro, num lugar só — as duas funções que decidem a tela leem daqui. */
+function etapasDoCadastro() {
+    return {
+        temProduto: produtosDaConta.length > 0,
+        temVendas: (previsao?.transacoes ?? 0) > 0 || importacoes.length > 0,
+        temCusto: produtosDaConta.some(p => p.custo_unidade != null),
+        temTabela: !!tabelaFulfillment,
+        temOfertas: ofertas.length > 0,
+        temFatura: faturasDoKit.length > 0,
+    };
+}
+
+/**
+ * A tela quando não existe conta de produtor nenhuma.
+ *
+ * É o passo antes do passo zero. Não usa a faixa vermelha porque não é erro: é uma instalação onde
+ * o Produtor ainda não foi usado.
+ */
+function renderPrimeiraConta() {
+    ['secProdutos','secImportar','secPrevisao','secPrevReal','secOfertas','secFulfillment','secRedRock','secFaturas','kpis']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    document.getElementById('barraPeriodo').style.display = 'none';
+    document.getElementById('tituloCliente').textContent = 'Produtor';
+    document.getElementById('subtitulo').textContent =
+        'Custo, fatura do fulfillment e margem — dados próprios, isolados dos da MailX';
+
+    const g = document.getElementById('guia');
+    g.style.display = 'block';
+    g.classList.remove('pronto');
+    document.getElementById('passos').innerHTML = '';
+    document.getElementById('guiaTitulo').textContent = 'Crie a conta de produtor';
+    document.getElementById('guiaTexto').textContent =
+        'A conta é a empresa que vende o produto e paga o custo dele — a DirectX, por exemplo. ' +
+        'Ela não precisa ser cliente da MailX; se for, dá para ligar as duas depois.';
+    document.getElementById('guiaAcoes').innerHTML = `
+        <form id="formConta" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center">
+            <input id="novaContaNome" type="text" required placeholder="Nome da empresa"
+                   style="padding:0.5rem 0.7rem; border-radius:8px; border:1px solid var(--border);
+                          background:var(--surface-2); color:var(--text); font-family:inherit; font-size:0.82rem">
+            <button class="btn" type="submit">Criar conta</button>
+        </form>`;
+    document.getElementById('formConta').onsubmit = async (ev) => {
+        ev.preventDefault();
+        try {
+            const nova = await api('/admin/produtor/contas', {
+                method: 'POST',
+                body: JSON.stringify({ nome: document.getElementById('novaContaNome').value.trim() }),
+            });
+            contaId = String(nova.id);
+            history.replaceState(null, '', `?id=${contaId}`);
+            await carregarTudo();
+        } catch (e) { mostrarErro(e.message); }
+    };
+}
+
+/**
+ * A tela quando a conta ainda não tem produto nenhum.
+ *
+ * Não é erro, é o passo zero — e por isso não usa a faixa vermelha. A versão anterior mandava
+ * esperar "a primeira venda pelo webhook", instrução impossível de seguir numa conta de produtor:
+ * as vendas dela chegam pelo export da Digistore e pela Red Rock, nunca por webhook da MailX.
+ */
+function renderPrimeiroProduto() {
+    ['secImportar','secPrevisao','secPrevReal','secOfertas','secFulfillment','secRedRock','secFaturas','kpis']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    document.getElementById('barraPeriodo').style.display = 'none';
+    document.getElementById('secProdutos').style.display = '';
+    document.getElementById('corpoProdutos').innerHTML =
+        '<tr><td colspan="5" class="vazio">Nenhum produto cadastrado ainda.</td></tr>';
+
+    const g = document.getElementById('guia');
+    g.style.display = 'block';
+    g.classList.remove('pronto');
+    document.getElementById('passos').innerHTML = '';
+    document.getElementById('guiaTitulo').textContent = 'Comece cadastrando o produto';
+    document.getElementById('guiaTexto').textContent =
+        'O produto é o que o custo, as ofertas e as faturas se penduram. Basta o nome — o custo por ' +
+        'unidade pode entrar depois, e a tela avisa enquanto ele faltar.';
+    document.getElementById('guiaAcoes').innerHTML =
+        `<button class="btn" onclick="document.getElementById('pNome').focus()">Cadastrar produto</button>`;
+    carregarKitsDisponiveis();
+}
+
+/**
  * Guia de etapas — heurísticas 1 (status), 5 (prevenção) e 8 (minimalismo).
  *
  * A tela tem seis cards e só faz sentido preenchidos numa ordem. Antes ela abria com cinco faixas
@@ -1192,13 +1457,12 @@ async function aplicarFreteMedido() {
  * bolinhas mostram onde você está no caminho.
  */
 function renderGuia() {
-    const temVendas = (previsao?.transacoes ?? 0) > 0 || importacoes.length > 0;
-    const temCusto = custosProduto.length > 0;
-    const temTabela = !!tabelaFulfillment;
-    const temOfertas = ofertas.length > 0;
-    const temFatura = faturasDoKit.length > 0;
+    const e = etapasDoCadastro();
+    aplicarVisibilidade(e);
+    const { temVendas, temCusto, temTabela, temOfertas, temFatura } = e;
 
     const etapas = [
+        { nome: 'Produto', feito: e.temProduto },
         { nome: 'Importar vendas', feito: temVendas },
         { nome: 'Custo do produto', feito: temCusto },
         { nome: 'Preços do fulfillment', feito: temTabela },
@@ -1216,14 +1480,19 @@ function renderGuia() {
     const rolarPara = (id) => `document.getElementById('${id}').scrollIntoView({behavior:'smooth',block:'center'})`;
     const passos = [
         {
-            titulo: 'Comece importando as vendas',
+            titulo: 'Cadastre o produto',
+            texto: 'É o que o custo, as ofertas e as faturas se penduram. Basta o nome para começar.',
+            acao: `<button class="btn" onclick="document.getElementById('pNome').focus()">Cadastrar produto</button>`,
+        },
+        {
+            titulo: 'Importe as vendas',
             texto: 'Exporte as transações da Digistore e suba o arquivo. É de onde sai tudo: quantas unidades foram vendidas, quantos pedidos foram despachados e o faturamento. Sem isso não há o que prever.',
             acao: `<button class="btn" onclick="${rolarPara('arquivoCsv')}">Ir para a importação</button>`,
         },
         {
             titulo: 'Diga quanto custa cada unidade',
             texto: 'O custo por pote, com o nome exatamente como aparece na fatura do fulfillment. É a maior fatia do invoice — sem ele a previsão sai muito menor do que a realidade.',
-            acao: `<button class="btn" onclick="${rolarPara('cNomeFatura')}">Cadastrar custo</button>`,
+            acao: `<button class="btn" onclick="${rolarPara('pCusto')}">Cadastrar custo</button>`,
         },
         {
             titulo: 'Cadastre os preços do fulfillment',
@@ -1270,16 +1539,16 @@ function palpiteProduto(sug) {
     const chave = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const n = chave(sug.nome);
     // Do nome mais longo para o mais curto: "divinepuritydrops" tem que ganhar de "divinepurity".
-    const candidatos = custosProduto
-        .map(c => ({ kit_id: c.kit_id, k: chave(c.nome_na_fatura) }))
-        .filter(c => c.k && n.includes(c.k))
+    const candidatos = produtosDaConta
+        .map(p => ({ id: p.id, k: chave(p.nome_na_fatura) }))
+        .filter(p => p.k && n.includes(p.k))
         .sort((a, b) => b.k.length - a.k.length);
-    if (candidatos.length) return candidatos[0].kit_id;
-    const porNome = produtosDoCliente
+    if (candidatos.length) return candidatos[0].id;
+    const porNome = produtosDaConta
         .map(p => ({ id: p.id, k: chave(p.nome) }))
         .filter(p => p.k && n.includes(p.k))
         .sort((a, b) => b.k.length - a.k.length);
-    return porNome.length ? porNome[0].id : kitId;
+    return porNome.length ? porNome[0].id : produtoId;
 }
 
 /** Heurística 7: as 15 ofertas de uma vez, com o dado que o arquivo já tem. */
@@ -1296,7 +1565,7 @@ function renderSugestoes() {
                     ? '<span style="color:var(--warning)">sem contagem de unidades no nome — cadastre manualmente</span>'
                     : inteiro(x.unidades) + ' unidade(s) por venda'}${x.ja_existe ? ' · já cadastrada' : ''}</small></span>
             <select data-produto="${i}" ${x.ja_existe ? 'disabled' : ''} style="font-size:0.72rem; padding:0.25rem 0.4rem">
-                ${produtosDoCliente.map(pr => `<option value="${pr.id}" ${pr.id === palpiteProduto(x) ? 'selected' : ''}>${esc(pr.nome)}</option>`).join('')}
+                ${produtosDaConta.map(pr => `<option value="${pr.id}" ${pr.id === palpiteProduto(x) ? 'selected' : ''}>${esc(pr.nome)}</option>`).join('')}
             </select>
             <span class="num">${fmt0(x.preco_referencia)}</span>
         </div>`).join('');
@@ -1314,7 +1583,7 @@ document.getElementById('btnCadastrarLote')?.addEventListener('click', async () 
     btn.disabled = true; btn.textContent = 'Cadastrando…';
     try {
         const taxa = parseFloat(document.getElementById('fTaxa').value) || 0;
-        const r = await api(`/admin/produtor/clientes/${clienteId}/ofertas-em-lote`, {
+        const r = await api(`/admin/produtor/contas/${contaId}/ofertas-em-lote`, {
             method: 'POST',
             body: JSON.stringify({
                 ofertas: marcados.map(({ x, i }) => ({
@@ -1382,8 +1651,12 @@ function renderPrevisao() {
         </table></div>`;
     }
 
-    // A série diária é o pedido: ver o invoice se formando, em vez de descobrir quando o papel chega.
-    if (p.por_dia.length) {
+    // A série diária é o pedido do chefe: ver o invoice se formando, em vez de descobrir quando o
+    // papel chega. Só que ela SÓ existe quando há custo cadastrado — sem isso, todo dia acumula
+    // $0,00 e o que aparece é uma tabela de trinta linhas de zero, o elemento mais alto da tela
+    // carregando zero informação. Era o pior pedaço da versão anterior.
+    const totalAcumulado = p.por_dia.reduce((soma, d) => soma + (d.acumulado_fixo || 0), 0);
+    if (p.por_dia.length && totalAcumulado > 0) {
         const max = Math.max(...p.por_dia.map(d => d.acumulado_fixo), 1);
         html += `<div style="margin-top:1.1rem">
             <div style="font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:0.5rem">
@@ -1401,6 +1674,12 @@ function renderPrevisao() {
                 </tr>`).join('')}</tbody>
             </table></div>
         </div>`;
+    } else if (p.por_dia.length) {
+        html += `<div class="aviso" style="margin-top:1rem">
+            <i class="fas fa-circle-info"></i>
+            <span>A série dia a dia aparece assim que houver custo por unidade cadastrado — antes
+            dela, cada dia acumularia zero.</span>
+        </div>`;
     }
     document.getElementById('detalhePrevisao').innerHTML = html;
 }
@@ -1414,25 +1693,6 @@ function renderFulfillment() {
         v('tFreteMin', t.frete_pedido_min); v('tFreteTip', t.frete_pedido_tipico);
         v('tFreteMax', t.frete_pedido_max); v('tFator', t.fator_pedidos);
     }
-    document.getElementById('corpoCustos').innerHTML = custosProduto.length === 0
-        ? `<tr><td colspan="4" class="vazio">Nenhum custo cadastrado. Sem ele o lucro aparece maior do que é.</td></tr>`
-        : custosProduto.map(c => `<tr>
-            <td class="nome-linha">${esc(c.produto)}</td>
-            <td>${esc(c.nome_na_fatura)}</td>
-            <td class="num">${fmt(c.custo_unidade, 4)}</td>
-            <td><button class="btn mini ghost" onclick="editarCusto(${c.kit_id})">Editar</button></td>
-        </tr>`).join('');
-    document.getElementById('cProduto').innerHTML = produtosDoCliente
-        .map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('');
-}
-
-function editarCusto(kid) {
-    const c = custosProduto.find(x => x.kit_id === kid);
-    if (!c) return;
-    document.getElementById('cProduto').value = String(kid);
-    document.getElementById('cNomeFatura').value = c.nome_na_fatura;
-    document.getElementById('cCusto').value = c.custo_unidade;
-    document.getElementById('cNomeFatura').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 let ressalvasAbertas = false;
@@ -1462,7 +1722,39 @@ document.getElementById('toggleRessalvas').addEventListener('click', () => {
 function renderKpis() {
     const f = resumo.faturamento, res = resumo.resultado;
     const origem = { real: 'da fatura', previsto: 'previsão — sem fatura', misto: 'fatura + previsão' }[res.custo_fulfillment_origem];
-    const ticket = f.vendas > 0 ? f.total / f.vendas : null;
+
+    // Sem custo cadastrado, custo e lucro são DESCONHECIDOS, não zero. Mostrar "$0" ali dizia que
+    // o produto não custa nada e que o lucro é zero, e o card verde de destaque dava ao número
+    // falso a aparência do número mais confiável da tela.
+    const prod = produtosDaConta.find(p => p.id === produtoId);
+    const semCusto = !prod || prod.custo_unidade == null;
+
+    // Nenhuma venda casou com ESTE produto no período. Acontece o tempo todo no meio do cadastro:
+    // as vendas já foram importadas, mas ainda não existe oferta que as reconheça, e o nome do
+    // produto no export ("M3 - Divine Purity Drops (6 Bottles)") não é o nome de casa.
+    //
+    // A versão anterior mostrava $0 em recebido, taxa, reembolso e lucro. Cinco zeros lado a lado
+    // dizem "vendemos nada e lucramos nada", quando a verdade é "ainda não sabemos quais vendas
+    // são deste produto" — e é justamente aí que a próxima ação importa.
+    if (resumo.faturamento.vendas === 0) {
+        document.getElementById('kpis').innerHTML = `
+            <div class="kpi" style="grid-column:1/-1">
+                <span class="k">Sem venda reconhecida neste produto</span>
+                <span class="d" style="font-size:0.78rem; line-height:1.5; margin-top:0.35rem">
+                    ${resumo.origem_vendas === 'nenhuma'
+                        ? 'Nenhuma venda importada ainda nesta conta. Suba o export da Digistore para os números aparecerem.'
+                        : 'As vendas foram importadas, mas nenhuma foi reconhecida como deste produto — ' +
+                          'é a oferta que faz esse vínculo, pelo id do gateway. Cadastre as ofertas e ' +
+                          'os números aparecem aqui.'}
+                    <br><b>Faturamento e lucro ficam em branco de propósito:</b> zero aqui diria que não
+                    houve venda, quando o que falta é saber quais vendas são deste produto.
+                </span>
+            </div>`;
+        document.getElementById('notaReceita').style.display = 'none';
+        document.getElementById('escopoPrevReal').textContent = rotuloPeriodo();
+        document.getElementById('escopoOfertas').textContent = rotuloPeriodo();
+        return;
+    }
 
     document.getElementById('kpis').innerHTML = `
         <div class="kpi">
@@ -1481,18 +1773,20 @@ function renderKpis() {
         </div>
         <div class="kpi">
             <span class="k">Custo do produto</span>
-            <span class="v num custo">${fmt0(res.custo_fulfillment_usado)}</span>
-            <span class="d">${origem}</span>
+            <span class="v num custo">${semCusto ? '—' : fmt0(res.custo_fulfillment_usado)}</span>
+            <span class="d">${semCusto ? 'custo por unidade não cadastrado' : origem}</span>
         </div>
         <div class="kpi">
             <span class="k">Reembolso</span>
             <span class="v num perda">${fmt0(resumo.reembolso.valor)}</span>
             <span class="d">${inteiro(resumo.reembolso.quantidade)} pedido(s) · custo não devolvido</span>
         </div>
-        <div class="kpi destaque">
+        <div class="kpi ${semCusto ? '' : 'destaque'}">
             <span class="k">Lucro</span>
-            <span class="v num">${fmt0(res.lucro)}</span>
-            <span class="d">${pct(res.margem_pct)} sobre o ${res.base_do_lucro === 'recebido' ? 'recebido' : 'BRUTO (otimista)'}</span>
+            <span class="v num">${semCusto ? '—' : fmt0(res.lucro)}</span>
+            <span class="d">${semCusto
+                ? 'depende do custo por unidade'
+                : `${pct(res.margem_pct)} sobre o ${res.base_do_lucro === 'recebido' ? 'recebido' : 'BRUTO (otimista)'}`}</span>
         </div>
     `;
     // "Faturamento" com três definições possíveis é o rótulo que faz duas pessoas discutirem
@@ -1637,7 +1931,7 @@ function renderOfertas() {
 }
 
 async function renderFaturas() {
-    const faturas = await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/faturas`);
+    const faturas = await api(`/admin/produtor/contas/${contaId}/produtos/${produtoId}/faturas`);
     faturasDoKit = faturas;
     document.getElementById('corpoFaturas').innerHTML = faturas.length === 0
         ? `<tr><td colspan="7" class="vazio">Nenhuma fatura lançada. Sem ela, o custo da tela é previsão.</td></tr>`
@@ -1718,9 +2012,9 @@ document.getElementById('formOferta').addEventListener('submit', async (e) => {
     try {
         const corpo = lerFormOferta();
         if (editandoOfertaId) {
-            await api(`/admin/produtor/clientes/${clienteId}/ofertas/${editandoOfertaId}`, { method: 'PATCH', body: JSON.stringify(corpo) });
+            await api(`/admin/produtor/contas/${contaId}/ofertas/${editandoOfertaId}`, { method: 'PATCH', body: JSON.stringify(corpo) });
         } else {
-            await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/ofertas`, { method: 'POST', body: JSON.stringify(corpo) });
+            await api(`/admin/produtor/contas/${contaId}/produtos/${produtoId}/ofertas`, { method: 'POST', body: JSON.stringify(corpo) });
         }
         cancelarEdicao();
         await carregarResumo();
@@ -1761,7 +2055,7 @@ async function apagarOferta(id) {
     const o = ofertas.find(x => x.id === id);
     if (!confirm(`Apagar a oferta "${o?.nome ?? id}"?\n\nAs vendas dela continuam no faturamento, mas voltam a ficar sem custo — e saem do lucro.`)) return;
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/ofertas/${id}`, { method: 'DELETE' });
+        await api(`/admin/produtor/contas/${contaId}/ofertas/${id}`, { method: 'DELETE' });
         await carregarResumo();
     } catch (e) { mostrarErro(e.message); }
 }
@@ -1771,7 +2065,7 @@ document.getElementById('formFatura').addEventListener('submit', async (e) => {
     const btn = document.getElementById('btnSalvarFatura');
     btn.disabled = true; btn.textContent = 'Lançando…';
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/kits/${kitId}/faturas`, {
+        await api(`/admin/produtor/contas/${contaId}/produtos/${produtoId}/faturas`, {
             method: 'POST',
             body: JSON.stringify({
                 fornecedor: document.getElementById('gFornecedor').value,
@@ -1813,7 +2107,7 @@ document.getElementById('btnImportar').addEventListener('click', async () => {
         } catch (_) {
             texto = new TextDecoder('windows-1252').decode(bytes);
         }
-        const r = await fetch(`/admin/produtor/clientes/${clienteId}/importar?arquivo=${encodeURIComponent(arq.name)}`, {
+        const r = await fetch(`/admin/produtor/contas/${contaId}/importar?arquivo=${encodeURIComponent(arq.name)}`, {
             method: 'POST', headers: { 'Content-Type': 'text/csv', 'Accept': 'application/json' }, body: texto,
         });
         const d = await r.json();
@@ -1849,7 +2143,7 @@ async function desfazerImport(id, arquivo, gravadas) {
     if (!confirm(`Desfazer a importação de "${arquivo}"?\n\n${gravadas} venda(s) serão removidas. ` +
                  `As que já tinham vindo em outra importação continuam — elas pertencem à primeira.`)) return;
     try {
-        const r = await api(`/admin/produtor/clientes/${clienteId}/importacoes/${id}`, { method: 'DELETE' });
+        const r = await api(`/admin/produtor/contas/${contaId}/importacoes/${id}`, { method: 'DELETE' });
         document.getElementById('resultadoImport').innerHTML =
             `<div class="aviso"><i class="fas fa-rotate-left"></i><span>Importação desfeita: ${inteiro(r.vendas_removidas)} venda(s) removidas.</span></div>`;
         await carregarResumo();
@@ -1859,7 +2153,7 @@ async function desfazerImport(id, arquivo, gravadas) {
 
 async function carregarHistoricoImport() {
     try {
-        const lista = await api(`/admin/produtor/clientes/${clienteId}/importacoes`);
+        const lista = await api(`/admin/produtor/contas/${contaId}/importacoes`);
         document.getElementById('historicoImport').innerHTML = lista.length === 0 ? '' : `
             <div class="scroll"><table>
                 <thead><tr><th>Arquivo</th><th>Período</th><th>Gravadas</th><th>Repetidas</th><th></th></tr></thead>
@@ -1878,7 +2172,7 @@ document.getElementById('formFulfillment').addEventListener('submit', async (e) 
     e.preventDefault();
     const g = (id) => document.getElementById(id).value;
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/fulfillment`, {
+        await api(`/admin/produtor/contas/${contaId}/fulfillment`, {
             method: 'PUT',
             body: JSON.stringify({
                 fornecedor: g('tFornecedor'),
@@ -1892,26 +2186,10 @@ document.getElementById('formFulfillment').addEventListener('submit', async (e) 
     } catch (err) { mostrarErro(err.message); }
 });
 
-document.getElementById('formCusto').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-        const kid = parseInt(document.getElementById('cProduto').value, 10);
-        await api(`/admin/produtor/clientes/${clienteId}/kits/${kid}/custo`, {
-            method: 'PUT',
-            body: JSON.stringify({
-                nome_na_fatura: document.getElementById('cNomeFatura').value,
-                custo_unidade: document.getElementById('cCusto').value,
-            }),
-        });
-        document.getElementById('formCusto').reset();
-        await carregarResumo();
-    } catch (err) { mostrarErro(err.message); }
-});
-
 async function apagarFatura(id) {
     if (!confirm('Apagar esta fatura?\n\nO custo do período dela volta a ser previsão.')) return;
     try {
-        await api(`/admin/produtor/clientes/${clienteId}/faturas/${id}`, { method: 'DELETE' });
+        await api(`/admin/produtor/contas/${contaId}/faturas/${id}`, { method: 'DELETE' });
         await carregarResumo();
     } catch (e) { mostrarErro(e.message); }
 }

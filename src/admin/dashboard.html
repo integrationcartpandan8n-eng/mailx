@@ -1079,9 +1079,9 @@
                     <div class="chart-card" style="padding:0.9rem 1.1rem; margin-bottom:1rem">
                         <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
                             <span style="font-size:0.72rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#6b7a99">
-                                <i class="fas fa-sack-dollar" style="color:#ffb020"></i> Produtor
+                                <i class="fas fa-sack-dollar" style="color:#ffb020"></i> Conta
                             </span>
-                            <select id="produtor-cliente" style="background:#0f1626; color:#e8eefc; border:1px solid #223050; border-radius:8px; padding:0.4rem 0.6rem; font-size:0.78rem; font-family:inherit"></select>
+                            <select id="produtor-conta" style="background:#0f1626; color:#e8eefc; border:1px solid #223050; border-radius:8px; padding:0.4rem 0.6rem; font-size:0.78rem; font-family:inherit"></select>
                             <span id="produtor-aviso" style="font-size:0.72rem; color:#6b7a99"></span>
                             <a id="produtor-link" href="/admin/produtor" target="_blank" rel="noopener"
                                style="margin-left:auto; font-size:0.72rem; color:#4b8df8; text-decoration:none">
@@ -1184,7 +1184,7 @@
         // aqui: quem calcula é a própria página, contra as rotas /admin/produtor/*. Este bloco não
         // lê nem escreve nada da MailX.
         async function loadProdutor() {
-            const sel = document.getElementById('produtor-cliente');
+            const sel = document.getElementById('produtor-conta');
             const aviso = document.getElementById('produtor-aviso');
             const frame = document.getElementById('produtor-frame');
             const link = document.getElementById('produtor-link');
@@ -1194,41 +1194,44 @@
                 // daqui já mostra.
                 frame.src = `/admin/produtor?id=${encodeURIComponent(id)}&embed=1`;
                 link.href = `/admin/produtor?id=${encodeURIComponent(id)}`;
-                try { localStorage.setItem('produtorClienteId', String(id)); } catch (_) {}
+                try { localStorage.setItem('produtorContaId', String(id)); } catch (_) {}
             };
 
             try {
-                const r = await fetch('/admin/produtor/clientes', { headers: { Accept: 'application/json' } });
+                const r = await fetch('/admin/produtor/contas', { headers: { Accept: 'application/json' } });
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                const clientes = await r.json();
+                const contas = await r.json();
 
-                if (clientes.length === 0) {
-                    aviso.textContent = 'Nenhum cliente cadastrado ainda.';
+                if (contas.length === 0) {
+                    // Não é erro: é uma instalação sem produtor nenhum ainda. O link abre a tela,
+                    // que começa pelo cadastro da conta.
+                    aviso.innerHTML = 'Nenhuma conta de produtor ainda. <a href="/admin/produtor" style="color:#4b8df8">Criar a primeira</a>.';
                     sel.style.display = 'none';
+                    frame.style.display = 'none';
                     return;
                 }
 
-                sel.innerHTML = clientes.map(c =>
-                    `<option value="${c.id}">${(c.nome || 'Cliente ' + c.id).replace(/[<>&"]/g, '')}${c.configurado ? '' : ' — sem dados de produtor'}</option>`
+                sel.innerHTML = contas.map(c =>
+                    `<option value="${c.id}">${String(c.nome || 'Conta ' + c.id).replace(/[<>&"]/g, '')}${c.cliente_mailx ? ' · ' + String(c.cliente_mailx).replace(/[<>&"]/g, '') + ' na MailX' : ''}</option>`
                 ).join('');
 
                 // Lembra a última escolha; senão abre no primeiro, que a rota já devolve ordenado
                 // com quem tem dado de produtor na frente.
                 let escolhido = null;
-                try { escolhido = localStorage.getItem('produtorClienteId'); } catch (_) {}
-                if (!escolhido || !clientes.some(c => String(c.id) === String(escolhido))) {
-                    escolhido = clientes[0].id;
+                try { escolhido = localStorage.getItem('produtorContaId'); } catch (_) {}
+                if (!escolhido || !contas.some(c => String(c.id) === String(escolhido))) {
+                    escolhido = contas[0].id;
                 }
                 sel.value = String(escolhido);
                 sel.onchange = () => abrir(sel.value);
                 abrir(escolhido);
 
-                if (!clientes.some(c => c.configurado)) {
-                    aviso.textContent = 'Nenhum cliente tem custo cadastrado ainda — a tela abre no passo a passo.';
+                if (!contas.some(c => c.configurado)) {
+                    aviso.textContent = 'Nenhuma conta configurada ainda — a tela abre no passo a passo.';
                 }
             } catch (e) {
                 // A falha aparece no lugar do seletor, com o motivo, em vez de um iframe em branco.
-                aviso.innerHTML = `Não foi possível listar os clientes (${String(e.message).replace(/[<>&"]/g, '')}).`;
+                aviso.innerHTML = `Não foi possível listar as contas de produtor (${String(e.message).replace(/[<>&"]/g, '')}).`;
                 aviso.style.color = '#ff4d6a';
                 sel.style.display = 'none';
             }

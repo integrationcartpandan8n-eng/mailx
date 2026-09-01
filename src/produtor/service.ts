@@ -1,9 +1,11 @@
 /**
  * Cálculo da aba Produtor: faturamento do produto, custo previsto, custo real (fatura) e lucro.
  *
- * Este módulo só LÊ webhook_logs. Não escreve nada fora das tabelas `produtor_*`, não toca em
- * atribuição, UTM, nem em qualquer coisa que a aba SMS use — um erro aqui pode fazer a aba Produtor
- * mostrar um número errado, mas não pode mexer num número da MailX.
+ * O escopo é a CONTA DE PRODUTOR, não o cliente da MailX. Quando a conta tem a ponte com um
+ * cliente preenchida — a DirectX vai ter, porque a MailX vai fazer o SMS e o email dela — este
+ * módulo pode LER webhook_logs daquele cliente. Nunca escreve nada fora das tabelas `produtor_*`,
+ * não toca em atribuição, UTM, nem em qualquer coisa que a aba SMS use: um erro aqui pode fazer a
+ * aba Produtor mostrar um número errado, mas não pode mexer num número da MailX.
  *
  * As três regras que sustentam o resto:
  *
@@ -32,10 +34,42 @@ export interface Periodo {
   to: string;   // YYYY-MM-DD
 }
 
+/** A empresa que vende o produto. client_id preenchido = ponte com um cliente da MailX. */
+export interface Conta {
+  id: number;
+  nome: string;
+  moeda: string;
+  client_id: number | null;
+}
+
+/**
+ * Produto do produtor. Os três nomes existem porque três sistemas escrevem o mesmo produto de
+ * jeitos diferentes, e casar por semelhança atribuiria o custo de um produto ao outro.
+ */
+export interface Produto {
+  id: number;
+  conta_id: number;
+  nome: string;
+  nomes_na_venda: string[];
+  nome_na_fatura: string | null;
+  custo_unidade: number | null;
+  kit_id: number | null;
+}
+
+/**
+ * De onde vieram as vendas que a tela está mostrando.
+ *
+ * Precisa aparecer NA TELA, não só aqui: 'importado' é o export da Digistore da conta do produtor,
+ * 'webhook' são as vendas que chegam pela MailX no cliente vinculado. São contas diferentes num
+ * gateway diferente — apresentar as duas como "vendas" sem dizer qual é qual deixaria alguém
+ * comparar dois períodos que vieram de fontes distintas sem perceber.
+ */
+export type OrigemVendas = 'importado' | 'webhook' | 'nenhuma';
+
 export interface OfertaRow {
   id: number;
-  client_id: number;
-  kit_id: number;
+  conta_id: number;
+  produto_id: number;
   nome: string;
   unidades: number;
   preco: number;
@@ -60,8 +94,8 @@ export const CATEGORIAS_FATURA: CategoriaFatura[] = [
 
 export interface FaturaRow {
   id: number;
-  client_id: number;
-  kit_id: number | null;
+  conta_id: number;
+  produto_id: number | null;
   fornecedor: string;
   numero: string | null;
   categoria: CategoriaFatura;
@@ -118,8 +152,8 @@ function dataTexto(v: any): string {
 export function mapOferta(r: any): OfertaRow {
   return {
     id: r.id,
-    client_id: r.client_id,
-    kit_id: r.kit_id,
+    conta_id: r.conta_id,
+    produto_id: r.produto_id,
     nome: r.nome,
     unidades: parseInt(r.unidades, 10) || 0,
     preco: num(r.preco),
@@ -131,10 +165,10 @@ export function mapOferta(r: any): OfertaRow {
   };
 }
 
-export async function listarOfertas(clientId: number, kitId: number): Promise<OfertaRow[]> {
+export async function listarOfertas(contaId: number, produtoId: number): Promise<OfertaRow[]> {
   const rows = await query(
-    `SELECT * FROM produtor_ofertas WHERE client_id = $1 AND kit_id = $2 ORDER BY preco DESC, id`,
-    [clientId, kitId]
+    `SELECT * FROM produtor_ofertas WHERE conta_id = $1 AND produto_id = $2 ORDER BY preco DESC, id`,
+    [contaId, produtoId]
   );
   return rows.map(mapOferta);
 }
@@ -142,8 +176,8 @@ export async function listarOfertas(clientId: number, kitId: number): Promise<Of
 export function mapFatura(r: any): FaturaRow {
   return {
     id: r.id,
-    client_id: r.client_id,
-    kit_id: r.kit_id ?? null,
+    conta_id: r.conta_id,
+    produto_id: r.produto_id ?? null,
     fornecedor: r.fornecedor,
     numero: r.numero ?? null,
     categoria: r.categoria,
@@ -158,17 +192,17 @@ export function mapFatura(r: any): FaturaRow {
   };
 }
 
-export async function listarFaturas(clientId: number, kitId: number): Promise<FaturaRow[]> {
+export async function listarFaturas(contaId: number, produtoId: number): Promise<FaturaRow[]> {
   const rows = await query(
-    `SELECT id, client_id, kit_id, fornecedor, numero, categoria,
+    `SELECT id, conta_id, produto_id, fornecedor, numero, categoria,
             competencia_inicio::text AS competencia_inicio,
             competencia_fim::text    AS competencia_fim,
             emitida_em::text         AS emitida_em,
             valor, moeda, unidades, arquivo_url, observacao
        FROM produtor_faturas
-      WHERE client_id = $1 AND kit_id = $2
+      WHERE conta_id = $1 AND produto_id = $2
       ORDER BY competencia_inicio DESC, id DESC`,
-    [clientId, kitId]
+    [contaId, produtoId]
   );
   return rows.map(mapFatura);
 }
@@ -186,28 +220,44 @@ export async function listarFaturas(clientId: number, kitId: number): Promise<Fa
  * elas discordarem entre si. O GROUP BY reduz o resultado a (dias × ofertas), que é pequeno.
  */
 async function agregarVendasPorDia(
-  clientId: number,
-  kit: { id: number; name: string; external_id: string | null }
-): Promise<DiaRow[]> {
+  conta: Conta,
+  produto: Produto
+): Promise<{ dias: DiaRow[]; origem: OrigemVendas }> {
   // Mesma fonte da previsão do invoice.
   //
   // Sem isto, esta tela lia webhook_logs enquanto a previsão lia as vendas importadas — e como a
   // conta da Digistore do produto de casa não alimenta a MailX, o resultado era faturamento e
   // lucro em ZERO ao lado de uma previsão de vinte mil dólares, na mesma tela. Duas fontes para o
   // mesmo indicador é sempre ruim; com uma delas vazia, é uma tela que se desmente sozinha.
-  const importadas = await agregarVendasImportadas(clientId, kit.id);
-  if (importadas) return importadas;
+  const importadas = await agregarVendasImportadas(conta.id, produto);
+  if (importadas) return { dias: importadas, origem: 'importado' };
+
+  // Sem venda importada, só existe uma segunda fonte possível: os webhooks do cliente da MailX
+  // com quem esta conta está vinculada. Sem ponte e sem kit, não há de onde tirar venda nenhuma —
+  // e devolver lista vazia é o certo. O caminho antigo entrava aqui sempre, e era por isso que a
+  // tela abria num cliente de SMS qualquer mostrando o faturamento dele como se fosse do produtor.
+  if (conta.client_id == null || produto.kit_id == null) {
+    return { dias: [], origem: 'nenhuma' };
+  }
+
+  const kit = await queryOne<{ name: string; external_id: string | null }>(
+    `SELECT name, external_id FROM kits WHERE id = $1 AND client_id = $2`,
+    [produto.kit_id, conta.client_id]
+  );
+  // A ponte pode ter sido desfeita do outro lado (apagaram o kit e o SET NULL zerou o vínculo, ou
+  // o kit mudou de cliente). Nesse caso não há venda a mostrar, e inventar uma seria pior.
+  if (!kit) return { dias: [], origem: 'nenhuma' };
 
   const rows = await query(`
     WITH oferta AS (
       SELECT id, preco, external_ids
         FROM produtor_ofertas
-       WHERE client_id = $1 AND kit_id = $2 AND ativo
+       WHERE conta_id = $1 AND produto_id = $2 AND ativo
     ),
     venda AS (
       SELECT w.id, w.created_at, w.total_price, w.product_external_id, w.affiliate_name, w.event_type
         FROM webhook_logs w
-       WHERE w.client_id = $1
+       WHERE w.client_id = $5
          AND w.event_type IN ('order.paid', 'order.refunded', 'order.chargeback')
          -- Venda paga usa o mesmo filtro de status dos KPIs do cliente. Reembolso e chargeback
          -- não têm esse status e ficariam de fora se a condição valesse para os três.
@@ -267,9 +317,9 @@ async function agregarVendasPorDia(
     FROM casada
     GROUP BY 1, 2
     ORDER BY 2
-  `, [clientId, kit.id, kit.external_id, kit.name]);
+  `, [conta.id, produto.id, kit.external_id, kit.name, conta.client_id]);
 
-  return rows.map((r: any) => ({
+  const dias = rows.map((r: any) => ({
     oferta_id: r.oferta_id == null ? null : Number(r.oferta_id),
     dia: String(r.dia).slice(0, 10),
     // O webhook só carrega o bruto (amount_brutto). Sem o recebido, o lucro usa o bruto e a tela
@@ -282,13 +332,15 @@ async function agregarVendasPorDia(
     reembolsos: parseInt(r.reembolsos, 10) || 0,
     valor_reembolso: num(r.valor_reembolso),
   }));
+
+  return { dias, origem: dias.length > 0 ? 'webhook' : 'nenhuma' };
 }
 
 /**
  * Agregação por (oferta, dia) a partir das vendas IMPORTADAS do export da Digistore.
  *
- * Devolve null quando não há importação nenhuma — aí quem chama volta para webhook_logs, que é o
- * caminho dos clientes cujas vendas chegam pelos webhooks da MailX.
+ * Devolve null quando não há importação nenhuma — aí quem chama tenta a segunda fonte, que são os
+ * webhooks do cliente da MailX vinculado, quando existe vínculo.
  *
  * Duas diferenças em relação ao webhook, as duas com efeito no custo:
  *  - `quantidade` multiplica as unidades (comprar 2× a oferta de 6 potes são 12 potes na fatura);
@@ -296,16 +348,23 @@ async function agregarVendasPorDia(
  *    da Digistore inclui imposto que muda por estado — no export real, a mesma oferta de 6 potes
  *    aparece a 234,00, 248,04, 248,27… Casar por preço aqui não encontraria quase nada.
  */
-async function agregarVendasImportadas(clientId: number, kitId: number): Promise<DiaRow[] | null> {
+async function agregarVendasImportadas(contaId: number, produto: Produto): Promise<DiaRow[] | null> {
   const existe = await queryOne<{ n: string }>(
-    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE client_id = $1`, [clientId]
+    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE conta_id = $1`, [contaId]
   );
   if (!existe || parseInt(existe.n, 10) === 0) return null;
+
+  // Todos os nomes por que este produto pode aparecer no export. O nome na fatura entra aqui
+  // porque a Red Rock e a Digistore escrevem o mesmo produto diferente, e alguém pode ter
+  // cadastrado só um dos dois.
+  const nomes = [produto.nome, produto.nome_na_fatura, ...(produto.nomes_na_venda || [])]
+    .filter((n): n is string => !!n && n.trim() !== '')
+    .map(n => n.trim().toLowerCase());
 
   const rows = await query(`
     WITH oferta AS (
       SELECT id, preco, external_ids FROM produtor_ofertas
-       WHERE client_id = $1 AND kit_id = $2 AND ativo
+       WHERE conta_id = $1 AND produto_id = $2 AND ativo
     ),
     casada AS (
       SELECT v.*, m.oferta_id
@@ -313,22 +372,20 @@ async function agregarVendasImportadas(clientId: number, kitId: number): Promise
         LEFT JOIN LATERAL (
           SELECT o.id AS oferta_id,
                  CASE WHEN COALESCE(array_length(o.external_ids,1),0) > 0
-                       AND v.produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
+                       AND v.gateway_produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
             FROM oferta o
-           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.produto_id = ANY(o.external_ids))
+           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.gateway_produto_id = ANY(o.external_ids))
               OR (COALESCE(array_length(o.external_ids,1),0) = 0 AND v.valor_bruto IS NOT NULL
                   AND ROUND(ABS(v.valor_bruto),2) = ROUND(o.preco,2))
            ORDER BY prioridade, o.id
            LIMIT 1
         ) m ON true
-       WHERE v.client_id = $1
-         -- Só o que pertence a este produto: venda casada com oferta dele, ou venda cujo produto
-         -- na fatura é o dele. Sem esse recorte, a tela de um produto mostraria as vendas do outro.
-         AND (m.oferta_id IS NOT NULL OR EXISTS (
-               SELECT 1 FROM produtor_custo_produto c
-                WHERE c.client_id = v.client_id AND c.kit_id = $2
-                  AND LOWER(c.nome_na_fatura) = LOWER(v.produto_nome)
-             ))
+       WHERE v.conta_id = $1
+         -- Só o que pertence a este produto: venda casada com uma oferta dele, ou venda cujo nome
+         -- de produto é um dos nomes conhecidos dele. Sem esse recorte, a tela de um produto
+         -- mostraria as vendas do outro.
+         AND (m.oferta_id IS NOT NULL
+              OR LOWER(TRIM(COALESCE(v.produto_nome, ''))) = ANY($3::text[]))
     )
     SELECT
       oferta_id,
@@ -345,7 +402,7 @@ async function agregarVendasImportadas(clientId: number, kitId: number): Promise
     FROM casada
     GROUP BY 1, 2
     ORDER BY 2
-  `, [clientId, kitId]);
+  `, [contaId, produto.id, nomes]);
 
   return rows.map((r: any) => ({
     oferta_id: r.oferta_id == null ? null : Number(r.oferta_id),
@@ -415,7 +472,14 @@ export interface ResumoProdutor {
   rotulo_periodo: string;
   moeda: string;
 
-  produto: { kit_id: number; nome: string };
+  produto: { id: number; nome: string };
+
+  /**
+   * De onde vieram as vendas deste resumo. A tela precisa dizer isto ao lado do faturamento:
+   * 'importado' é o export da conta da Digistore do produtor, 'webhook' são as vendas que chegam
+   * pela MailX no cliente vinculado, 'nenhuma' é não ter nenhuma das duas.
+   */
+  origem_vendas: OrigemVendas;
 
   faturamento: {
     total: number;
@@ -499,25 +563,24 @@ export interface ResumoProdutor {
 }
 
 export async function calcularResumo(
-  clientId: number,
-  kit: { id: number; name: string; external_id: string | null },
+  conta: Conta,
+  produto: Produto,
   periodo: Periodo | null,
   moeda: string
 ): Promise<ResumoProdutor> {
-  const [ofertas, faturas, dias, tabela, custoProd] = await Promise.all([
-    listarOfertas(clientId, kit.id),
-    listarFaturas(clientId, kit.id),
-    agregarVendasPorDia(clientId, kit),
-    lerTabelaFulfillment(clientId),
-    queryOne<{ custo_unidade: string }>(
-      `SELECT custo_unidade FROM produtor_custo_produto WHERE client_id = $1 AND kit_id = $2`,
-      [clientId, kit.id]
-    ),
+  const [ofertas, faturas, vendasPorDia, tabela] = await Promise.all([
+    listarOfertas(conta.id, produto.id),
+    listarFaturas(conta.id, produto.id),
+    agregarVendasPorDia(conta, produto),
+    lerTabelaFulfillment(conta.id),
   ]);
+  const dias = vendasPorDia.dias;
 
   // O custo do fulfillment não é da oferta: o pote custa o mesmo na oferta de 6, de 3 ou de 1
-  // (isso é do PRODUTO), e pick/taxa/embalagem/frete são preços do FORNECEDOR, iguais para todas
-  // as ofertas. Foi o que as 12 faturas da Red Rock mostraram.
+  // (isso é do PRODUTO, e por isso mora em produtor_produtos), e pick/taxa/embalagem/frete são
+  // preços do FORNECEDOR, iguais para todas as ofertas. Foi o que as 12 faturas da Red Rock
+  // mostraram.
+  const custoProd = produto.custo_unidade != null ? { custo_unidade: produto.custo_unidade } : null;
   const custoUnidade = custoProd ? num(custoProd.custo_unidade) : 0;
   const t = tabela;
   /** Custo de fulfillment de UMA venda desta oferta: potes + pick + taxa + embalagem + frete. */
@@ -846,7 +909,8 @@ export async function calcularResumo(
     periodo: periodo ? { from: periodo.from, to: periodo.to } : null,
     rotulo_periodo: periodo ? `${periodo.from} a ${periodo.to}` : 'vitalício',
     moeda,
-    produto: { kit_id: kit.id, nome: kit.name },
+    produto: { id: produto.id, nome: produto.nome },
+    origem_vendas: vendasPorDia.origem,
 
     faturamento: {
       total: receitaTotal,

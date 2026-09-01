@@ -1332,7 +1332,10 @@
             <script>
                 (function () {
                     var id = new URLSearchParams(location.search).get('id');
-                    if (id) document.getElementById('linkProdutor').href = '/admin/produtor?id=' + encodeURIComponent(id);
+                    // Sem o id do cliente na URL: a tela do Produtor é por CONTA DE PRODUTOR, que
+                    // não é o mesmo que cliente da MailX. Passar o id do cliente aqui abria a conta
+                    // errada — ou nenhuma. Ela resolve sozinha qual conta abrir.
+                    void id;
                 })();
             </script>
         </div>

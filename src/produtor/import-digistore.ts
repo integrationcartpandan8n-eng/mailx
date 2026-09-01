@@ -21,7 +21,8 @@ export interface VendaImportada {
   data: string;            // YYYY-MM-DD
   tipo: 'pagamento' | 'reembolso' | 'chargeback' | 'outro';
   tipo_bruto: string;
-  produto_id: string | null;
+  /** Id do produto no gateway (o "Prd ID" da Digistore) — não a FK de produtor_produtos. */
+  gateway_produto_id: string | null;
   produto_nome: string | null;
   quantidade: number;
   valor_bruto: number | null;
@@ -218,7 +219,7 @@ export function parseExportDigistore(conteudo: string): ResultadoParse {
 
     vendas.push({
       ...base,
-      produto_id: val('produtoId') || null,
+      gateway_produto_id: val('produtoId') || null,
       produto_nome: val('produtoNome') || null,
       quantidade,
     });
@@ -235,7 +236,7 @@ export function parseExportDigistore(conteudo: string): ResultadoParse {
       if (!nome && !id) continue;
       vendas.push({
         ...base,
-        produto_id: id,
+        gateway_produto_id: id,
         produto_nome: nome,
         quantidade: Math.max(1, Math.round(parseNumero(addQtds[k] ?? '1') ?? 1)),
       });

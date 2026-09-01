@@ -29,6 +29,7 @@
  * exata sai exata, a parte incerta sai como faixa, e a tela mostra as duas separadas.
  */
 import { query, queryOne } from '../db/database';
+import type { Conta } from './service';
 
 export interface TabelaFulfillment {
   fornecedor: string;
@@ -43,7 +44,7 @@ export interface TabelaFulfillment {
 }
 
 export interface LinhaProdutoPrevisto {
-  kit_id: number;
+  produto_id: number;
   produto: string;
   nome_na_fatura: string;
   custo_unidade: number;
@@ -104,8 +105,8 @@ function numOuNulo(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function lerTabelaFulfillment(clientId: number): Promise<TabelaFulfillment | null> {
-  const r = await queryOne<any>(`SELECT * FROM produtor_fulfillment WHERE client_id = $1`, [clientId]);
+export async function lerTabelaFulfillment(contaId: number): Promise<TabelaFulfillment | null> {
+  const r = await queryOne<any>(`SELECT * FROM produtor_fulfillment WHERE conta_id = $1`, [contaId]);
   if (!r) return null;
   return {
     fornecedor: r.fornecedor,
@@ -128,50 +129,57 @@ export async function lerTabelaFulfillment(clientId: number): Promise<TabelaFulf
  * previsão é o cliente; o lucro por produto continua sendo outra tela.
  */
 async function vendasPorDiaEProduto(
-  clientId: number,
+  conta: Conta,
   periodo: { from: string; to: string } | null
 ): Promise<{
-  linhas: Array<{ dia: string; kit_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
+  linhas: Array<{ dia: string; produto_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
   pedidosPorDia: Map<string, number> | null;
-  fonte: 'importacao' | 'webhook';
+  fonte: 'importacao' | 'webhook' | 'nenhuma';
 }> {
   // Fonte 1: vendas importadas do export da Digistore.
   //
   // Têm prioridade sobre webhook_logs quando existem, porque são as vendas DESTE produto — a conta
   // da Digistore do produto de casa não é a que alimenta a MailX. E o export traz o que o webhook
   // não traz: a quantidade de cada linha, que multiplica as unidades do pedido.
-  const importadas = await vendasImportadasPorDia(clientId, periodo);
+  const importadas = await vendasImportadasPorDia(conta.id, periodo);
   if (importadas.temDados) {
     return { linhas: importadas.linhas, pedidosPorDia: importadas.pedidosPorDia, fonte: 'importacao' };
   }
 
-  const params: any[] = [clientId];
+  // Segunda fonte: os webhooks do cliente da MailX vinculado. Sem ponte não existe segunda fonte,
+  // e devolver vazio é o certo — era entrar aqui de qualquer jeito que fazia a tela mostrar o
+  // faturamento de um cliente de SMS como se fosse do produtor.
+  if (conta.client_id == null) {
+    return { linhas: [], pedidosPorDia: null, fonte: 'nenhuma' };
+  }
+
+  const params: any[] = [conta.id, conta.client_id];
   let filtro = '';
   if (periodo) {
     params.push(periodo.from, periodo.to);
-    filtro = `AND w.created_at >= $2::date AND w.created_at < ($3::date + INTERVAL '1 day')`;
+    filtro = `AND w.created_at >= $3::date AND w.created_at < ($4::date + INTERVAL '1 day')`;
   }
 
   const rows = await query(`
     WITH oferta AS (
-      SELECT o.id, o.kit_id, o.unidades, o.preco, o.external_ids
+      SELECT o.id, o.produto_id, o.unidades, o.preco, o.external_ids
         FROM produtor_ofertas o
-        JOIN produtor_custo_produto c ON c.kit_id = o.kit_id AND c.client_id = o.client_id
-       WHERE o.client_id = $1 AND o.ativo
+        JOIN produtor_produtos p ON p.id = o.produto_id AND p.custo_unidade IS NOT NULL
+       WHERE o.conta_id = $1 AND o.ativo
     ),
     venda AS (
       SELECT w.created_at, w.total_price, w.product_external_id, w.product_name, w.event_type
         FROM webhook_logs w
-       WHERE w.client_id = $1
+       WHERE w.client_id = $2
          AND w.event_type IN ('order.paid', 'order.refunded', 'order.chargeback')
          AND (w.event_type <> 'order.paid' OR w.status IN ('processed', 'processing'))
          ${filtro}
     ),
     casada AS (
-      SELECT v.*, m.kit_id, m.unidades
+      SELECT v.*, m.produto_id, m.unidades
         FROM venda v
         LEFT JOIN LATERAL (
-          SELECT o.kit_id, o.unidades,
+          SELECT o.produto_id, o.unidades,
                  CASE WHEN COALESCE(array_length(o.external_ids, 1), 0) > 0
                        AND v.product_external_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
             FROM oferta o
@@ -180,13 +188,13 @@ async function vendasPorDiaEProduto(
               OR (COALESCE(array_length(o.external_ids, 1), 0) = 0
                   AND v.total_price IS NOT NULL
                   AND ROUND(v.total_price, 2) = ROUND(o.preco, 2))
-           ORDER BY prioridade, o.kit_id, o.unidades
+           ORDER BY prioridade, o.produto_id, o.unidades
            LIMIT 1
         ) m ON true
     )
     SELECT
       created_at::date::text AS dia,
-      kit_id,
+      produto_id,
       unidades AS unidades_por_venda,
       COUNT(*) FILTER (WHERE event_type = 'order.paid') AS vendas,
       COUNT(*) FILTER (WHERE event_type IN ('order.refunded', 'order.chargeback')) AS devolucoes
@@ -202,7 +210,7 @@ async function vendasPorDiaEProduto(
     pedidosPorDia: null,
     linhas: rows.map((r: any) => ({
       dia: String(r.dia).slice(0, 10),
-      kit_id: r.kit_id == null ? null : Number(r.kit_id),
+      produto_id: r.produto_id == null ? null : Number(r.produto_id),
       unidades_por_venda: r.unidades_por_venda == null ? null : Number(r.unidades_por_venda),
       vendas: parseInt(r.vendas, 10) || 0,
       devolucoes: parseInt(r.devolucoes, 10) || 0,
@@ -222,22 +230,22 @@ async function vendasPorDiaEProduto(
  *    era a explicação para a fatura ter 106 pedidos onde as transações davam 141.
  */
 async function vendasImportadasPorDia(
-  clientId: number,
+  contaId: number,
   periodo: { from: string; to: string } | null
 ): Promise<{
   temDados: boolean;
-  linhas: Array<{ dia: string; kit_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
+  linhas: Array<{ dia: string; produto_id: number | null; unidades_por_venda: number | null; vendas: number; devolucoes: number }>;
   /** Pedidos distintos POR DIA. Contar por grupo somaria em dobro o pedido que leva dois produtos. */
   pedidosPorDia: Map<string, number>;
 }> {
   const existe = await queryOne<{ n: string }>(
-    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE client_id = $1 LIMIT 1`, [clientId]
+    `SELECT COUNT(*) AS n FROM produtor_vendas WHERE conta_id = $1 LIMIT 1`, [contaId]
   );
   if (!existe || parseInt(existe.n, 10) === 0) {
     return { temDados: false, linhas: [], pedidosPorDia: new Map() };
   }
 
-  const params: any[] = [clientId];
+  const params: any[] = [contaId];
   let filtro = '';
   if (periodo) {
     params.push(periodo.from, periodo.to);
@@ -246,30 +254,30 @@ async function vendasImportadasPorDia(
 
   const rows = await query(`
     WITH oferta AS (
-      SELECT o.id, o.kit_id, o.unidades, o.preco, o.external_ids
+      SELECT o.id, o.produto_id, o.unidades, o.preco, o.external_ids
         FROM produtor_ofertas o
-        JOIN produtor_custo_produto c ON c.kit_id = o.kit_id AND c.client_id = o.client_id
-       WHERE o.client_id = $1 AND o.ativo
+        JOIN produtor_produtos p ON p.id = o.produto_id AND p.custo_unidade IS NOT NULL
+       WHERE o.conta_id = $1 AND o.ativo
     ),
     casada AS (
-      SELECT v.*, m.kit_id, m.unidades AS unidades_oferta
+      SELECT v.*, m.produto_id, m.unidades AS unidades_oferta
         FROM produtor_vendas v
         LEFT JOIN LATERAL (
-          SELECT o.kit_id, o.unidades,
+          SELECT o.produto_id, o.unidades,
                  CASE WHEN COALESCE(array_length(o.external_ids,1),0) > 0
-                       AND v.produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
+                       AND v.gateway_produto_id = ANY(o.external_ids) THEN 0 ELSE 1 END AS prioridade
             FROM oferta o
-           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.produto_id = ANY(o.external_ids))
+           WHERE (COALESCE(array_length(o.external_ids,1),0) > 0 AND v.gateway_produto_id = ANY(o.external_ids))
               OR (COALESCE(array_length(o.external_ids,1),0) = 0 AND v.valor_bruto IS NOT NULL
                   AND ROUND(ABS(v.valor_bruto),2) = ROUND(o.preco,2))
-           ORDER BY prioridade, o.kit_id, o.unidades
+           ORDER BY prioridade, o.produto_id, o.unidades
            LIMIT 1
         ) m ON true
-       WHERE v.client_id = $1 ${filtro}
+       WHERE v.conta_id = $1 ${filtro}
     )
     SELECT
       data::text AS dia,
-      kit_id,
+      produto_id,
       unidades_oferta,
       COALESCE(SUM(quantidade) FILTER (WHERE tipo = 'pagamento'), 0) AS quantidade,
       COUNT(*) FILTER (WHERE tipo IN ('reembolso','chargeback')) AS devolucoes
@@ -294,7 +302,7 @@ async function vendasImportadasPorDia(
     SELECT data::text AS dia,
            COUNT(DISTINCT COALESCE(regexp_replace(pedido_id, '^(.{8,})\\d+$', '\\1'), transacao_id)) AS pedidos
       FROM produtor_vendas v
-     WHERE v.client_id = $1 AND v.tipo = 'pagamento' ${filtro}
+     WHERE v.conta_id = $1 AND v.tipo = 'pagamento' ${filtro}
      GROUP BY 1
   `, params);
   const pedidosPorDia = new Map<string, number>(
@@ -306,7 +314,7 @@ async function vendasImportadasPorDia(
     pedidosPorDia,
     linhas: rows.map((r: any) => ({
       dia: String(r.dia).slice(0, 10),
-      kit_id: r.kit_id == null ? null : Number(r.kit_id),
+      produto_id: r.produto_id == null ? null : Number(r.produto_id),
       unidades_por_venda: r.unidades_oferta == null ? null : Number(r.unidades_oferta),
       // "vendas" aqui é a QUANTIDADE comprada: é ela que multiplica as unidades da oferta.
       vendas: parseInt(r.quantidade, 10) || 0,
@@ -316,20 +324,19 @@ async function vendasImportadasPorDia(
 }
 
 export async function preverInvoice(
-  clientId: number,
+  conta: Conta,
   periodo: { from: string; to: string } | null,
   moeda: string
 ): Promise<PrevisaoInvoice> {
   const ressalvas: string[] = [];
 
-  const tabela = await lerTabelaFulfillment(clientId);
+  const tabela = await lerTabelaFulfillment(conta.id);
   const custos = await query<any>(`
-    SELECT c.kit_id, c.nome_na_fatura, c.custo_unidade, k.name AS produto
-      FROM produtor_custo_produto c
-      JOIN kits k ON k.id = c.kit_id
-     WHERE c.client_id = $1
-     ORDER BY k.name
-  `, [clientId]);
+    SELECT p.id AS produto_id, p.nome_na_fatura, p.custo_unidade, p.nome AS produto
+      FROM produtor_produtos p
+     WHERE p.conta_id = $1 AND p.custo_unidade IS NOT NULL
+     ORDER BY p.nome
+  `, [conta.id]);
 
   const t = tabela ?? VAZIA;
   if (!tabela) {
@@ -346,19 +353,19 @@ export async function preverInvoice(
     );
   }
 
-  const porKit = new Map<number, { nome_na_fatura: string; custo_unidade: number; produto: string }>();
+  const porProduto = new Map<number, { nome_na_fatura: string; custo_unidade: number; produto: string }>();
   for (const c of custos) {
-    porKit.set(Number(c.kit_id), {
+    porProduto.set(Number(c.produto_id), {
       nome_na_fatura: c.nome_na_fatura, custo_unidade: num(c.custo_unidade), produto: c.produto,
     });
   }
 
-  const fonteVendas = await vendasPorDiaEProduto(clientId, periodo);
+  const fonteVendas = await vendasPorDiaEProduto(conta, periodo);
   const linhas = fonteVendas.linhas;
   const pedidosPorDia = fonteVendas.pedidosPorDia;
 
-  const unidadesPorKit = new Map<number, number>();
-  const semOfertaPorKit = new Map<number, number>();
+  const unidadesPorProduto = new Map<number, number>();
+  const semOfertaPorProduto = new Map<number, number>();
   let transacoes = 0;
   let unidades = 0;
   let devolucoes = 0;
@@ -370,22 +377,22 @@ export async function preverInvoice(
     const d = diasMap.get(l.dia) ?? { pedidos: 0, unidades: 0 };
     d.pedidos += l.vendas;
 
-    if (l.kit_id != null && l.unidades_por_venda != null && porKit.has(l.kit_id)) {
+    if (l.produto_id != null && l.unidades_por_venda != null && porProduto.has(l.produto_id)) {
       const u = l.unidades_por_venda * l.vendas;
-      unidadesPorKit.set(l.kit_id, (unidadesPorKit.get(l.kit_id) ?? 0) + u);
+      unidadesPorProduto.set(l.produto_id, (unidadesPorProduto.get(l.produto_id) ?? 0) + u);
       unidades += u;
       d.unidades += u;
     } else if (l.vendas > 0) {
       // Venda que nenhuma oferta reconheceu: sabemos que houve pedido, não quantas unidades.
       // Ela conta como PEDIDO (a taxa por pedido e a embalagem serão cobradas) mas não entra em
       // pick nem em custo de produto — inventar uma quantidade aqui seria adivinhar o principal.
-      const k = l.kit_id ?? -1;
-      semOfertaPorKit.set(k, (semOfertaPorKit.get(k) ?? 0) + l.vendas);
+      const k = l.produto_id ?? -1;
+      semOfertaPorProduto.set(k, (semOfertaPorProduto.get(k) ?? 0) + l.vendas);
     }
     diasMap.set(l.dia, d);
   }
 
-  const semOferta = [...semOfertaPorKit.values()].reduce((s, v) => s + v, 0);
+  const semOferta = [...semOfertaPorProduto.values()].reduce((s, v) => s + v, 0);
   if (semOferta > 0) {
     ressalvas.push(
       `${semOferta} venda(s) não casaram com nenhuma oferta cadastrada. Elas entram na conta como ` +
@@ -404,16 +411,16 @@ export async function preverInvoice(
     : null;
   const pedidos = pedidosContados ?? Math.round(transacoes * t.fator_pedidos);
 
-  const produtos: LinhaProdutoPrevisto[] = [...porKit.entries()].map(([kitId, c]) => {
-    const u = unidadesPorKit.get(kitId) ?? 0;
+  const produtos: LinhaProdutoPrevisto[] = [...porProduto.entries()].map(([produtoId, c]) => {
+    const u = unidadesPorProduto.get(produtoId) ?? 0;
     return {
-      kit_id: kitId,
+      produto_id: produtoId,
       produto: c.produto,
       nome_na_fatura: c.nome_na_fatura,
       custo_unidade: c.custo_unidade,
       unidades: u,
       valor: u * c.custo_unidade,
-      vendas_sem_oferta: semOfertaPorKit.get(kitId) ?? 0,
+      vendas_sem_oferta: semOfertaPorProduto.get(produtoId) ?? 0,
     };
   });
 
@@ -456,8 +463,8 @@ export async function preverInvoice(
     return d.unidades * t.custo_pick_unidade + ped * (t.custo_pedido + t.custo_embalagem_pedido);
   };
   const custoProdutoDoDia = (dia: string) => linhas
-    .filter(l => l.dia === dia && l.kit_id != null && l.unidades_por_venda != null && porKit.has(l.kit_id))
-    .reduce((s, l) => s + l.unidades_por_venda! * l.vendas * porKit.get(l.kit_id!)!.custo_unidade, 0);
+    .filter(l => l.dia === dia && l.produto_id != null && l.unidades_por_venda != null && porProduto.has(l.produto_id))
+    .reduce((s, l) => s + l.unidades_por_venda! * l.vendas * porProduto.get(l.produto_id!)!.custo_unidade, 0);
 
   let acc = 0;
   const por_dia = [...diasMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([dia, d]) => {
