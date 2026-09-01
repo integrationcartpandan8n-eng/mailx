@@ -489,18 +489,52 @@ export const PRODUTOR_SCHEMA_SQL = `
  * registro que já existe é uma junção a mais em toda consulta, para sempre.
  */
 export const PRODUTOR_MIGRACAO_SQL = `
-DO $renomeia$
+-- ── Reparos de coluna, cada um com a sua própria checagem ────────────────────
+--
+-- Vivem fora do bloco grande de propósito: um banco pode já estar no modelo de conta e ainda não
+-- ter passado por estes. É o caso real de produtor_faturas — a tabela foi criada em produção por
+-- um deploy que subiu esta branch num commit antigo, antes de origem/origem_id existirem, e
+-- CREATE TABLE IF NOT EXISTS nunca mais as acrescentaria.
+--
+-- A checagem no information_schema antes do ALTER é o ponto. Um "ADD COLUMN IF NOT EXISTS" solto
+-- pega ACCESS EXCLUSIVE mesmo sem ter o que fazer, e este arquivo roda a CADA tentativa de
+-- reconexão — travaria as tabelas justamente quando o banco já está em dificuldade.
+DO $reparos$
 BEGIN
+  -- Sempre foi o "Prd ID" da Digistore, nunca a FK do produto local. Com
+  -- produtor_ofertas.produto_id ao lado significando outra coisa, escrever
+  -- "v.produto_id = o.produto_id" casaria tudo com nada, em silêncio.
   IF EXISTS (SELECT 1 FROM information_schema.columns
               WHERE table_name = 'produtor_vendas' AND column_name = 'produto_id') THEN
     ALTER TABLE produtor_vendas RENAME COLUMN produto_id TO gateway_produto_id;
   END IF;
+
+  -- Sem estas duas, a sincronização da Red Rock quebra no INSERT da primeira fatura — e quebra
+  -- longe da causa, semanas depois de o deploy que criou a tabela ter parecido bem-sucedido.
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_faturas')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'produtor_faturas' AND column_name = 'origem') THEN
+    ALTER TABLE produtor_faturas
+      ADD COLUMN origem VARCHAR(20) NOT NULL DEFAULT 'manual',
+      ADD COLUMN origem_id VARCHAR(120);
+  END IF;
 END
-$renomeia$;
+$reparos$;
 
 DO $migra$
 DECLARE
   antiga BOOLEAN;
+  t TEXT;
+  -- Todas as tabelas que pendiam do cliente. A migração passa por cada uma e PULA as que não
+  -- existirem: ela roda ANTES do resto do schema (que é quem as cria), então um banco parado num
+  -- deploy intermediário tem uma parte delas e não a outra. Sem esse cuidado, a migração falharia
+  -- em "relation does not exist" e o servidor subiria com o banco marcado como indisponível.
+  tabelas TEXT[] := ARRAY[
+    'produtor_ofertas', 'produtor_fulfillment', 'produtor_importacoes', 'produtor_vendas',
+    'produtor_faturas', 'produtor_credenciais', 'produtor_redrock_pedidos',
+    'produtor_redrock_cobrancas', 'produtor_redrock_frete', 'produtor_redrock_sync'
+  ];
+  removidas BIGINT;
 BEGIN
   SELECT EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -513,151 +547,148 @@ BEGIN
 
   -- 1. Uma conta por cliente que tinha qualquer dado de produtor. O nome vem do cliente, e a
   --    ponte já nasce ligada — era exatamente essa a relação que existia antes.
-  INSERT INTO produtor_contas (nome, client_id, moeda)
-  SELECT COALESCE(NULLIF(TRIM(c.company_name), ''), 'Conta ' || t.client_id),
-         t.client_id,
-         COALESCE(c.default_currency, 'USD')
-    FROM (
-      SELECT DISTINCT client_id FROM produtor_ofertas
-      UNION SELECT client_id FROM produtor_custo_produto
-      UNION SELECT client_id FROM produtor_fulfillment
-      UNION SELECT client_id FROM produtor_importacoes
-      UNION SELECT client_id FROM produtor_vendas
-      UNION SELECT client_id FROM produtor_faturas
-      UNION SELECT client_id FROM produtor_credenciais
-      UNION SELECT client_id FROM produtor_redrock_pedidos
-      UNION SELECT client_id FROM produtor_redrock_cobrancas
-      UNION SELECT client_id FROM produtor_redrock_frete
-      UNION SELECT client_id FROM produtor_redrock_sync
-    ) t
-    LEFT JOIN clients c ON c.id = t.client_id
-   WHERE t.client_id IS NOT NULL
-     AND NOT EXISTS (SELECT 1 FROM produtor_contas pc WHERE pc.client_id = t.client_id);
+  FOREACH t IN ARRAY tabelas LOOP
+    CONTINUE WHEN to_regclass(t) IS NULL;
+    CONTINUE WHEN NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = t AND column_name = 'client_id');
+    EXECUTE format($f$
+      INSERT INTO produtor_contas (nome, client_id, moeda)
+      SELECT COALESCE(NULLIF(TRIM(c.company_name), ''), 'Conta ' || d.client_id),
+             d.client_id,
+             COALESCE(c.default_currency, 'USD')
+        FROM (SELECT DISTINCT client_id FROM %I WHERE client_id IS NOT NULL) d
+        LEFT JOIN clients c ON c.id = d.client_id
+       WHERE NOT EXISTS (SELECT 1 FROM produtor_contas pc WHERE pc.client_id = d.client_id)
+    $f$, t);
+  END LOOP;
 
-  -- 2. Um produto por kit que era referenciado, levando junto o custo unitário e o nome na fatura.
-  INSERT INTO produtor_produtos (conta_id, nome, kit_id, nome_na_fatura, custo_unidade)
-  SELECT pc.id,
-         COALESCE(NULLIF(TRIM(k.name), ''), 'Produto ' || t.kit_id),
-         k.id,
-         cp.nome_na_fatura,
-         cp.custo_unidade
+  -- 2. Um produto por kit referenciado, levando junto o custo unitário e o nome na fatura.
+  IF to_regclass('produtor_custo_produto') IS NOT NULL THEN
+    INSERT INTO produtor_produtos (conta_id, nome, kit_id, nome_na_fatura, custo_unidade)
+    SELECT pc.id, COALESCE(NULLIF(TRIM(k.name), ''), 'Produto ' || k.id), k.id,
+           cp.nome_na_fatura, cp.custo_unidade
+      FROM produtor_custo_produto cp
+      JOIN produtor_contas pc ON pc.client_id = cp.client_id
+      JOIN kits k ON k.id = cp.kit_id
+     WHERE NOT EXISTS (SELECT 1 FROM produtor_produtos pp
+                        WHERE pp.conta_id = pc.id AND pp.kit_id = k.id);
+  END IF;
+
+  -- Kits que aparecem em oferta ou fatura mas não tinham custo cadastrado entram sem custo — que
+  -- é a verdade sobre eles, e a tela sabe mostrar "não cadastrado" em vez de zero.
+  INSERT INTO produtor_produtos (conta_id, nome, kit_id)
+  SELECT DISTINCT pc.id, COALESCE(NULLIF(TRIM(k.name), ''), 'Produto ' || k.id), k.id
     FROM (
-      SELECT DISTINCT client_id, kit_id FROM produtor_ofertas WHERE kit_id IS NOT NULL
-      UNION SELECT client_id, kit_id FROM produtor_custo_produto WHERE kit_id IS NOT NULL
+      SELECT client_id, kit_id FROM produtor_ofertas WHERE kit_id IS NOT NULL
       UNION SELECT client_id, kit_id FROM produtor_faturas WHERE kit_id IS NOT NULL
-    ) t
-    JOIN produtor_contas pc ON pc.client_id = t.client_id
-    JOIN kits k ON k.id = t.kit_id
-    LEFT JOIN produtor_custo_produto cp
-           ON cp.client_id = t.client_id AND cp.kit_id = t.kit_id
-   WHERE NOT EXISTS (
-     SELECT 1 FROM produtor_produtos pp WHERE pp.conta_id = pc.id AND pp.kit_id = k.id
-   );
+    ) d
+    JOIN produtor_contas pc ON pc.client_id = d.client_id
+    JOIN kits k ON k.id = d.kit_id
+   WHERE NOT EXISTS (SELECT 1 FROM produtor_produtos pp
+                      WHERE pp.conta_id = pc.id AND pp.kit_id = k.id);
 
-  -- 3. Colunas novas, preenchidas a partir das pontes recém-criadas.
-  ALTER TABLE produtor_ofertas       ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_ofertas       ADD COLUMN IF NOT EXISTS produto_id INTEGER;
-  ALTER TABLE produtor_fulfillment   ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_importacoes   ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_vendas        ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_faturas       ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_faturas       ADD COLUMN IF NOT EXISTS produto_id INTEGER;
-  ALTER TABLE produtor_credenciais   ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_redrock_pedidos   ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_redrock_cobrancas ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_redrock_frete     ADD COLUMN IF NOT EXISTS conta_id INTEGER;
-  ALTER TABLE produtor_redrock_sync      ADD COLUMN IF NOT EXISTS conta_id INTEGER;
+  -- 3. Cada tabela troca client_id por conta_id. Uma de cada vez, e só as que existem.
+  FOREACH t IN ARRAY tabelas LOOP
+    CONTINUE WHEN to_regclass(t) IS NULL;
+    CONTINUE WHEN NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = t AND column_name = 'client_id');
 
-  UPDATE produtor_ofertas       t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_fulfillment   t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_importacoes   t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_vendas        t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_faturas       t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_credenciais   t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_redrock_pedidos   t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_redrock_cobrancas t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_redrock_frete     t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
-  UPDATE produtor_redrock_sync      t SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = t.client_id;
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS conta_id INTEGER', t);
+    EXECUTE format('UPDATE %I x SET conta_id = pc.id FROM produtor_contas pc WHERE pc.client_id = x.client_id', t);
 
-  UPDATE produtor_ofertas t SET produto_id = pp.id
-    FROM produtor_produtos pp WHERE pp.conta_id = t.conta_id AND pp.kit_id = t.kit_id;
-  UPDATE produtor_faturas t SET produto_id = pp.id
-    FROM produtor_produtos pp WHERE pp.conta_id = t.conta_id AND pp.kit_id = t.kit_id;
+    -- produto_id, para as duas tabelas que apontavam para um kit. Antes do DROP, que é quando
+    -- kit_id ainda existe para servir de ponte.
+    IF t IN ('produtor_ofertas', 'produtor_faturas') THEN
+      EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS produto_id INTEGER', t);
+      EXECUTE format('UPDATE %I x SET produto_id = pp.id FROM produtor_produtos pp
+                       WHERE pp.conta_id = x.conta_id AND pp.kit_id = x.kit_id', t);
+    END IF;
 
-  -- 4. Só agora as colunas velhas caem. Índices antigos vão junto com elas.
-  ALTER TABLE produtor_ofertas       DROP COLUMN client_id, DROP COLUMN kit_id;
-  ALTER TABLE produtor_fulfillment   DROP COLUMN client_id;
-  ALTER TABLE produtor_importacoes   DROP COLUMN client_id;
-  ALTER TABLE produtor_vendas        DROP COLUMN client_id;
-  ALTER TABLE produtor_faturas       DROP COLUMN client_id, DROP COLUMN kit_id;
-  ALTER TABLE produtor_credenciais   DROP COLUMN client_id;
-  ALTER TABLE produtor_redrock_pedidos   DROP COLUMN client_id;
-  ALTER TABLE produtor_redrock_cobrancas DROP COLUMN client_id;
-  ALTER TABLE produtor_redrock_frete     DROP COLUMN client_id;
-  ALTER TABLE produtor_redrock_sync      DROP COLUMN client_id;
+    -- Linha sem conta é linha cujo cliente já não existe: ela estava inalcançável pela tela antes
+    -- desta migração. Sai, e o RAISE deixa o rastro no log — apagar calado seria pior que não migrar.
+    EXECUTE format('DELETE FROM %I WHERE conta_id IS NULL', t);
+    GET DIAGNOSTICS removidas = ROW_COUNT;
+    IF removidas > 0 THEN
+      RAISE NOTICE 'Produtor: % linha(s) órfã(s) removidas de %', removidas, t;
+    END IF;
+
+    IF t = 'produtor_ofertas' THEN
+      EXECUTE 'DELETE FROM produtor_ofertas WHERE produto_id IS NULL';
+      GET DIAGNOSTICS removidas = ROW_COUNT;
+      IF removidas > 0 THEN
+        RAISE NOTICE 'Produtor: % oferta(s) sem produto removidas', removidas;
+      END IF;
+    END IF;
+
+    EXECUTE format('ALTER TABLE %I DROP COLUMN client_id', t);
+    IF t IN ('produtor_ofertas', 'produtor_faturas') THEN
+      EXECUTE format('ALTER TABLE %I DROP COLUMN kit_id', t);
+    END IF;
+
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN conta_id SET NOT NULL', t);
+    EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (conta_id)
+                      REFERENCES produtor_contas(id) ON DELETE CASCADE', t, t || '_conta_fk');
+  END LOOP;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'produtor_ofertas' AND column_name = 'produto_id') THEN
+    ALTER TABLE produtor_ofertas ALTER COLUMN produto_id SET NOT NULL;
+    ALTER TABLE produtor_ofertas ADD CONSTRAINT produtor_ofertas_produto_fk
+      FOREIGN KEY (produto_id) REFERENCES produtor_produtos(id) ON DELETE CASCADE;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'produtor_faturas' AND column_name = 'produto_id') THEN
+    ALTER TABLE produtor_faturas ADD CONSTRAINT produtor_faturas_produto_fk
+      FOREIGN KEY (produto_id) REFERENCES produtor_produtos(id) ON DELETE SET NULL;
+  END IF;
 
   DROP TABLE IF EXISTS produtor_custo_produto;
 
-  -- 5. Linha que não achou conta ou produto é linha cujo cliente ou kit já não existe — ela já
-  --    estava inalcançável pela tela antes desta migração. Sai, e o RAISE deixa o rastro no log
-  --    do servidor: apagar calado seria pior que não migrar.
-  FOR antiga IN SELECT true WHERE EXISTS (SELECT 1 FROM produtor_ofertas WHERE conta_id IS NULL OR produto_id IS NULL) LOOP
-    RAISE NOTICE 'Produtor: % oferta(s) órfã(s) removidas na migração',
-      (SELECT COUNT(*) FROM produtor_ofertas WHERE conta_id IS NULL OR produto_id IS NULL);
-  END LOOP;
-  DELETE FROM produtor_ofertas     WHERE conta_id IS NULL OR produto_id IS NULL;
-  DELETE FROM produtor_fulfillment WHERE conta_id IS NULL;
-  DELETE FROM produtor_importacoes WHERE conta_id IS NULL;
-  DELETE FROM produtor_vendas      WHERE conta_id IS NULL;
-  DELETE FROM produtor_faturas     WHERE conta_id IS NULL;
-  DELETE FROM produtor_credenciais WHERE conta_id IS NULL;
-  DELETE FROM produtor_redrock_pedidos   WHERE conta_id IS NULL;
-  DELETE FROM produtor_redrock_cobrancas WHERE conta_id IS NULL;
-  DELETE FROM produtor_redrock_frete     WHERE conta_id IS NULL;
-  DELETE FROM produtor_redrock_sync      WHERE conta_id IS NULL;
-
-  -- 6. Restrições e índices que o CREATE não pôde criar porque a tabela já existia.
-  ALTER TABLE produtor_ofertas ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_ofertas ALTER COLUMN produto_id SET NOT NULL;
-  ALTER TABLE produtor_fulfillment   ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_importacoes   ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_vendas        ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_faturas       ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_credenciais   ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_redrock_pedidos   ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_redrock_cobrancas ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_redrock_frete     ALTER COLUMN conta_id SET NOT NULL;
-  ALTER TABLE produtor_redrock_sync      ALTER COLUMN conta_id SET NOT NULL;
-
-  ALTER TABLE produtor_ofertas
-    ADD CONSTRAINT produtor_ofertas_conta_fk   FOREIGN KEY (conta_id)   REFERENCES produtor_contas(id)   ON DELETE CASCADE,
-    ADD CONSTRAINT produtor_ofertas_produto_fk FOREIGN KEY (produto_id) REFERENCES produtor_produtos(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_fulfillment   ADD CONSTRAINT produtor_fulfillment_conta_fk   FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_importacoes   ADD CONSTRAINT produtor_importacoes_conta_fk   FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_vendas        ADD CONSTRAINT produtor_vendas_conta_fk        FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_faturas
-    ADD CONSTRAINT produtor_faturas_conta_fk   FOREIGN KEY (conta_id)   REFERENCES produtor_contas(id)   ON DELETE CASCADE,
-    ADD CONSTRAINT produtor_faturas_produto_fk FOREIGN KEY (produto_id) REFERENCES produtor_produtos(id) ON DELETE SET NULL;
-  ALTER TABLE produtor_credenciais   ADD CONSTRAINT produtor_credenciais_conta_fk   FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_redrock_pedidos   ADD CONSTRAINT produtor_rr_pedidos_conta_fk   FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_redrock_cobrancas ADD CONSTRAINT produtor_rr_cobrancas_conta_fk FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_redrock_frete     ADD CONSTRAINT produtor_rr_frete_conta_fk     FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-  ALTER TABLE produtor_redrock_sync      ADD CONSTRAINT produtor_rr_sync_conta_fk      FOREIGN KEY (conta_id) REFERENCES produtor_contas(id) ON DELETE CASCADE;
-
-  CREATE INDEX IF NOT EXISTS idx_produtor_ofertas_produto ON produtor_ofertas (conta_id, produto_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_fulfillment_conta ON produtor_fulfillment (conta_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_vendas_transacao ON produtor_vendas (conta_id, transacao_id, COALESCE(gateway_produto_id, ''));
-  CREATE INDEX IF NOT EXISTS idx_produtor_vendas_data ON produtor_vendas (conta_id, data);
-  CREATE INDEX IF NOT EXISTS idx_produtor_faturas_produto ON produtor_faturas (conta_id, produto_id, competencia_inicio, competencia_fim);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_faturas_numero ON produtor_faturas (conta_id, LOWER(fornecedor), numero) WHERE numero IS NOT NULL;
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_credenciais_provedor ON produtor_credenciais (conta_id, provedor);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_ext ON produtor_redrock_pedidos (conta_id, external_order_id);
-  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_data ON produtor_redrock_pedidos (conta_id, criado_em);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_linha ON produtor_redrock_cobrancas (conta_id, external_order_id, linha);
-  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_fatura ON produtor_redrock_cobrancas (conta_id, numero_fatura);
-  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_data ON produtor_redrock_cobrancas (conta_id, data);
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_frete_janela ON produtor_redrock_frete (conta_id, pais, janela_inicio, janela_fim);
-  CREATE INDEX IF NOT EXISTS idx_produtor_redrock_sync_conta ON produtor_redrock_sync (conta_id, created_at DESC);
+  -- 4. Índices que o CREATE do schema não pôde criar porque a tabela já existia. Todos
+  --    IF NOT EXISTS, e só para as tabelas que estão aqui.
+  IF to_regclass('produtor_ofertas') IS NOT NULL THEN
+    CREATE INDEX IF NOT EXISTS idx_produtor_ofertas_produto ON produtor_ofertas (conta_id, produto_id);
+  END IF;
+  IF to_regclass('produtor_fulfillment') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_fulfillment_conta ON produtor_fulfillment (conta_id);
+  END IF;
+  IF to_regclass('produtor_vendas') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_vendas_transacao
+      ON produtor_vendas (conta_id, transacao_id, COALESCE(gateway_produto_id, ''));
+    CREATE INDEX IF NOT EXISTS idx_produtor_vendas_data ON produtor_vendas (conta_id, data);
+  END IF;
+  IF to_regclass('produtor_faturas') IS NOT NULL THEN
+    CREATE INDEX IF NOT EXISTS idx_produtor_faturas_produto
+      ON produtor_faturas (conta_id, produto_id, competencia_inicio, competencia_fim);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_faturas_numero
+      ON produtor_faturas (conta_id, LOWER(fornecedor), numero) WHERE numero IS NOT NULL;
+  END IF;
+  IF to_regclass('produtor_credenciais') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_credenciais_provedor
+      ON produtor_credenciais (conta_id, provedor);
+  END IF;
+  IF to_regclass('produtor_redrock_pedidos') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_ext
+      ON produtor_redrock_pedidos (conta_id, external_order_id);
+    CREATE INDEX IF NOT EXISTS idx_produtor_redrock_pedidos_data
+      ON produtor_redrock_pedidos (conta_id, criado_em);
+  END IF;
+  IF to_regclass('produtor_redrock_cobrancas') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_linha
+      ON produtor_redrock_cobrancas (conta_id, external_order_id, linha);
+    CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_fatura
+      ON produtor_redrock_cobrancas (conta_id, numero_fatura);
+    CREATE INDEX IF NOT EXISTS idx_produtor_redrock_cobrancas_data
+      ON produtor_redrock_cobrancas (conta_id, data);
+  END IF;
+  IF to_regclass('produtor_redrock_frete') IS NOT NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_frete_janela
+      ON produtor_redrock_frete (conta_id, pais, janela_inicio, janela_fim);
+  END IF;
+  IF to_regclass('produtor_redrock_sync') IS NOT NULL THEN
+    CREATE INDEX IF NOT EXISTS idx_produtor_redrock_sync_conta
+      ON produtor_redrock_sync (conta_id, created_at DESC);
+  END IF;
 END
 $migra$;
 `;
