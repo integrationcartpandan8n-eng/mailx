@@ -212,7 +212,12 @@
 <body>
 <div class="container">
 
-    <div class="page-header">
+    <!--
+      Cabeçalho próprio da página. Some quando ela abre dentro da aba Produtor do dashboard
+      (?embed=1): ali o título e o botão de voltar já existem uma vez na moldura, e repetir os dois
+      dentro do quadro faria a tela parecer duas telas empilhadas.
+    -->
+    <div class="page-header" id="cabecalhoPagina">
         <a href="/admin" class="back-btn" title="Voltar"><i class="fas fa-arrow-left"></i></a>
         <div>
             <h1 id="tituloCliente">Produtor</h1>
@@ -627,6 +632,17 @@
 const params = new URLSearchParams(location.search);
 const clienteId = params.get('id');
 let kitId = params.get('kit') ? parseInt(params.get('kit'), 10) : null;
+// Embutida na aba Produtor do dashboard: sem cabeçalho próprio e sem a margem de página, porque a
+// moldura já tem os dois. O resto da tela é idêntico — é a MESMA página, não uma segunda versão
+// dela, que é o que garante que corrigir um número aqui corrige nos dois lugares.
+const embutida = params.get('embed') === '1';
+if (embutida) {
+    document.getElementById('cabecalhoPagina').style.display = 'none';
+    // A margem larga é da página inteira; dentro do quadro do dashboard ela viraria uma faixa
+    // vazia entre a borda do quadro e o primeiro card.
+    document.body.style.padding = '0 0 1rem';
+    document.body.style.background = 'transparent';
+}
 let periodo = null;           // null = vitalício
 let resumo = null;
 let ofertas = [];

@@ -784,6 +784,7 @@
                     <button class="tab-btn" onclick="switchTab('history')">Histórico Importado</button>
                     <button class="tab-btn" onclick="switchTab('pipeline')">Clientes</button>
                     <button class="tab-btn" onclick="switchTab('webhooks-tab')">Webhooks</button>
+                    <button class="tab-btn" onclick="switchTab('produtor')">Produtor</button>
                 </div>
 
                 <!-- ═══ Aviso de clareza de dados — sempre visível, acima de qualquer aba ═══ -->
@@ -1060,6 +1061,37 @@
                         </table>
                     </div>
                 </div>
+
+                <!-- ═══════════ TAB: Produtor ═══════════
+                     A tela do Produtor é uma PÁGINA (/admin/produtor), não um pedaço de HTML
+                     copiado para cá, e entra por iframe de propósito.
+
+                     Duas razões. Primeiro, isolamento: o script daquela página tem `periodo`,
+                     `resumo`, `carregarResumo()` — nomes que também existem, com outro sentido,
+                     no script deste dashboard. Colar o conteúdo aqui faria as duas telas
+                     disputarem as mesmas variáveis globais, e o sintoma apareceria numa aba da
+                     MailX, não na do Produtor. Segundo, é a MESMA página do link direto: corrigir
+                     um número lá conserta nos dois lugares, e não existe versão que fica para trás.
+
+                     Carregada só no primeiro clique — antes disso a aba não custa uma requisição.
+                -->
+                <div class="tab-content" id="tab-produtor">
+                    <div class="chart-card" style="padding:0.9rem 1.1rem; margin-bottom:1rem">
+                        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap">
+                            <span style="font-size:0.72rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#6b7a99">
+                                <i class="fas fa-sack-dollar" style="color:#ffb020"></i> Produtor
+                            </span>
+                            <select id="produtor-cliente" style="background:#0f1626; color:#e8eefc; border:1px solid #223050; border-radius:8px; padding:0.4rem 0.6rem; font-size:0.78rem; font-family:inherit"></select>
+                            <span id="produtor-aviso" style="font-size:0.72rem; color:#6b7a99"></span>
+                            <a id="produtor-link" href="/admin/produtor" target="_blank" rel="noopener"
+                               style="margin-left:auto; font-size:0.72rem; color:#4b8df8; text-decoration:none">
+                                Abrir em página inteira <i class="fas fa-arrow-up-right-from-square"></i>
+                            </a>
+                        </div>
+                    </div>
+                    <iframe id="produtor-frame" title="Produtor"
+                            style="width:100%; height:calc(100vh - 190px); min-height:34rem; border:1px solid #1a2236; border-radius:14px; background:#070a12"></iframe>
+                </div>
             </div>
         </main>
     </div>
@@ -1132,7 +1164,7 @@
 
             document.querySelectorAll('.tab-btn').forEach(b => {
                 const tabName = b.textContent.trim();
-                const map = { 'Visão Geral': 'overview', 'Email': 'email', 'SMS': 'sms', 'Histórico Importado': 'history', 'Clientes': 'pipeline', 'Webhooks': 'webhooks-tab' };
+                const map = { 'Visão Geral': 'overview', 'Email': 'email', 'SMS': 'sms', 'Histórico Importado': 'history', 'Clientes': 'pipeline', 'Webhooks': 'webhooks-tab', 'Produtor': 'produtor' };
                 if (map[tabName] === id) b.classList.add('active');
             });
 
@@ -1143,6 +1175,63 @@
             if (id === 'pipeline' && !window.__pipelineLoaded) { window.__pipelineLoaded = true; loadClients(); }
             window.__webhooksTabActive = (id === 'webhooks-tab');
             if (id === 'webhooks-tab' && !window.__webhooksLoaded) { window.__webhooksLoaded = true; loadWebhooks(); }
+            if (id === 'produtor' && !window.__produtorLoaded) { window.__produtorLoaded = true; loadProdutor(); }
+        }
+
+        // ── Aba Produtor ──
+        //
+        // Só monta o seletor de cliente e aponta o iframe. Nenhum número do Produtor é calculado
+        // aqui: quem calcula é a própria página, contra as rotas /admin/produtor/*. Este bloco não
+        // lê nem escreve nada da MailX.
+        async function loadProdutor() {
+            const sel = document.getElementById('produtor-cliente');
+            const aviso = document.getElementById('produtor-aviso');
+            const frame = document.getElementById('produtor-frame');
+            const link = document.getElementById('produtor-link');
+
+            const abrir = (id) => {
+                // A página é a mesma do link direto; embed=1 só tira o cabeçalho, que a moldura
+                // daqui já mostra.
+                frame.src = `/admin/produtor?id=${encodeURIComponent(id)}&embed=1`;
+                link.href = `/admin/produtor?id=${encodeURIComponent(id)}`;
+                try { localStorage.setItem('produtorClienteId', String(id)); } catch (_) {}
+            };
+
+            try {
+                const r = await fetch('/admin/produtor/clientes', { headers: { Accept: 'application/json' } });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const clientes = await r.json();
+
+                if (clientes.length === 0) {
+                    aviso.textContent = 'Nenhum cliente cadastrado ainda.';
+                    sel.style.display = 'none';
+                    return;
+                }
+
+                sel.innerHTML = clientes.map(c =>
+                    `<option value="${c.id}">${(c.nome || 'Cliente ' + c.id).replace(/[<>&"]/g, '')}${c.configurado ? '' : ' — sem dados de produtor'}</option>`
+                ).join('');
+
+                // Lembra a última escolha; senão abre no primeiro, que a rota já devolve ordenado
+                // com quem tem dado de produtor na frente.
+                let escolhido = null;
+                try { escolhido = localStorage.getItem('produtorClienteId'); } catch (_) {}
+                if (!escolhido || !clientes.some(c => String(c.id) === String(escolhido))) {
+                    escolhido = clientes[0].id;
+                }
+                sel.value = String(escolhido);
+                sel.onchange = () => abrir(sel.value);
+                abrir(escolhido);
+
+                if (!clientes.some(c => c.configurado)) {
+                    aviso.textContent = 'Nenhum cliente tem custo cadastrado ainda — a tela abre no passo a passo.';
+                }
+            } catch (e) {
+                // A falha aparece no lugar do seletor, com o motivo, em vez de um iframe em branco.
+                aviso.innerHTML = `Não foi possível listar os clientes (${String(e.message).replace(/[<>&"]/g, '')}).`;
+                aviso.style.color = '#ff4d6a';
+                sel.style.display = 'none';
+            }
         }
 
         // ── Chart.js defaults ──

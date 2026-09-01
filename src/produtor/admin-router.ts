@@ -139,6 +139,37 @@ produtorAdminRouter.get('/', (_req: Request, res: Response) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Clientes que têm (ou podem ter) dados de produtor
+//
+// Existe para a aba Produtor do dashboard poder escolher de quem é a tela sem depender das rotas
+// de cliente da MailX. São seis linhas de leitura, e é de propósito que elas morem aqui: a aba
+// nova não pode passar a ser mais um motivo para alguém mexer em admin/router.ts.
+//
+// Quem já tem oferta, venda ou fatura vem primeiro. Sem essa ordem, a lista abriria em ordem
+// alfabética e o produtor de verdade ficaria no meio de clientes de SMS que nunca vão ter custo.
+// ─────────────────────────────────────────────────────────────────────────────
+
+produtorAdminRouter.get('/clientes', asyncHandler(async (_req, res) => {
+  const rows = await query(`
+    SELECT c.id, c.company_name AS nome,
+           (SELECT COUNT(*) FROM produtor_ofertas o WHERE o.client_id = c.id) AS ofertas,
+           (SELECT COUNT(*) FROM produtor_vendas  v WHERE v.client_id = c.id) AS vendas,
+           (SELECT COUNT(*) FROM produtor_faturas f WHERE f.client_id = c.id) AS faturas
+      FROM clients c
+     ORDER BY (
+       (SELECT COUNT(*) FROM produtor_ofertas o WHERE o.client_id = c.id) +
+       (SELECT COUNT(*) FROM produtor_vendas  v WHERE v.client_id = c.id) +
+       (SELECT COUNT(*) FROM produtor_faturas f WHERE f.client_id = c.id)
+     ) DESC, c.company_name
+  `);
+  res.json(rows.map((r: any) => ({
+    id: r.id,
+    nome: r.nome,
+    configurado: (parseInt(r.ofertas, 10) + parseInt(r.vendas, 10) + parseInt(r.faturas, 10)) > 0,
+  })));
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Produtos disponíveis para o Produtor
 // ─────────────────────────────────────────────────────────────────────────────
 
