@@ -521,47 +521,63 @@ export const PRODUTOR_MIGRACAO_SQL = `
 -- pega ACCESS EXCLUSIVE mesmo sem ter o que fazer, e este arquivo roda a CADA tentativa de
 -- reconexão — travaria as tabelas justamente quando o banco já está em dificuldade.
 DO $reparos$
+DECLARE
+  r RECORD;
+  -- ───────────────────────────────────────────────────────────────────────────
+  -- COLUNAS ACRESCENTADAS DEPOIS QUE A TABELA JÁ EXISTIA EM ALGUM BANCO.
+  --
+  -- CREATE TABLE IF NOT EXISTS nunca acrescenta coluna: um banco que criou a tabela numa versão
+  -- antiga fica sem ela para sempre, e a falha aparece longe da causa — num INSERT, semanas
+  -- depois, com "column X of relation Y does not exist" numa tela que não fala de schema.
+  --
+  -- Já aconteceu três vezes neste projeto. A regra agora é: ao acrescentar coluna a uma tabela
+  -- que já foi para produção, acrescente TAMBÉM uma linha aqui. A lista é a memória do que os
+  -- bancos antigos não têm.
+  -- ───────────────────────────────────────────────────────────────────────────
+  novas CONSTANT TEXT[][] := ARRAY[
+    -- valor_liquido e valor_recebido: os três valores do export da Digistore. Antes só o bruto era
+    -- guardado, e a taxa do gateway era ESTIMADA por percentual quando o exato vem por transação.
+    ARRAY['produtor_vendas', 'valor_liquido',  'NUMERIC(12,2)'],
+    ARRAY['produtor_vendas', 'valor_recebido', 'NUMERIC(12,2)'],
+    -- origem: separa a fatura digitada por uma pessoa da que veio da API da Red Rock, para a
+    -- sincronização nunca sobrescrever a que alguém conferiu olhando o papel.
+    ARRAY['produtor_faturas', 'origem',    'VARCHAR(20) NOT NULL DEFAULT ''manual'''],
+    ARRAY['produtor_faturas', 'origem_id', 'VARCHAR(120)'],
+    -- A janela PEDIDA, ao lado da apurada: a consulta de entregas recorta em 90 dias, e sem as
+    -- duas a tela atribuía à Red Rock um intervalo que ela nunca afirmou.
+    ARRAY['produtor_redrock_frete', 'pedido_inicio', 'DATE'],
+    ARRAY['produtor_redrock_frete', 'pedido_fim',    'DATE'],
+    -- Procedência da faixa de frete medida. Antes ia para observacao em texto livre que nenhuma
+    -- tela lia, então a faixa perdia a origem no instante em que era gravada.
+    ARRAY['produtor_fulfillment', 'frete_medido_pedidos', 'INTEGER'],
+    ARRAY['produtor_fulfillment', 'frete_medido_em',      'TIMESTAMP']
+  ];
 BEGIN
-  -- Sempre foi o "Prd ID" da Digistore, nunca a FK do produto local. Com
-  -- produtor_ofertas.produto_id ao lado significando outra coisa, escrever
+  FOR r IN SELECT novas[i][1] AS tabela, novas[i][2] AS coluna, novas[i][3] AS tipo
+             FROM generate_subscripts(novas, 1) AS i LOOP
+    CONTINUE WHEN to_regclass(r.tabela) IS NULL;
+    CONTINUE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name = r.tabela AND column_name = r.coluna);
+    RAISE NOTICE 'Produtor: acrescentando %.%', r.tabela, r.coluna;
+    EXECUTE format('ALTER TABLE %I ADD COLUMN %I %s', r.tabela, r.coluna, r.tipo);
+  END LOOP;
+
+  -- Renomeação, que não cabe na lista acima. Sempre foi o "Prd ID" da Digistore, nunca a FK do
+  -- produto local — e com produtor_ofertas.produto_id ao lado significando outra coisa, escrever
   -- "v.produto_id = o.produto_id" casaria tudo com nada, em silêncio.
   IF EXISTS (SELECT 1 FROM information_schema.columns
               WHERE table_name = 'produtor_vendas' AND column_name = 'produto_id') THEN
     ALTER TABLE produtor_vendas RENAME COLUMN produto_id TO gateway_produto_id;
   END IF;
 
-  -- Sem estas duas, a sincronização da Red Rock quebra no INSERT da primeira fatura — e quebra
-  -- longe da causa, semanas depois de o deploy que criou a tabela ter parecido bem-sucedido.
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_faturas')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'produtor_faturas' AND column_name = 'origem') THEN
-    ALTER TABLE produtor_faturas
-      ADD COLUMN origem VARCHAR(20) NOT NULL DEFAULT 'manual',
-      ADD COLUMN origem_id VARCHAR(120);
-  END IF;
-
-  -- A janela pedida, ao lado da apurada. Antes existia só uma coluna e ela recebia a pedida quando
-  -- a API não informava a sua — o que fazia a tela atribuir à Red Rock uma janela que ela nunca
-  -- disse. O NOT NULL das colunas antigas também cai: "não informada" precisa poder ser NULL.
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_redrock_frete')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'produtor_redrock_frete' AND column_name = 'pedido_inicio') THEN
+  -- "Janela não informada" precisa poder ser NULL, e o índice antigo não tolerava isso.
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'produtor_redrock_frete' AND column_name = 'janela_inicio'
+                AND is_nullable = 'NO') THEN
     ALTER TABLE produtor_redrock_frete
-      ADD COLUMN pedido_inicio DATE,
-      ADD COLUMN pedido_fim DATE,
       ALTER COLUMN janela_inicio DROP NOT NULL,
       ALTER COLUMN janela_fim DROP NOT NULL;
-    -- As linhas que já existem foram gravadas com a janela apurada nas colunas antigas; a pedida
-    -- não foi guardada e não dá para inventar. Fica NULL, e a tela sabe dizer "não registrada".
     DROP INDEX IF EXISTS idx_produtor_redrock_frete_janela;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_fulfillment')
-     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                      WHERE table_name = 'produtor_fulfillment' AND column_name = 'frete_medido_pedidos') THEN
-    ALTER TABLE produtor_fulfillment
-      ADD COLUMN frete_medido_pedidos INTEGER,
-      ADD COLUMN frete_medido_em TIMESTAMP;
   END IF;
 END
 $reparos$;
