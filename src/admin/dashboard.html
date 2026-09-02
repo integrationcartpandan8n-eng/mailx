@@ -1200,7 +1200,11 @@
                 try {
                     const doc = frame.contentDocument;
                     if (!doc || !doc.body) return;
-                    const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+                    // getBoundingClientRect do body, não scrollHeight: scrollHeight nunca fica
+                    // abaixo da altura do quadro, então a medida só sabe crescer. O retângulo do
+                    // body acompanha o conteúdo nas duas direções — desde que a página embutida
+                    // não force min-height, que é o que o ?embed=1 desliga do outro lado.
+                    const h = Math.ceil(doc.body.getBoundingClientRect().height);
                     // Só mexe em mudança de verdade: reagir a cada pixel faria o observer se
                     // realimentar com a própria mudança de altura.
                     if (h > 0 && Math.abs(h - ultimaAltura) > 8) {

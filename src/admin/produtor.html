@@ -675,6 +675,11 @@ if (embutida) {
     // vazia entre a borda do quadro e o primeiro card.
     document.body.style.padding = '0 0 1rem';
     document.body.style.background = 'transparent';
+    // Sem isto o quadro do dashboard vira catraca: body tem min-height 100vh, e dentro de um
+    // iframe 100vh É a altura do quadro. A moldura mede scrollHeight, aumenta o quadro, o body
+    // acompanha o quadro maior, e a próxima medição devolve o mesmo número — nunca encolhe. Uma
+    // tela que ficou alta uma vez deixa um vazio embaixo para sempre.
+    document.body.style.minHeight = '0';
 }
 let periodo = null;           // null = vitalício
 let resumo = null;
