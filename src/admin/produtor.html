@@ -474,7 +474,10 @@
          O card "Custo por produto" que ficava aqui saiu: ele editava exatamente os mesmos campos
          que o card Produtos, lá em cima. Dois formulários para o mesmo dado é como um deles vira o
          desatualizado, e ninguém sabe qual dos dois valeu. -->
-    <div class="grid2" id="secFulfillment">
+    <!-- Seção de uma coluna só: o card que ficava na segunda metade era o "Custo por produto", e
+         ele saiu porque editava os mesmos campos do card Produtos. Deixar a grade de duas colunas
+         com um card só abria um buraco do tamanho de meia tela ao lado. -->
+    <div id="secFulfillment">
         <datalist id="nomesDeProduto"></datalist>
         <div class="card">
             <div class="card-header">
@@ -482,7 +485,7 @@
                 <span class="card-sub">valem para todas as ofertas</span>
             </div>
             <div class="card-body">
-                <form id="formFulfillment">
+                <form id="formFulfillment" style="max-width:52rem">
                     <div class="campo">
                         <label for="tFornecedor">Fornecedor</label>
                         <input id="tFornecedor" type="text" value="Red Rock Labs" required>
