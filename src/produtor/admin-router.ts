@@ -820,19 +820,39 @@ produtorAdminRouter.post(
     // intervalo e os intervalos se sobrepõem). Duplicar dobraria o invoice previsto e pareceria
     // crescimento — o índice por número de transação é o que impede.
     let gravadas = 0;
-    for (const v of r.vendas) {
-      const ins = await query(
-        `INSERT INTO produtor_vendas (conta_id, importacao_id, transacao_id, pedido_id, data,
-           tipo, tipo_bruto, gateway_produto_id, produto_nome, quantidade, valor_bruto, valor_liquido,
-           valor_recebido, moeda, pais, afiliado)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-         ON CONFLICT (conta_id, transacao_id, COALESCE(gateway_produto_id, '')) DO NOTHING
-         RETURNING id`,
-        [contaId, importacaoId, v.transacao_id, v.pedido_id, v.data, v.tipo, v.tipo_bruto,
-         v.gateway_produto_id, v.produto_nome, v.quantidade, v.valor_bruto, v.valor_liquido,
-         v.valor_recebido, v.moeda, v.pais, v.afiliado]
-      );
-      if (ins.length > 0) gravadas++;
+    try {
+      for (const v of r.vendas) {
+        const ins = await query(
+          `INSERT INTO produtor_vendas (conta_id, importacao_id, transacao_id, pedido_id, data,
+             tipo, tipo_bruto, gateway_produto_id, produto_nome, quantidade, valor_bruto, valor_liquido,
+             valor_recebido, moeda, pais, afiliado)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+           ON CONFLICT (conta_id, transacao_id, COALESCE(gateway_produto_id, '')) DO NOTHING
+           RETURNING id`,
+          [contaId, importacaoId, v.transacao_id, v.pedido_id, v.data, v.tipo, v.tipo_bruto,
+           v.gateway_produto_id, v.produto_nome, v.quantidade, v.valor_bruto, v.valor_liquido,
+           v.valor_recebido, v.moeda, v.pais, v.afiliado]
+        );
+        if (ins.length > 0) gravadas++;
+      }
+    } catch (err: any) {
+      // A linha do histórico é criada ANTES das vendas, porque cada venda guarda de qual
+      // importação veio (é o que faz o "Desfazer" ser exato). Quando o INSERT quebra no meio, essa
+      // linha ficava para trás com os zeros do DEFAULT — e uma importação de 0 gravadas e 0
+      // repetidas é indistinguível de uma que rodou e não achou nada. Foi o que fez a tela marcar
+      // "Importar vendas ✓" depois de um erro em que nada entrou.
+      //
+      // Agora ela guarda o que conseguiu e o motivo de ter parado, e o erro continua subindo para
+      // a pessoa ver. Apagar a linha seria pior: as vendas que já entraram ficariam órfãs.
+      await query(
+        `UPDATE produtor_importacoes
+            SET linhas_gravadas = $2, linhas_repetidas = 0,
+                aviso = TRIM(BOTH ' | ' FROM COALESCE(aviso, '') || ' | ' || $3)
+          WHERE id = $1`,
+        [importacaoId, gravadas,
+         `A importação parou no meio: ${String(err?.message ?? 'erro desconhecido').slice(0, 300)}`]
+      ).catch(() => { /* se nem isso gravar, o erro original é o que importa */ });
+      throw err;
     }
     const repetidas = r.vendas.length - gravadas;
     await query(

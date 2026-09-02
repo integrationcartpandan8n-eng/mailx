@@ -1446,7 +1446,11 @@ function aplicarVisibilidade(e) {
 function etapasDoCadastro() {
     return {
         temProduto: produtosDaConta.length > 0,
-        temVendas: (previsao?.transacoes ?? 0) > 0 || importacoes.length > 0,
+        // Importação que não gravou nada não conta como passo cumprido. Uma linha de histórico com
+        // zero gravadas é uma tentativa que falhou ou um arquivo que não trouxe venda nenhuma — nos
+        // dois casos, a próxima ação continua sendo importar.
+        temVendas: (previsao?.transacoes ?? 0) > 0
+                   || importacoes.some(i => (i.linhas_gravadas ?? 0) > 0),
         temCusto: produtosDaConta.some(p => p.custo_unidade != null),
         temTabela: !!tabelaFulfillment,
         temOfertas: ofertas.length > 0,
@@ -2234,13 +2238,23 @@ async function carregarHistoricoImport() {
         document.getElementById('historicoImport').innerHTML = lista.length === 0 ? '' : `
             <div class="scroll"><table>
                 <thead><tr><th>Arquivo</th><th>Período</th><th>Gravadas</th><th>Repetidas</th><th></th></tr></thead>
-                <tbody>${lista.map(i => `<tr>
-                    <td class="nome-linha">${esc(i.arquivo)}</td>
+                <tbody>${lista.map(i => {
+                    // Importação que não gravou nada não pode parecer uma linha normal do
+                    // histórico: ou falhou no meio, ou o arquivo não trouxe venda. Nos dois casos
+                    // o aviso diz o motivo, e é ele que a pessoa precisa ler.
+                    const vazia = (i.linhas_gravadas ?? 0) === 0;
+                    return `<tr${vazia ? ' style="opacity:0.75"' : ''}>
+                    <td class="nome-linha">
+                        ${esc(i.arquivo)}
+                        ${vazia ? `<br><span class="ajuda" style="color:var(--warning)">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            ${esc(i.aviso || 'não gravou nenhuma venda')}</span>` : ''}
+                    </td>
                     <td>${dataBR(i.periodo_inicio)} – ${dataBR(i.periodo_fim)}</td>
                     <td class="num">${inteiro(i.linhas_gravadas)}</td>
                     <td class="num">${inteiro(i.linhas_repetidas)}</td>
-                    <td><button class="btn mini ghost" onclick="desfazerImport(${i.id}, '${esc(i.arquivo).replace(/'/g, "&#39;")}', ${i.linhas_gravadas})">Desfazer</button></td>
-                </tr>`).join('')}</tbody>
+                    <td><button class="btn mini ghost" onclick="desfazerImport(${i.id}, '${esc(i.arquivo).replace(/'/g, "&#39;")}', ${i.linhas_gravadas})">${vazia ? 'Remover' : 'Desfazer'}</button></td>
+                </tr>`; }).join('')}</tbody>
             </table></div>`;
     } catch (e) { /* histórico é acessório: não derruba a tela */ }
 }
