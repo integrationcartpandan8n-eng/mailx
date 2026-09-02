@@ -414,7 +414,7 @@ async function gravarFaturas(
     } else {
       await query(
         `INSERT INTO produtor_faturas
-           (conta_id, kit_id, fornecedor, numero, categoria, competencia_inicio, competencia_fim,
+           (conta_id, produto_id, fornecedor, numero, categoria, competencia_inicio, competencia_fim,
             emitida_em, valor, moeda, origem, origem_id, observacao)
          VALUES ($1, NULL, $2, $3, 'produto_frete', $4, $5, $6, $7, $8, $9, $10, $11)`,
         [contaId, FORNECEDOR_REDROCK, numero, periodo.inicio, periodo.fim,
