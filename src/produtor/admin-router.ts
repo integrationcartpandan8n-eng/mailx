@@ -1231,5 +1231,26 @@ produtorAdminRouter.use((err: any, _req: Request, res: Response, next: NextFunct
     res.status(err.permanente ? 400 : 502).json({ error: err.message, origem: 'redrock' });
     return;
   }
+
+  // Erro do Postgres vira mensagem legível em vez de "Internal server error".
+  //
+  // Isto é painel de administração, e o schema é o nosso: "column X of relation Y does not exist"
+  // diz na hora o que aconteceu, enquanto "Internal server error" obriga a ir no pm2 logs do
+  // servidor. Já custou duas idas ao log nesta semana, as duas por coluna renomeada.
+  //
+  // Só o code e a message do Postgres, nunca o SQL nem os parâmetros — a query traria nome de
+  // cliente e valor de venda para dentro de uma mensagem de erro.
+  if (err && typeof err.code === 'string' && /^[0-9A-Z]{5}$/.test(err.code) && err.message) {
+    logger.error(CTX, `Erro do banco (${err.code}): ${err.message}`, { detail: err.detail });
+    res.status(500).json({
+      error: `O banco recusou a operação (${err.code}): ${err.message}`,
+      dica: err.code === '42703' || err.code === '42P01'
+        ? 'Coluna ou tabela que o código espera não existe neste banco. Confira se o deploy mais ' +
+          'recente rodou — o schema é aplicado no restart do servidor.'
+        : undefined,
+    });
+    return;
+  }
+
   next(err);
 });
