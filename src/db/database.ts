@@ -1,6 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { PRODUTOR_BASE_SQL, PRODUTOR_SCHEMA_SQL, PRODUTOR_MIGRACAO_SQL } from '../produtor/schema';
 
 let pool: Pool | null = null;
 let dbReady = false;
@@ -562,6 +563,22 @@ export async function initDatabase(): Promise<void> {
         -- configurado" nesse caso, nunca um número inventado).
         ALTER TABLE clients ADD COLUMN IF NOT EXISTS digistore24_merchant_id VARCHAR(50);
       `);
+
+      // Aba Produtor: tabelas próprias, num bloco próprio, com o SQL morando em
+      // src/produtor/schema.ts. A fronteira entre o dado do produtor (custo, fatura, margem) e o
+      // dado da MailX existe no código e no banco, não só na cabeça de quem escreveu. Roda aqui
+      // junto com o resto porque schema que depende de alguém lembrar de rodar é schema que um dia
+      // não existe em produção.
+      // A ordem importa e é o motivo de serem três blocos. A base traz produtor_contas e
+      // produtor_produtos, que a migração precisa ter para onde apontar. A migração converte um
+      // banco na forma antiga (pendurada em clients/kits) e sai no primeiro comando quando não
+      // encontra essa forma — no caminho normal custa uma leitura de catálogo. Só então o resto do
+      // schema roda: os índices dele já falam de conta_id, que num banco não migrado ainda não
+      // existiria.
+      await client.query(PRODUTOR_BASE_SQL);
+      await client.query(PRODUTOR_MIGRACAO_SQL);
+      await client.query(PRODUTOR_SCHEMA_SQL);
+
       dbReady = true;
       logger.info('DB', '✅ Database tables initialized successfully');
     } finally {

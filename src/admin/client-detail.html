@@ -1323,6 +1323,21 @@
                 <p id="clientEmail"></p>
             </div>
             <span class="status-badge" id="clientStatus"></span>
+            <!-- Acesso à área de Produtor (custo, fatura do fulfillment, margem). Link estático com
+                 o href montado aqui mesmo a partir da querystring: assim ele não depende de nenhuma
+                 função de carga desta página, e continua funcionando mesmo se os dados falharem. -->
+            <a id="linkProdutor" href="/admin/produtor" style="margin-left:auto; display:inline-flex; align-items:center; gap:0.4rem; padding:0.5rem 0.85rem; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-soft); text-decoration:none; font-size:0.76rem; font-weight:700">
+                <i class="fas fa-sack-dollar" style="color:var(--warning)"></i> Produtor
+            </a>
+            <script>
+                (function () {
+                    var id = new URLSearchParams(location.search).get('id');
+                    // Sem o id do cliente na URL: a tela do Produtor é por CONTA DE PRODUTOR, que
+                    // não é o mesmo que cliente da MailX. Passar o id do cliente aqui abria a conta
+                    // errada — ou nenhuma. Ela resolve sozinha qual conta abrir.
+                    void id;
+                })();
+            </script>
         </div>
 
         <!-- ═══ Tab Navigation ═══ -->
