@@ -861,10 +861,15 @@ async function carregarResumo() {
             ]);
         } catch (_) { integracao = null; }
         custoRedRock = null;
-        if (integracao?.redrock && periodo) {
+        if (integracao?.redrock) {
+            // Em "Vitalício" o custo medido continua fazendo sentido: é tudo o que foi
+            // sincronizado. A versão anterior ficava muda nesse modo, e como Vitalício é o padrão
+            // da tela, o card nascia dizendo "escolha um período" mesmo com mil pedidos dentro.
+            const de = periodo ? periodo.from : '2000-01-01';
+            const ate = periodo ? periodo.to : ymd(new Date());
             try {
                 custoRedRock = await api(
-                    `/admin/produtor/contas/${contaId}/redrock/custo-real?from=${periodo.from}&to=${periodo.to}`);
+                    `/admin/produtor/contas/${contaId}/redrock/custo-real?from=${de}&to=${ate}`);
             } catch (e) { custoRedRock = { erro: e.message }; }
         }
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
@@ -1194,16 +1199,8 @@ function renderCustoReal() {
         sub.textContent = 'apurado pela Red Rock';
         return;
     }
-    if (!periodo) {
-        el.innerHTML = `<div class="ajuda">
-            O custo medido é sempre <b>de um período</b> — a Red Rock cobra por semana. Escolha um
-            período acima para vê-lo.</div>`;
-        sub.textContent = 'escolha um período';
-        return;
-    }
-
     const c = custoRedRock;
-    sub.textContent = rotuloPeriodo();
+    sub.textContent = periodo ? rotuloPeriodo() : 'tudo que foi sincronizado';
 
     if (!c || c.erro) {
         el.innerHTML = `<div class="aviso" style="background:var(--danger-bg); border-color:var(--danger)">
