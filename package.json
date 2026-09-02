@@ -4,7 +4,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && node scripts/validar-html.js",
+    "build": "tsc && node scripts/validar-html.js && node scripts/validar-sql-embutido.js",
     "start": "node dist/index.js",
     "bootstrap": "tsx src/setup/bootstrap.ts",
     "resync": "tsx src/setup/resync-webhooks.ts",

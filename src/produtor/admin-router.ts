@@ -1150,10 +1150,13 @@ produtorAdminRouter.get('/contas/:id/redrock/custo-real', asyncHandler(async (re
   const contaId = idNaRota(req, 'id');
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
+  // Sem from/to é vitalício, e vitalício não passa recorte nenhum — nem um '2000-01-01' fingindo
+  // de "desde sempre", que descartava pedido sem data de criação em silêncio.
+  if (!from && !to) { res.json(await custoReal(contaId, null)); return; }
   if (!from || !to || !DATA_QUERY_RE.test(from) || !DATA_QUERY_RE.test(to) || from > to) {
-    throw new ErroDeEntrada('Informe from e to no formato AAAA-MM-DD.');
+    throw new ErroDeEntrada('Informe from e to no formato AAAA-MM-DD, ou nenhum dos dois para o vitalício.');
   }
-  res.json(await custoReal(contaId, from, to));
+  res.json(await custoReal(contaId, { de: from, ate: to }));
 }));
 
 produtorAdminRouter.get('/contas/:id/redrock/frete', asyncHandler(async (req, res) => {
@@ -1171,7 +1174,7 @@ produtorAdminRouter.get('/contas/:id/redrock/frete', asyncHandler(async (req, re
  */
 produtorAdminRouter.post('/contas/:id/redrock/frete/aplicar', asyncHandler(async (req, res) => {
   const contaId = idNaRota(req, 'id');
-  const { sugestao, janela } = await fretePorPais(contaId);
+  const { sugestao } = await fretePorPais(contaId);
   if (!sugestao) {
     throw new ErroDeEntrada(
       'Ainda não há frete medido para sugerir uma faixa. Sincronize a Red Rock primeiro.'
@@ -1180,18 +1183,33 @@ produtorAdminRouter.post('/contas/:id/redrock/frete/aplicar', asyncHandler(async
   const atual = await lerTabelaFulfillment(contaId);
   if (!atual) throw new ErroDeEntrada('Cadastre a tabela de fulfillment antes de aplicar a faixa medida.');
 
+  // Faixa degenerada não é aplicada. Com min e max nulos existe uma medida central e não existe
+  // dispersão medida — gravar min = max = típico transformaria a previsão num número cravado, e a
+  // banda de incerteza é justamente a parte honesta dela.
+  if (sugestao.min == null || sugestao.max == null) {
+    throw new ErroDeEntrada(
+      `Só ${sugestao.pedidos} pedido(s) com frete já cobrado — pouco para medir a dispersão. ` +
+      `O frete típico medido é ${sugestao.tipico.toFixed(2)}, e ele aparece na tela; a faixa só ` +
+      `entra quando houver observação suficiente, para a previsão não virar um número cravado.`
+    );
+  }
+  // Mesma checagem do formulário. Os percentis já garantem a ordem por construção, mas a rota não
+  // pode depender disso: ela é um caminho de escrita como qualquer outro, e o dia em que a origem
+  // da sugestão mudar, é aqui que o banco tem que recusar um intervalo que não contém o meio dele.
+  if (!(sugestao.min <= sugestao.tipico && sugestao.tipico <= sugestao.max)) {
+    throw new ErroDeEntrada('A faixa medida saiu fora de ordem (mínimo, típico, máximo). Nada foi gravado.');
+  }
+
   await query(
     `UPDATE produtor_fulfillment
         SET frete_pedido_min = $2, frete_pedido_tipico = $3, frete_pedido_max = $4,
-            observacao = TRIM(BOTH E'\\n' FROM COALESCE(observacao, '') || $5),
+            frete_medido_pedidos = $5, frete_medido_em = NOW(),
             updated_at = NOW()
       WHERE conta_id = $1`,
-    [contaId, sugestao.min, sugestao.tipico, sugestao.max,
-     `\nFaixa de frete medida pela Red Rock na janela ${janela?.inicio} a ${janela?.fim}, ` +
-     `aplicada em ${new Date().toISOString().slice(0, 10)}.`]
+    [contaId, sugestao.min, sugestao.tipico, sugestao.max, sugestao.pedidos]
   );
 
-  res.json({ aplicada: sugestao, janela, anterior: {
+  res.json({ aplicada: sugestao, anterior: {
     min: atual.frete_pedido_min, tipico: atual.frete_pedido_tipico, max: atual.frete_pedido_max,
   } });
 }));

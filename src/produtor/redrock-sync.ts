@@ -444,25 +444,32 @@ async function gravarEntregas(
     ]);
   }
 
-  // A janela gravada é a que a API DIZ ter usado, não a que foi pedida: ela recorta em 90 dias por
-  // padrão e limita em um ano. Guardar a pedida faria a tela rotular como "últimos 12 meses" um
-  // número que é de três.
-  const inicio = dataSo(e.date_from) ?? de;
-  const fim = dataSo(e.date_to) ?? ate;
+  // As duas janelas são guardadas separadas, e a apurada fica NULL quando a API não informa.
+  //
+  // Antes havia um `?? de` aqui, e ele fazia um estrago silencioso: "a Red Rock não disse a
+  // janela" virava "a Red Rock confirmou a janela que pedi". A tela então imprimia "apurada pela
+  // Red Rock" sobre um intervalo que ela nunca afirmou, e a comparação que deveria detectar a
+  // divergência passava a comparar `de` com `de` — o aviso nunca disparava.
+  const inicio = dataSo(e.date_from);
+  const fim = dataSo(e.date_to);
 
   const valores: any[] = [];
   const sql: string[] = [];
   linhas.forEach((l, i) => {
-    const b = i * 8;
-    sql.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8})`);
-    valores.push(contaId, l[0], inicio, fim, l[1], l[2], l[3], l[4]);
+    const b = i * 10;
+    sql.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10})`);
+    valores.push(contaId, l[0], inicio, fim, de, ate, l[1], l[2], l[3], l[4]);
   });
 
   const r = await query(
     `INSERT INTO produtor_redrock_frete
-       (conta_id, pais, janela_inicio, janela_fim, pedidos, linhas_cobranca, frete_total, frete_medio_pedido)
+       (conta_id, pais, janela_inicio, janela_fim, pedido_inicio, pedido_fim,
+        pedidos, linhas_cobranca, frete_total, frete_medio_pedido)
      VALUES ${sql.join(',')}
-     ON CONFLICT (conta_id, pais, janela_inicio, janela_fim) DO UPDATE SET
+     ON CONFLICT (conta_id, pais,
+                  COALESCE(janela_inicio, DATE '0001-01-01'),
+                  COALESCE(janela_fim, DATE '0001-01-01')) DO UPDATE SET
+       pedido_inicio = EXCLUDED.pedido_inicio, pedido_fim = EXCLUDED.pedido_fim,
        pedidos = EXCLUDED.pedidos, linhas_cobranca = EXCLUDED.linhas_cobranca,
        frete_total = EXCLUDED.frete_total, frete_medio_pedido = EXCLUDED.frete_medio_pedido,
        sincronizado_em = NOW()
@@ -579,12 +586,25 @@ export async function sincronizar(
     const e = await cliente.entregas(de, ate);
     const n = await gravarEntregas(contaId, de, ate, e);
     r.entregas.paises = Math.max(0, n - 1); // a linha '*' é o agregado, não é país
-    r.entregas.janela = { inicio: dataSo(e.date_from) ?? de, fim: dataSo(e.date_to) ?? ate };
-    if (r.entregas.janela.inicio !== de || r.entregas.janela.fim !== ate) {
+    const jIni = dataSo(e.date_from);
+    const jFim = dataSo(e.date_to);
+    r.entregas.janela = { inicio: jIni, fim: jFim };
+    if (jIni == null || jFim == null) {
       avisos.push(
-        `O frete por país veio da janela ${r.entregas.janela.inicio} a ${r.entregas.janela.fim}, ` +
-        `que não é exatamente a pedida (${de} a ${ate}): a Red Rock recorta essa consulta em no ` +
-        `máximo um ano.`
+        'A Red Rock não informou a janela do frete por país. Os números do frete estão na tela, ' +
+        'mas sem dizer que intervalo eles cobrem.'
+      );
+    } else if (jIni !== de || jFim !== ate) {
+      // O aviso antigo só oferecia o teto de um ano como explicação, e o corte que acontece de
+      // verdade é o padrão de 90 dias. Quem lia conferia 124 dias contra "no máximo um ano",
+      // concluía que não se aplicava, e aprendia a ignorar o aviso — pior que não avisar.
+      const dias = (a: string, b: string) =>
+        Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1;
+      avisos.push(
+        `O frete por país cobre ${dias(jIni, jFim)} dias (${jIni} a ${jFim}), não os ` +
+        `${dias(de, ate)} pedidos (${de} a ${ate}): a Red Rock recorta essa consulta em 90 dias ` +
+        `por padrão. O custo por pedido acima é do período inteiro; o frete médio, só dessa ` +
+        `janela menor.`
       );
     }
     await anotarSync(contaId, 'entregas', de, ate, { registros: n, gravados: n, status: 'ok', ms: Date.now() - t0 });
@@ -610,11 +630,17 @@ export async function sincronizar(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CustoRealPeriodo {
-  periodo: { inicio: string; fim: string };
+  /** null = vitalício: tudo o que foi sincronizado, sem recorte de data. */
+  periodo: { inicio: string; fim: string } | null;
   pedidos_total: number;
+  /** invoiced=true, INCLUSIVE os que ainda esperam frete. Só contagem — não é denominador. */
   pedidos_faturados: number;
+  /** invoiced=true e frete já cobrado. É esta a população de custo_total e custo_medio_pedido. */
+  pedidos_completos: number;
   pedidos_sem_fatura: number;
   pedidos_aguardando_frete: number;
+  /** Pedidos sem data de criação: ficam fora de qualquer recorte por período, e a tela precisa dizer. */
+  pedidos_sem_data: number;
   custo_total: number | null;
   custo_produto: number | null;
   custo_fulfillment: number | null;
@@ -622,7 +648,9 @@ export interface CustoRealPeriodo {
   custo_embalagem: number | null;
   custo_outros: number | null;
   custo_medio_pedido: number | null;
-  /** Quando foi a última sincronização bem-sucedida de pedidos. Null = nunca sincronizou. */
+  /** Parte fixa já cobrada dos pedidos que ainda esperam frete. Dinheiro real, fora da média. */
+  custo_parcial: number | null;
+  /** Quando foi a última sincronização bem-sucedida que COBRE este período. Null = nunca. */
   atualizado_em: string | null;
   ultima_falha: { em: string; erro: string } | null;
 }
@@ -630,52 +658,97 @@ export interface CustoRealPeriodo {
 /**
  * Custo real do período, direto do que a Red Rock cobrou.
  *
- * As médias saem SÓ dos pedidos faturados. Somar o pedido ainda não cobrado como zero, ou dividir
- * o custo dos faturados pelo total de pedidos, dá dois números diferentes e igualmente errados —
- * e o erro cresce perto do fim do período, justamente quando alguém está olhando para decidir
- * alguma coisa. Por isso os dois contadores voltam separados: quem lê vê quanto do período já foi
- * cobrado antes de olhar para a média.
+ * Tudo aqui — soma, parcelas e média — sai de UMA população: pedido faturado com o frete já
+ * cobrado. Os outros dois grupos voltam como contagem e como valor à parte, para a tela mostrar
+ * sem misturar:
+ *
+ *   não faturado ....... existe, ainda não foi cobrado. Custo desconhecido.
+ *   aguardando frete ... foi cobrado só na parte fixa. Custo conhecido pela metade.
+ *
+ * O segundo grupo é o traiçoeiro. O total dele é um número real e plausível, só que sem a perna
+ * do frete — e como frete é ~28% da conta, jogá-lo na média derruba o resultado sem nada parecer
+ * errado. Com dado real de 1.261 pedidos deu $28,05 no lugar de $30,59.
  */
 export async function custoReal(
-  contaId: number, de: string, ate: string
+  contaId: number, periodo: { de: string; ate: string } | null
 ): Promise<CustoRealPeriodo> {
+  // Vitalício não passa recorte nenhum. Antes ele mandava '2000-01-01' até a data do RELÓGIO DO
+  // NAVEGADOR, o que descartava em silêncio pedido sem criado_em e qualquer pedido à frente do
+  // relógio de quem olha — enquanto a tela dizia "tudo que foi sincronizado".
+  const recorte = periodo
+    ? `AND criado_em >= $2::date AND criado_em < ($3::date + 1)`
+    : '';
+  const params = periodo ? [contaId, periodo.de, periodo.ate] : [contaId];
+
   const t = await queryOne<any>(
     `SELECT
-       COUNT(*)::int                                              AS total,
-       COUNT(*) FILTER (WHERE faturado)::int                      AS faturados,
-       COUNT(*) FILTER (WHERE NOT faturado)::int                  AS sem_fatura,
-       COUNT(*) FILTER (WHERE aguardando_frete)::int              AS aguardando,
-       SUM(total)             FILTER (WHERE faturado)             AS custo,
-       SUM(total_produto)     FILTER (WHERE faturado)             AS produto,
-       SUM(total_fulfillment) FILTER (WHERE faturado)             AS fulfillment,
-       SUM(total_frete)       FILTER (WHERE faturado)             AS frete,
-       SUM(total_embalagem)   FILTER (WHERE faturado)             AS embalagem,
-       SUM(total_outros)      FILTER (WHERE faturado)             AS outros,
-       AVG(total)             FILTER (WHERE faturado)             AS medio
+       COUNT(*)::int                                                     AS total,
+       COUNT(*) FILTER (WHERE faturado)::int                             AS faturados,
+       COUNT(*) FILTER (WHERE NOT faturado)::int                         AS sem_fatura,
+       COUNT(*) FILTER (WHERE aguardando_frete)::int                     AS aguardando,
+       COUNT(*) FILTER (WHERE criado_em IS NULL)::int                    AS sem_data,
+       -- ── A população que fecha conta ──────────────────────────────────────────
+       -- faturado E não aguardando frete. "faturado" sozinho não serve: os dois booleanos são
+       -- independentes na API, e o pedido cobrado só na parte fixa tem invoiced=true com o total
+       -- SEM a perna do frete. Somar esse total ou entrar com ele numa média mistura pedido
+       -- completo com pedido pela metade — e o resultado sai baixo, do jeito que parece plausível.
+       --
+       -- Aconteceu com dado real: a média deu $28,05 quando o pedido de cobrança fechada custava
+       -- $30,59. Os 295 pedidos sem frete puxavam 8,3% para baixo, e a tela ainda afirmava que
+       -- eles estavam de fora. A coluna aguardando_frete foi criada exatamente para impedir isso
+       -- e não estava sendo usada em nenhum FILTER.
+       COUNT(*) FILTER (WHERE faturado AND NOT aguardando_frete)::int     AS completos,
+       SUM(total)             FILTER (WHERE faturado AND NOT aguardando_frete) AS custo,
+       SUM(total_produto)     FILTER (WHERE faturado AND NOT aguardando_frete) AS produto,
+       SUM(total_fulfillment) FILTER (WHERE faturado AND NOT aguardando_frete) AS fulfillment,
+       SUM(total_frete)       FILTER (WHERE faturado AND NOT aguardando_frete) AS frete,
+       SUM(total_embalagem)   FILTER (WHERE faturado AND NOT aguardando_frete) AS embalagem,
+       SUM(total_outros)      FILTER (WHERE faturado AND NOT aguardando_frete) AS outros,
+       AVG(total)             FILTER (WHERE faturado AND NOT aguardando_frete) AS medio,
+       -- A parte fixa já cobrada dos que ainda esperam frete, separada. Ela é dinheiro real que
+       -- saiu, então não pode sumir da tela — só não pode entrar na média nem virar porcentagem.
+       SUM(total)             FILTER (WHERE faturado AND aguardando_frete)     AS custo_parcial
      FROM produtor_redrock_pedidos
-      WHERE conta_id = $1 AND criado_em >= $2::date AND criado_em < ($3::date + 1)`,
-    [contaId, de, ate]
+      WHERE conta_id = $1 ${recorte}`,
+    params
   );
 
-  const ok = await queryOne<{ created_at: Date | string }>(
-    `SELECT created_at FROM produtor_redrock_sync
-      WHERE conta_id = $1 AND recurso = 'pedidos' AND status = 'ok'
-      ORDER BY created_at DESC LIMIT 1`,
-    [contaId]
-  );
+  // A data de frescor tem que ser do PERÍODO que está na tela. A última sincronização de agosto
+  // não diz nada sobre números de maio, e imprimir "lido agora há pouco" sobre eles é a afirmação
+  // mais perigosa do card — é justamente a que existe para dizer em que dá para confiar.
+  const ok = periodo
+    ? await queryOne<{ created_at: Date | string }>(
+        `SELECT created_at FROM produtor_redrock_sync
+          WHERE conta_id = $1 AND recurso = 'pedidos' AND status = 'ok'
+            AND periodo_inicio <= $2::date AND periodo_fim >= $3::date
+          ORDER BY created_at DESC LIMIT 1`,
+        [contaId, periodo.de, periodo.ate]
+      )
+    : await queryOne<{ created_at: Date | string }>(
+        `SELECT created_at FROM produtor_redrock_sync
+          WHERE conta_id = $1 AND recurso = 'pedidos' AND status = 'ok'
+          ORDER BY created_at DESC LIMIT 1`,
+        [contaId]
+      );
+
+  // Só falha de PEDIDOS invalida estes números. Uma falha em entregas ou faturas não impede os
+  // pedidos de entrarem, e marcar o card inteiro como desatualizado por causa dela fazia a pessoa
+  // sincronizar de novo atrás de um problema que não estava ali.
   const falha = await queryOne<{ created_at: Date | string; erro: string }>(
     `SELECT created_at, erro FROM produtor_redrock_sync
-      WHERE conta_id = $1 AND status = 'erro'
+      WHERE conta_id = $1 AND recurso = 'pedidos' AND status = 'erro'
       ORDER BY created_at DESC LIMIT 1`,
     [contaId]
   );
 
   return {
-    periodo: { inicio: de, fim: ate },
+    periodo: periodo ? { inicio: periodo.de, fim: periodo.ate } : null,
     pedidos_total: t?.total ?? 0,
     pedidos_faturados: t?.faturados ?? 0,
+    pedidos_completos: t?.completos ?? 0,
     pedidos_sem_fatura: t?.sem_fatura ?? 0,
     pedidos_aguardando_frete: t?.aguardando ?? 0,
+    pedidos_sem_data: t?.sem_data ?? 0,
     custo_total: num(t?.custo),
     custo_produto: num(t?.produto),
     custo_fulfillment: num(t?.fulfillment),
@@ -683,6 +756,7 @@ export async function custoReal(
     custo_embalagem: num(t?.embalagem),
     custo_outros: num(t?.outros),
     custo_medio_pedido: num(t?.medio),
+    custo_parcial: num(t?.custo_parcial),
     atualizado_em: ok ? iso(ok.created_at) : null,
     ultima_falha: falha && (!ok || new Date(falha.created_at) > new Date(ok.created_at))
       ? { em: iso(falha.created_at)!, erro: falha.erro }
@@ -691,37 +765,70 @@ export async function custoReal(
 }
 
 export interface FreteMedido {
+  /** Janela que a Red Rock DISSE ter apurado. null = ela não informou. */
   janela: { inicio: string; fim: string } | null;
+  /** Janela que foi pedida na sincronização, para a tela poder mostrar quando as duas divergem. */
+  janela_pedida: { inicio: string; fim: string } | null;
   geral: { pedidos: number | null; frete_total: number | null; medio: number | null } | null;
   paises: Array<{ pais: string; pedidos: number | null; frete_total: number | null; medio: number | null }>;
-  /** Sugestão de faixa para produtor_fulfillment, a partir do medido. */
-  sugestao: { min: number; tipico: number; max: number } | null;
+  /**
+   * Faixa sugerida para produtor_fulfillment, tirada dos fretes REAIS pedido a pedido.
+   *
+   * min e max são null quando não há observações suficientes para falar em dispersão — e aí a
+   * tela mostra só o típico, sem chamar de faixa. Um mínimo igual ao máximo não é uma faixa
+   * estreita: é a ausência de faixa escrita com a aparência de uma.
+   */
+  sugestao: { min: number | null; tipico: number; max: number | null; pedidos: number } | null;
 }
 
 /**
- * Frete medido pelo fornecedor, e a faixa que ele sugere.
+ * Frete medido pelo fornecedor.
  *
- * A faixa cadastrada hoje ($0,86 a $17,12) saiu de 12 faturas em que o frete era um total semanal
- * dividido por um número de pedidos que não era o mesmo número de pedidos — dava ~17% de erro e
- * não dava para saber de que pedaço vinha. Aqui o número vem por país, de quem cobra.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A FAIXA SAI DOS PEDIDOS, NÃO DAS MÉDIAS POR PAÍS.
+ *
+ * A primeira versão tirava min e max das médias de cada país. Com dado real isso desabou: a
+ * operação é quase toda nos Estados Unidos, um único país passou do volume mínimo, e a "faixa"
+ * saiu $8,76 – $8,76 — um ponto com aparência de intervalo. Pior, a variação que importa é a que
+ * existe DENTRO do país (peso, serviço, distância), e uma média por país apaga exatamente essa.
+ *
+ * Os percentis abaixo vêm de produtor_redrock_pedidos.total_frete: uma observação por pedido, do
+ * frete que a Red Rock realmente cobrou. Eram 718 observações em disco enquanto a faixa era
+ * derivada de um número só.
+ *
+ * p10/p50/p90 em vez de mínimo e máximo absolutos porque a ponta é ruído: um pedido internacional
+ * perdido vira o "máximo" e estica a previsão inteira por causa de uma linha.
+ * ─────────────────────────────────────────────────────────────────────────────
  *
  * A sugestão NÃO é aplicada sozinha. Ela aparece ao lado do que está cadastrado, com um botão. O
  * valor cadastrado é uma decisão de alguém; trocar por outro em silêncio faria a previsão mudar
  * sem nenhum evento que explicasse a mudança.
  */
 export async function fretePorPais(contaId: number): Promise<FreteMedido> {
-  const janela = await queryOne<{ janela_inicio: string; janela_fim: string }>(
-    `SELECT janela_inicio::text, janela_fim::text FROM produtor_redrock_frete
-      WHERE conta_id = $1 ORDER BY janela_fim DESC, janela_inicio DESC LIMIT 1`,
+  // A linha a mostrar é a da última APURAÇÃO, não a da janela mais estreita. A ordenação anterior
+  // era por janela_fim e depois janela_inicio, e como o "até" é quase sempre hoje, o desempate
+  // elegia o início mais tardio — ou seja, a janela mais curta. Uma sincronização antiga de 90
+  // dias continuava na tela depois de uma nova de 124, sem nada explicando.
+  const janela = await queryOne<any>(
+    `SELECT janela_inicio::text AS janela_inicio, janela_fim::text AS janela_fim,
+            pedido_inicio::text AS pedido_inicio, pedido_fim::text AS pedido_fim
+       FROM produtor_redrock_frete
+      WHERE conta_id = $1
+      ORDER BY sincronizado_em DESC, janela_fim DESC LIMIT 1`,
     [contaId]
   );
-  if (!janela) return { janela: null, geral: null, paises: [], sugestao: null };
+
+  const sugestao = await sugerirFrete(contaId);
+  if (!janela) {
+    return { janela: null, janela_pedida: null, geral: null, paises: [], sugestao };
+  }
 
   const linhas = await query<any>(
     `SELECT pais, pedidos, frete_total, frete_medio_pedido
        FROM produtor_redrock_frete
-      WHERE conta_id = $1 AND janela_inicio = $2::date AND janela_fim = $3::date
-      ORDER BY (pais = '*') DESC, frete_total DESC NULLS LAST`,
+      WHERE conta_id = $1 AND janela_inicio IS NOT DISTINCT FROM $2::date
+        AND janela_fim IS NOT DISTINCT FROM $3::date
+      ORDER BY (pais = '*') DESC, pedidos DESC NULLS LAST, frete_total DESC NULLS LAST`,
     [contaId, janela.janela_inicio, janela.janela_fim]
   );
 
@@ -735,27 +842,57 @@ export async function fretePorPais(contaId: number): Promise<FreteMedido> {
       medio: num(l.frete_medio_pedido),
     }));
 
-  // A faixa sai dos países que têm volume suficiente para a média significar alguma coisa. Um país
-  // com dois pedidos produz média legítima e inútil: ela viraria o mínimo ou o máximo da faixa
-  // inteira por acaso.
-  const comVolume = paises.filter(p => (p.pedidos ?? 0) >= 10 && p.medio != null);
-  const medios = comVolume.map(p => p.medio!) as number[];
-  const tipico = num(geralRow?.frete_medio_pedido);
-
-  const sugestao = medios.length >= 2 && tipico != null
-    ? { min: Math.min(...medios), tipico, max: Math.max(...medios) }
-    : tipico != null
-      ? { min: tipico, tipico, max: tipico }
-      : null;
-
   return {
-    janela: { inicio: janela.janela_inicio, fim: janela.janela_fim },
+    janela: janela.janela_inicio && janela.janela_fim
+      ? { inicio: janela.janela_inicio, fim: janela.janela_fim }
+      : null,
+    janela_pedida: janela.pedido_inicio && janela.pedido_fim
+      ? { inicio: janela.pedido_inicio, fim: janela.pedido_fim }
+      : null,
     geral: geralRow
-      ? { pedidos: geralRow.pedidos ?? null, frete_total: num(geralRow.frete_total), medio: tipico }
+      ? {
+          pedidos: geralRow.pedidos ?? null,
+          frete_total: num(geralRow.frete_total),
+          medio: num(geralRow.frete_medio_pedido),
+        }
       : null,
     paises,
     sugestao,
   };
+}
+
+/** Mínimo de observações para uma dispersão significar alguma coisa. Abaixo disso, só o típico. */
+const MIN_PEDIDOS_PARA_FAIXA = 30;
+
+/**
+ * Percentis do frete real por pedido.
+ *
+ * O recorte é o mesmo do custo medido — faturado e com o frete já cobrado. Incluir os pedidos que
+ * ainda esperam frete traria total_frete NULL (que os percentis ignoram) ou zero (que arrastaria o
+ * p10 para o chão), e o resultado seria uma faixa que começa em nada.
+ */
+async function sugerirFrete(contaId: number): Promise<FreteMedido['sugestao']> {
+  const r = await queryOne<any>(
+    `SELECT COUNT(*)::int AS n,
+            percentile_cont(0.10) WITHIN GROUP (ORDER BY total_frete) AS p10,
+            percentile_cont(0.50) WITHIN GROUP (ORDER BY total_frete) AS p50,
+            percentile_cont(0.90) WITHIN GROUP (ORDER BY total_frete) AS p90
+       FROM produtor_redrock_pedidos
+      WHERE conta_id = $1 AND faturado AND NOT aguardando_frete AND total_frete IS NOT NULL`,
+    [contaId]
+  );
+  const n = r?.n ?? 0;
+  const p50 = num(r?.p50);
+  if (n === 0 || p50 == null) return null;
+  if (n < MIN_PEDIDOS_PARA_FAIXA) {
+    return { min: null, tipico: p50, max: null, pedidos: n };
+  }
+  const p10 = num(r?.p10);
+  const p90 = num(r?.p90);
+  // Vindos do mesmo conjunto ordenado, p10 <= p50 <= p90 é garantido por construção — não existe
+  // o caso de o típico cair fora da própria faixa, que existia quando o típico vinha de uma
+  // população e as pontas de outra.
+  return { min: p10, tipico: p50, max: p90, pedidos: n };
 }
 
 /** Histórico recente de sincronizações, para a tela poder dizer de quando é o número. */

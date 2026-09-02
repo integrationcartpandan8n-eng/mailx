@@ -437,16 +437,28 @@ export async function preverInvoice(
   // Frete só existe se a faixa foi cadastrada. Sem ela o campo é null — e null não vira zero,
   // senão o total previsto apareceria completo faltando um quarto dele.
   const temFaixa = t.frete_pedido_tipico != null;
+  // min e max caem para o típico quando não foram cadastrados, e aí a "faixa" tem largura zero.
+  // Isso é dito em voz alta na ressalva abaixo, porque uma banda de largura zero na tela é
+  // indistinguível de uma previsão exata — e frete é a parte que menos dá para cravar.
+  const freteMin = t.frete_pedido_min ?? t.frete_pedido_tipico!;
+  const freteMax = t.frete_pedido_max ?? t.frete_pedido_tipico!;
   const frete = temFaixa ? {
-    min: pedidos * (t.frete_pedido_min ?? t.frete_pedido_tipico!),
+    min: pedidos * freteMin,
     tipico: pedidos * t.frete_pedido_tipico!,
-    max: pedidos * (t.frete_pedido_max ?? t.frete_pedido_tipico!),
+    max: pedidos * freteMax,
   } : null;
 
   if (!temFaixa && tabela) {
     ressalvas.push(
       'A faixa de frete por pedido não foi cadastrada, então o total previsto não inclui frete. ' +
       'Nas faturas históricas o frete foi cerca de um quarto da conta.'
+    );
+  }
+  if (temFaixa && freteMin === freteMax) {
+    ressalvas.push(
+      `O frete está cadastrado como um valor único (${freteMin.toFixed(2)} por pedido), sem mínimo ` +
+      `e máximo. O invoice previsto sai como um número exato, mas ~um quarto dele é uma média — ` +
+      `o frete varia com destino, peso e serviço, e essa variação não está representada aqui.`
     );
   }
 

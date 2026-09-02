@@ -865,11 +865,12 @@ async function carregarResumo() {
             // Em "Vitalício" o custo medido continua fazendo sentido: é tudo o que foi
             // sincronizado. A versão anterior ficava muda nesse modo, e como Vitalício é o padrão
             // da tela, o card nascia dizendo "escolha um período" mesmo com mil pedidos dentro.
-            const de = periodo ? periodo.from : '2000-01-01';
-            const ate = periodo ? periodo.to : ymd(new Date());
+            // Vitalício não manda from/to: a rota agrega tudo da conta. Mandar '2000-01-01' até a
+            // data do relógio do navegador descartava em silêncio pedido sem data de criação, e
+            // qualquer pedido à frente do relógio de quem estivesse olhando.
+            const qs = periodo ? `?from=${periodo.from}&to=${periodo.to}` : '';
             try {
-                custoRedRock = await api(
-                    `/admin/produtor/contas/${contaId}/redrock/custo-real?from=${de}&to=${ate}`);
+                custoRedRock = await api(`/admin/produtor/contas/${contaId}/redrock/custo-real${qs}`);
             } catch (e) { custoRedRock = { erro: e.message }; }
         }
         simbolo = { USD: '$', BRL: 'R$', EUR: '€' }[resumo.moeda] || (resumo.moeda + ' ');
@@ -1217,52 +1218,90 @@ function renderCustoReal() {
         return;
     }
 
-    const pendentes = c.pedidos_sem_fatura + c.pedidos_aguardando_frete;
     const linhas = [
         ['Produto', c.custo_produto], ['Fulfillment', c.custo_fulfillment],
         ['Frete', c.custo_frete], ['Embalagem', c.custo_embalagem], ['Outros', c.custo_outros],
     ].filter(([, v]) => v != null && v !== 0);
+
+    // Projeção do custo por pedido quando o frete pendente entrar, aos preços já medidos. Fica ao
+    // LADO do medido, com a origem de cada um escrita — nunca no lugar dele. São dois números do
+    // mesmo indicador, e um deles é medido e o outro é conta.
+    const freteTipico = freteRedRock?.medido?.sugestao?.tipico ?? null;
+    const projetado = (c.pedidos_aguardando_frete > 0 && freteTipico != null &&
+                       c.custo_parcial != null && c.custo_total != null && c.pedidos_faturados > 0)
+        ? (c.custo_total + c.custo_parcial + c.pedidos_aguardando_frete * freteTipico) / c.pedidos_faturados
+        : null;
 
     el.innerHTML = `
         <div class="kpis" style="margin-bottom:0.9rem">
             <div class="kpi">
                 <span class="k">Custo cobrado</span>
                 <span class="v num">${fmt0(c.custo_total)}</span>
-                <span class="d">${inteiro(c.pedidos_faturados)} pedido(s) já faturado(s)</span>
+                <span class="d">${inteiro(c.pedidos_completos)} pedido(s) com a cobrança fechada</span>
             </div>
             <div class="kpi">
                 <span class="k">Custo por pedido</span>
                 <span class="v num">${fmt(c.custo_medio_pedido)}</span>
-                <span class="d">média só dos faturados</span>
+                <span class="d">média dos ${inteiro(c.pedidos_completos)} com cobrança fechada</span>
             </div>
+            ${projetado != null ? `<div class="kpi">
+                <span class="k">Projetado com o frete pendente</span>
+                <span class="v num">${fmt(projetado)}</span>
+                <span class="d">conta, não medição — usa ${fmt(freteTipico)} de frete nos ${inteiro(c.pedidos_aguardando_frete)} pendentes</span>
+            </div>` : ''}
         </div>
 
         ${linhas.length ? `<div class="scroll"><table>
-            <thead><tr><th>Linha da cobrança</th><th style="text-align:right">Valor</th><th style="text-align:right">Fatia</th></tr></thead>
+            <thead><tr>
+                <th>Linha da cobrança</th>
+                <th style="text-align:right">Valor</th>
+                <th style="text-align:right">Fatia</th>
+            </tr></thead>
             <tbody>${linhas.map(([nome, v]) => `<tr>
                 <td>${nome}</td>
                 <td class="num" style="text-align:right">${fmt(v)}</td>
                 <td class="num" style="text-align:right">${c.custo_total ? pct(v / c.custo_total) : '—'}</td>
             </tr>`).join('')}</tbody>
-        </table></div>` : ''}
+        </table></div>
+        <span class="ajuda" style="display:block; margin-top:0.35rem">
+            Fatia de ${fmt(c.custo_total)}, os ${inteiro(c.pedidos_completos)} pedido(s) com a cobrança fechada.
+            ${c.pedidos_aguardando_frete > 0
+                ? `Os ${inteiro(c.pedidos_aguardando_frete)} que ainda esperam frete não entram aqui — se entrassem,
+                   a fatia do frete sairia menor do que é, porque o deles ainda não foi cobrado.`
+                : ''}
+        </span>` : ''}
 
-        ${pendentes > 0 ? `<div class="aviso" style="margin-top:0.8rem">
+        ${(c.pedidos_sem_fatura > 0 || c.pedidos_aguardando_frete > 0) ? `<div class="aviso" style="margin-top:0.8rem">
             <i class="fas fa-hourglass-half"></i>
             <span>
-                ${c.pedidos_sem_fatura > 0 ? `<b>${inteiro(c.pedidos_sem_fatura)}</b> pedido(s) deste período ainda não foram cobrados` : ''}
-                ${c.pedidos_sem_fatura > 0 && c.pedidos_aguardando_frete > 0 ? ' e ' : ''}
-                ${c.pedidos_aguardando_frete > 0 ? `<b>${inteiro(c.pedidos_aguardando_frete)}</b> foram cobrados só na parte fixa, com o frete ainda por vir` : ''}.
-                Eles ficam fora dos dois números acima — entrar como zero faria o custo por pedido
-                parecer menor do que é.
+                ${c.pedidos_sem_fatura > 0
+                    ? `<b>${inteiro(c.pedidos_sem_fatura)}</b> pedido(s) ainda não foram cobrados: custo desconhecido, fora de todos os números acima.`
+                    : ''}
+                ${c.pedidos_aguardando_frete > 0
+                    ? `${c.pedidos_sem_fatura > 0 ? '<br>' : ''}<b>${inteiro(c.pedidos_aguardando_frete)}</b> foram cobrados
+                       <b>só na parte fixa</b> (${fmt(c.custo_parcial)} já pagos), com o frete ainda por vir. Eles também
+                       ficam fora — entrar com o frete valendo zero puxaria o custo por pedido para baixo e pareceria
+                       eficiência, sendo defasagem de cobrança.`
+                    : ''}
             </span>
+        </div>` : ''}
+
+        ${c.pedidos_sem_data > 0 ? `<div class="aviso" style="margin-top:0.6rem">
+            <i class="fas fa-circle-question"></i>
+            <span><b>${inteiro(c.pedidos_sem_data)}</b> pedido(s) vieram da Red Rock sem data de criação.
+            ${periodo ? 'Eles não entram em nenhum recorte por período, inclusive este.' : 'Eles entram no vitalício, mas em nenhum período.'}</span>
         </div>` : ''}
 
         ${c.ultima_falha ? `<div class="aviso" style="background:var(--danger-bg); border-color:var(--danger)">
             <i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i>
-            <span>A sincronização mais recente falhou (${esc(desde(c.ultima_falha.em) || '')}): ${esc(c.ultima_falha.erro)}
+            <span>A última leitura de pedidos falhou (${esc(desde(c.ultima_falha.em) || '')}): ${esc(c.ultima_falha.erro)}
             Os números acima são da leitura anterior.</span>
         </div>` : `<div class="ajuda" style="margin-top:0.6rem">
-            Lido da Red Rock ${esc(desde(c.atualizado_em) || 'ainda não')}.
+            ${c.atualizado_em
+                ? `Lido da Red Rock ${esc(desde(c.atualizado_em))}${periodo ? ', numa sincronização que cobre este período inteiro' : ''}.`
+                : (periodo
+                    ? 'Nenhuma sincronização cobriu este período inteiro — os números abaixo podem estar incompletos.'
+                    : 'Ainda não sincronizado.')}
         </div>`}
 
         ${renderFreteMedido()}`;
@@ -1282,16 +1321,26 @@ function renderCustoReal() {
  */
 function renderFreteMedido() {
     const m = freteRedRock?.medido;
-    if (!m?.janela || !m.paises?.length) return '';
+    if (!m) return '';
     const cad = freteRedRock?.cadastrado;
     const s = m.sugestao;
-    const top = m.paises.slice(0, 5);
+    const top = (m.paises || []).slice(0, 5);
+
+    // A janela apurada e a janela pedida divergem de verdade: a consulta de entregas recorta em 90
+    // dias por padrão. Enquanto a tela dizia só "apurada pela Red Rock", o número aparecia como se
+    // cobrisse o período inteiro que a pessoa tinha pedido.
+    const jan = m.janela
+        ? `janela ${dataBR(m.janela.inicio)} – ${dataBR(m.janela.fim)}, apurada pela Red Rock`
+        : 'a Red Rock não informou que janela esta apuração cobre';
+    const divergiu = m.janela && m.janela_pedida &&
+        (m.janela.inicio !== m.janela_pedida.inicio || m.janela.fim !== m.janela_pedida.fim);
 
     return `
         <div style="margin-top:1rem; padding-top:0.9rem; border-top:1px solid var(--border)">
-            <div style="font-weight:650; margin-bottom:0.15rem">Frete por país, medido</div>
-            <span class="ajuda">janela ${dataBR(m.janela.inicio)} – ${dataBR(m.janela.fim)}, apurada pela Red Rock</span>
-            <div class="scroll" style="margin-top:0.6rem"><table>
+            <div style="font-weight:650; margin-bottom:0.15rem">Frete medido</div>
+            <span class="ajuda">${esc(jan)}</span>
+
+            ${top.length ? `<div class="scroll" style="margin-top:0.6rem"><table>
                 <thead><tr><th>País</th><th style="text-align:right">Pedidos</th><th style="text-align:right">Frete médio</th></tr></thead>
                 <tbody>${top.map(p => `<tr>
                     <td>${esc(p.pais)}</td>
@@ -1299,17 +1348,40 @@ function renderFreteMedido() {
                     <td class="num" style="text-align:right">${fmt(p.medio)}</td>
                 </tr>`).join('')}
                 ${m.paises.length > top.length ? `<tr><td colspan="3" class="ajuda">
-                    e mais ${inteiro(m.paises.length - top.length)} país(es) de volume menor</td></tr>` : ''}
+                    e mais ${inteiro(m.paises.length - top.length)} país(es) com menos pedidos</td></tr>` : ''}
                 </tbody>
-            </table></div>
+            </table></div>` : ''}
+
+            ${divergiu ? `<div class="aviso" style="margin-top:0.7rem">
+                <i class="fas fa-calendar-day"></i>
+                <span>Esta tabela por país cobre <b>${dataBR(m.janela.inicio)} – ${dataBR(m.janela.fim)}</b>,
+                não o período pedido na sincronização (${dataBR(m.janela_pedida.inicio)} – ${dataBR(m.janela_pedida.fim)}):
+                a Red Rock recorta essa consulta em 90 dias. O custo por pedido acima é do período inteiro.</span>
+            </div>` : ''}
+
             ${s ? `<div class="aviso" style="margin-top:0.7rem">
                 <i class="fas fa-ruler-horizontal"></i>
                 <span>
-                    Faixa medida: <b class="num">${fmt(s.min)} – ${fmt(s.max)}</b>, típico
-                    <b class="num">${fmt(s.tipico)}</b>.
-                    ${cad ? `Cadastrado hoje: <span class="num">${fmt(cad.frete_pedido_min)} – ${fmt(cad.frete_pedido_max)}</span>.` : 'A tabela de fulfillment ainda não foi cadastrada.'}
+                    ${s.min != null && s.max != null
+                        // Faixa de verdade: p10 e p90 do frete REAL pedido a pedido, não médias por
+                        // país. A variação que importa é a de dentro do país (peso, serviço), e uma
+                        // média por país apaga justamente essa.
+                        ? `Frete por pedido medido em <b>${inteiro(s.pedidos)}</b> pedidos com a cobrança fechada:
+                           típico <b class="num">${fmt(s.tipico)}</b>, e 8 em cada 10 caem entre
+                           <b class="num">${fmt(s.min)}</b> e <b class="num">${fmt(s.max)}</b>.`
+                        // Sem observação suficiente não existe dispersão medida — e um mínimo igual
+                        // ao máximo não é uma faixa estreita, é a ausência de faixa disfarçada de uma.
+                        : `Frete por pedido medido em <b>${inteiro(s.pedidos)}</b> pedido(s) com a cobrança fechada:
+                           típico <b class="num">${fmt(s.tipico)}</b>. <b>Ainda sem faixa medida</b> — são poucos
+                           pedidos para dizer o quanto ele varia.`}
+                    ${cad
+                        ? `<br>Cadastrado hoje: <span class="num">${fmt(cad.frete_pedido_min)} – ${fmt(cad.frete_pedido_max)}</span>,
+                           típico <span class="num">${fmt(cad.frete_pedido_tipico)}</span>.`
+                        : '<br>A tabela de fulfillment ainda não foi cadastrada.'}
                 </span>
-                ${cad ? `<button class="btn mini" style="margin-left:auto" id="btnAplicarFrete">Usar a medida</button>` : ''}
+                ${cad && s.min != null && s.max != null
+                    ? `<button class="btn mini" style="margin-left:auto" id="btnAplicarFrete">Usar a medida</button>`
+                    : ''}
             </div>` : ''}
         </div>`;
 }

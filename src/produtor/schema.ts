@@ -176,6 +176,13 @@ export const PRODUTOR_SCHEMA_SQL = `
     -- alguém ter que adivinhar.
     fator_pedidos NUMERIC(6,3) NOT NULL DEFAULT 1.0,
 
+    -- Quantas observações sustentam a faixa de frete, e quando ela foi medida. Antes isso ia para
+    -- "observacao" em texto livre que nenhuma tela lia — então a faixa aplicada perdia a procedência
+    -- no instante em que era gravada, e a previsão usava um número medido em 90 dias para modelar
+    -- qualquer período sem nada dizer.
+    frete_medido_pedidos INTEGER,
+    frete_medido_em TIMESTAMP,
+
     observacao TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -435,16 +442,30 @@ export const PRODUTOR_SCHEMA_SQL = `
     id SERIAL PRIMARY KEY,
     conta_id INTEGER NOT NULL REFERENCES produtor_contas(id) ON DELETE CASCADE,
     pais VARCHAR(16) NOT NULL,
-    janela_inicio DATE NOT NULL,
-    janela_fim DATE NOT NULL,
+    -- A janela que a Red Rock DISSE ter apurado. NULL quando ela não informou — e nesse caso é
+    -- NULL mesmo, nunca a janela pedida. Preencher com a pedida transformava "a API não disse" em
+    -- "a API confirmou o que pedi", e a tela passava a atribuir a ela uma janela que ela nunca
+    -- afirmou.
+    janela_inicio DATE,
+    janela_fim DATE,
+    -- A janela que foi PEDIDA. Guardada separada porque as duas divergem de verdade: a consulta de
+    -- entregas recorta em 90 dias por padrão, então pedir 124 dias devolve 90 — e a tela precisa
+    -- poder mostrar as duas para a diferença não passar despercebida.
+    pedido_inicio DATE,
+    pedido_fim DATE,
     pedidos INTEGER,
     linhas_cobranca INTEGER,
     frete_total NUMERIC(12,4),
     frete_medio_pedido NUMERIC(12,4),
     sincronizado_em TIMESTAMP DEFAULT NOW()
   );
+  -- COALESCE na chave porque janela_inicio/fim agora podem ser NULL, e em índice único NULL não
+  -- casa com NULL — duas apurações sem janela informada criariam linhas duplicadas em vez de se
+  -- sobrescreverem.
   CREATE UNIQUE INDEX IF NOT EXISTS idx_produtor_redrock_frete_janela
-    ON produtor_redrock_frete (conta_id, pais, janela_inicio, janela_fim);
+    ON produtor_redrock_frete (conta_id, pais,
+                               COALESCE(janela_inicio, DATE '0001-01-01'),
+                               COALESCE(janela_fim, DATE '0001-01-01'));
 
   -- Histórico de cada sincronização, inclusive as que falharam.
   --
@@ -517,6 +538,30 @@ BEGIN
     ALTER TABLE produtor_faturas
       ADD COLUMN origem VARCHAR(20) NOT NULL DEFAULT 'manual',
       ADD COLUMN origem_id VARCHAR(120);
+  END IF;
+
+  -- A janela pedida, ao lado da apurada. Antes existia só uma coluna e ela recebia a pedida quando
+  -- a API não informava a sua — o que fazia a tela atribuir à Red Rock uma janela que ela nunca
+  -- disse. O NOT NULL das colunas antigas também cai: "não informada" precisa poder ser NULL.
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_redrock_frete')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'produtor_redrock_frete' AND column_name = 'pedido_inicio') THEN
+    ALTER TABLE produtor_redrock_frete
+      ADD COLUMN pedido_inicio DATE,
+      ADD COLUMN pedido_fim DATE,
+      ALTER COLUMN janela_inicio DROP NOT NULL,
+      ALTER COLUMN janela_fim DROP NOT NULL;
+    -- As linhas que já existem foram gravadas com a janela apurada nas colunas antigas; a pedida
+    -- não foi guardada e não dá para inventar. Fica NULL, e a tela sabe dizer "não registrada".
+    DROP INDEX IF EXISTS idx_produtor_redrock_frete_janela;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'produtor_fulfillment')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'produtor_fulfillment' AND column_name = 'frete_medido_pedidos') THEN
+    ALTER TABLE produtor_fulfillment
+      ADD COLUMN frete_medido_pedidos INTEGER,
+      ADD COLUMN frete_medido_em TIMESTAMP;
   END IF;
 END
 $reparos$;
